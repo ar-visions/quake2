@@ -1,0 +1,1124 @@
+# IBSP version 38: the world's faces, textures and lightmaps
+extend quake2
+
+class BspTexinfo
+    public sx    : f32
+    public sy    : f32
+    public sz    : f32
+    public so    : f32
+    public tx    : f32
+    public ty    : f32
+    public tz    : f32
+    public to    : f32
+    public flags : i32
+    public name  : string
+    public tex   : i32
+
+class BspFace
+    public first_edge : i32
+    public num_edges  : i32
+    public texinfo    : i32
+    public lightofs   : i32
+
+# one wall texture: 8-bit wal decoded to rgba, placed in the atlas
+class BspTex
+    public name   : string
+    public width  : i32
+    public height : i32
+    public pixels : @u8
+    public ax     : i32
+    public ay     : i32
+
+# a trace's result: how far, the plane hit, where it stopped
+class Trace
+    public fraction   : f32
+    public allsolid   : bool
+    public startsolid : bool
+    public contents   : i32
+    public nx         : f32
+    public ny         : f32
+    public nz         : f32
+    public ex         : f32
+    public ey         : f32
+    public ez         : f32
+
+func bsp_i32 [ d: @u8, off: i32 ] -> i32
+    v : i32 [ 0 ]
+    memcpy[ @v, @d[ off ], 4 ]
+    return v
+
+func bsp_i16 [ d: @u8, off: i32 ] -> i32
+    v : i16 [ 0 ]
+    memcpy[ @v, @d[ off ], 2 ]
+    return i32[ v ]
+
+func bsp_u16 [ d: @u8, off: i32 ] -> i32
+    v : u16 [ 0 ]
+    memcpy[ @v, @d[ off ], 2 ]
+    return i32[ v ]
+
+func bsp_f32 [ d: @u8, off: i32 ] -> f32
+    v : f32 [ 0.0 ]
+    memcpy[ @v, @d[ off ], 4 ]
+    return v
+
+# surface flags from qfiles.h
+func surf_sky    [] -> i32
+    return 4
+func surf_warp   [] -> i32
+    return 8
+func surf_nodraw [] -> i32
+    return 128
+
+class BspMap
+    public name      : string
+    public verts     : vec f32
+    public edges     : vec i32
+    public surfedges : vec i32
+    public texinfos  : vec BspTexinfo
+    public faces     : vec BspFace
+    public lighting  : PakData
+    public entities  : string
+    public first_face : i32
+    public num_faces  : i32
+    public palette   : vec u8
+    public texs      : vec BspTex
+    public tex_atlas : Image
+    public lm_atlas  : Image
+    public atlas_w   : i32 [ 2048 ]
+    public atlas_h   : i32
+    public lm_w      : i32 [ 1024 ]
+    public lm_h      : i32
+    # player start, quake axes (x forward, y left, z up)
+    public start_x   : f32
+    public start_y   : f32
+    public start_z   : f32
+    public start_yaw : f32
+    public tri_count : i32
+    # planes nx ny nz dist; nodes plane child0 child1
+    public planes     : vec f32
+    public nodes      : vec i32
+    public headnode   : i32
+    public leaf_cluster : vec i32
+    public leaf_first : vec i32
+    public leaf_count : vec i32
+    public leaffaces  : vec i32
+    public vis        : PakData
+    public clusters   : i32
+    public vis_row    : vec u8
+    # per face: first index in the full list (-1 unused), triangles
+    public face_first : vec i32
+    public face_tris  : vec i32
+    public face_mark  : vec i32
+    public mark_gen   : i32
+    public idx_all    : @u32
+    public idx_n      : i32
+    public sky_name   : string
+    # collision: brushes first_side num_sides contents; sides plane
+    public leaf_contents : vec i32
+    public leaf_bfirst : vec i32
+    public leaf_bcount : vec i32
+    public leafbrushes : vec i32
+    public brushes    : vec i32
+    public brushsides : vec i32
+    public brush_check : vec i32
+    public checkcount : i32
+    # the trace in flight (cmodel.c's trace_* globals)
+    public tr_contents : i32
+    public tr_point   : bool
+    public tr_sx      : f32
+    public tr_sy      : f32
+    public tr_sz      : f32
+    public tr_ex      : f32
+    public tr_ey      : f32
+    public tr_ez      : f32
+    public tr_mins    : vec f32
+    public tr_maxs    : vec f32
+    public tr_ext     : vec f32
+    public tr         : Trace
+    # inline models: headnode, then mins and maxs, 7 numbers each
+    public model_head : vec i32
+    public model_box  : vec f32
+    public model_face : vec i32
+    # false for triggers and area portals: never clipped or drawn
+    public model_solid : vec bool
+
+    public func load [ pak: Pak, map: string ] -> bool
+        name = map
+        d : pak.read[ 'maps/{map}.bsp' ]
+        if [ !d ]
+            log 'bsp: maps/{map}.bsp not found'
+            return false
+        b : @u8 [ d.data ]
+        ident   : i32 [ bsp_i32[ b, 0 ] ]
+        version : i32 [ bsp_i32[ b, 4 ] ]
+        if [ ident != 1347633737 || version != 38 ]
+            log 'bsp: {map} is not IBSP 38 ({ident} v{version})'
+            return false
+        load_entities[ b, lump_off[ b, 0 ], lump_len[ b, 0 ] ]
+        load_verts[ b, lump_off[ b, 2 ], lump_len[ b, 2 ] ]
+        load_texinfo[ b, lump_off[ b, 5 ], lump_len[ b, 5 ] ]
+        load_faces[ b, lump_off[ b, 6 ], lump_len[ b, 6 ] ]
+        ll : i32 [ lump_len[ b, 7 ] ]
+        ld : new u8 [ ll ]
+        memcpy[ ld, @b[ lump_off[ b, 7 ] ], ll ]
+        lighting = PakData [ data: ld, size: ll ]
+        load_edges[ b, lump_off[ b, 11 ], lump_len[ b, 11 ] ]
+        load_surfedges[ b, lump_off[ b, 12 ], lump_len[ b, 12 ] ]
+        mo : i32 [ lump_off[ b, 13 ] ]
+        headnode   = bsp_i32[ b, mo + 36 ]
+        first_face = bsp_i32[ b, mo + 40 ]
+        num_faces  = bsp_i32[ b, mo + 44 ]
+        load_models[ b, mo, lump_len[ b, 13 ] ]
+        load_planes[ b, lump_off[ b, 1 ], lump_len[ b, 1 ] ]
+        load_nodes[ b, lump_off[ b, 4 ], lump_len[ b, 4 ] ]
+        load_leafs[ b, lump_off[ b, 8 ], lump_len[ b, 8 ] ]
+        load_leaffaces[ b, lump_off[ b, 9 ], lump_len[ b, 9 ] ]
+        load_leafbrushes[ b, lump_off[ b, 10 ], lump_len[ b, 10 ] ]
+        load_brushes[ b, lump_off[ b, 14 ], lump_len[ b, 14 ] ]
+        load_brushsides[ b, lump_off[ b, 15 ], lump_len[ b, 15 ] ]
+        tr_mins = vec f32 [ 3 ]
+        tr_maxs = vec f32 [ 3 ]
+        tr_ext  = vec f32 [ 3 ]
+        vl : i32 [ lump_len[ b, 3 ] ]
+        vd : new u8 [ vl ]
+        memcpy[ vd, @b[ lump_off[ b, 3 ] ], vl ]
+        vis = PakData [ data: vd, size: vl ]
+        clusters = (vl >= 4) ? bsp_i32[ vd, 0 ] : 0
+        vis_row = vec u8 [ (clusters + 7) / 8 + 1 ]
+        sky_name = ent_key[ 'sky' ]
+        model_entities[]
+        log 'bsp: {nodes.count / 3} nodes, {leaf_cluster.count} leafs, {clusters} clusters, sky {sky_name}'
+        load_palette[ pak ]
+        load_textures[ pak ]
+        log 'bsp: {map}: {verts.count / 3} verts, {faces.count} faces, {texinfos.count} texinfos, {texs.count} textures, world faces {num_faces}'
+        return true
+
+    func lump_off [ b: @u8, i: i32 ] -> i32
+        return bsp_i32[ b, 8 + i * 8 ]
+
+    func lump_len [ b: @u8, i: i32 ] -> i32
+        return bsp_i32[ b, 12 + i * 8 ]
+
+    func load_entities [ b: @u8, off: i32, n: i32 ]
+        sz : i32 [ n + 1 ]
+        t : new i8 [ sz ]
+        memcpy[ t, @b[ off ], n ]
+        t[ n ] = 0
+        entities = string [ cast cstr [ t ] ]
+        find_start[]
+
+    # index of needle in s at or after from, else -1
+    func ent_find [ s: cstr, from: i32, needle: cstr ] -> i32
+        n : i32 [ i32[ strlen[ needle ] ] ]
+        i : i32 [ from ]
+        while [ s[ i ] != 0 ]
+            if [ strncmp[ @s[ i ], needle, n ] == 0 ] return i
+            i += 1
+        return -1
+
+    # the first info_player_start: its origin and yaw
+    func find_start []
+        s  : cstr [ entities.chars ]
+        at : i32 [ ent_find[ s, 0, "info_player_start" ] ]
+        if [ at < 0 ] return
+        b0 : i32 [ at ]
+        while [ b0 > 0 && s[ b0 ] != 123 ] b0 = b0 - 1
+        b1 : i32 [ ent_find[ s, at, "}" ] ]
+        if [ b1 < 0 ] return
+        o : i32 [ ent_find[ s, b0, "\"origin\"" ] ]
+        if [ o >= 0 && o < b1 ]
+            q : i32 [ ent_find[ s, o + 8, "\"" ] ]
+            x : f32 [ 0.0 ]
+            y : f32 [ 0.0 ]
+            z : f32 [ 0.0 ]
+            sscanf[ @s[ q + 1 ], "%f %f %f", @x, @y, @z ]
+            start_x = x
+            start_y = y
+            start_z = z
+        g : i32 [ ent_find[ s, b0, "\"angle\"" ] ]
+        if [ g >= 0 && g < b1 ]
+            q : i32 [ ent_find[ s, g + 7, "\"" ] ]
+            yaw : f32 [ 0.0 ]
+            sscanf[ @s[ q + 1 ], "%f", @yaw ]
+            start_yaw = yaw
+        log 'bsp: start {start_x} {start_y} {start_z} yaw {start_yaw}'
+
+    # a worldspawn key's value (the first entity block)
+    func ent_key [ key: string ] -> string
+        s  : cstr [ entities.chars ]
+        b1 : i32 [ ent_find[ s, 0, "}" ] ]
+        if [ b1 < 0 ] return null
+        return ent_key_in[ 0, b1, key ]
+
+    # a key's value inside the block b0..b1 of the entity text
+    func ent_key_in [ b0: i32, b1: i32, key: string ] -> string
+        s  : cstr [ entities.chars ]
+        want : '"{key}"'
+        k : i32 [ ent_find[ s, b0, want.chars ] ]
+        if [ k < 0 || k > b1 ] return null
+        q0 : i32 [ ent_find[ s, k + want.count, "\"" ] ]
+        if [ q0 < 0 ] return null
+        q1 : i32 [ ent_find[ s, q0 + 1, "\"" ] ]
+        if [ q1 < 0 || q1 - q0 > 255 ] return null
+        buf : local i8 [ 256 ]
+        memcpy[ buf, @s[ q0 + 1 ], q1 - q0 - 1 ]
+        buf[ q1 - q0 - 1 ] = 0
+        return string [ cast cstr [ buf ] ]
+
+    func load_models [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 48 ]
+        model_head = vec i32 [ n ]
+        model_box  = vec f32 [ n * 6 ]
+        model_face = vec i32 [ n * 2 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 48 ]
+            for [ j: i32 0, j < 6, j += 1 ]
+                model_box[ i * 6 + j ] = bsp_f32[ b, at + j * 4 ]
+            model_head[ i ]     = bsp_i32[ b, at + 36 ]
+            model_face[ i * 2 ] = bsp_i32[ b, at + 40 ]
+            model_face[ i * 2 + 1 ] = bsp_i32[ b, at + 44 ]
+
+    # each inline model's entity: triggers and portals are not solid
+    func model_entities []
+        n : i32 [ model_head.count ]
+        model_solid = vec bool [ n ]
+        for [ i: i32 0, i < n, i += 1 ] model_solid[ i ] = true
+        s  : cstr [ entities.chars ]
+        b0 : i32 [ ent_find[ s, 0, "{" ] ]
+        while [ b0 >= 0 ]
+            b1 : i32 [ ent_find[ s, b0, "}" ] ]
+            if [ b1 < 0 ] break
+            m : ent_key_in[ b0, b1, 'model' ]
+            if [ m && m.count > 1 && m[ 0 ] == 42 ]
+                mi : i32 [ i32[ atoi[ @m.chars[ 1 ] ] ] ]
+                cls : ent_key_in[ b0, b1, 'classname' ]
+                if [ mi > 0 && mi < n && cls ]
+                    if [ cls.starts_with[ 'trigger_' ] ||
+                         cls == 'func_areaportal' ]
+                        model_solid[ mi ] = false
+            b0 = ent_find[ s, b1, "{" ]
+
+    func load_planes [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 20 ]
+        planes = vec f32 [ n * 4 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 20 ]
+            planes[ i * 4 ]     = bsp_f32[ b, at ]
+            planes[ i * 4 + 1 ] = bsp_f32[ b, at + 4 ]
+            planes[ i * 4 + 2 ] = bsp_f32[ b, at + 8 ]
+            planes[ i * 4 + 3 ] = bsp_f32[ b, at + 12 ]
+
+    func load_nodes [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 28 ]
+        nodes = vec i32 [ n * 3 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 28 ]
+            nodes[ i * 3 ]     = bsp_i32[ b, at ]
+            nodes[ i * 3 + 1 ] = bsp_i32[ b, at + 4 ]
+            nodes[ i * 3 + 2 ] = bsp_i32[ b, at + 8 ]
+
+    func load_leafs [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 28 ]
+        leaf_cluster  = vec i32 [ n ]
+        leaf_first    = vec i32 [ n ]
+        leaf_count    = vec i32 [ n ]
+        leaf_contents = vec i32 [ n ]
+        leaf_bfirst   = vec i32 [ n ]
+        leaf_bcount   = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 28 ]
+            leaf_contents[ i ] = bsp_i32[ b, at ]
+            leaf_cluster[ i ]  = bsp_i16[ b, at + 4 ]
+            leaf_first[ i ]    = bsp_u16[ b, at + 20 ]
+            leaf_count[ i ]    = bsp_u16[ b, at + 22 ]
+            leaf_bfirst[ i ]   = bsp_u16[ b, at + 24 ]
+            leaf_bcount[ i ]   = bsp_u16[ b, at + 26 ]
+
+    func load_leafbrushes [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 2 ]
+        leafbrushes = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            leafbrushes[ i ] = bsp_u16[ b, off + i * 2 ]
+
+    func load_brushes [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 12 ]
+        brushes = vec i32 [ n * 3 ]
+        brush_check = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 12 ]
+            brushes[ i * 3 ]     = bsp_i32[ b, at ]
+            brushes[ i * 3 + 1 ] = bsp_i32[ b, at + 4 ]
+            brushes[ i * 3 + 2 ] = bsp_i32[ b, at + 8 ]
+
+    func load_brushsides [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 4 ]
+        brushsides = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            brushsides[ i ] = bsp_u16[ b, off + i * 4 ]
+
+    # CM_ClipBoxToBrush: the trace's segment against one brush
+    func clip_brush [ bi: i32 ]
+        first : i32 [ brushes[ bi * 3 ] ]
+        nsides : i32 [ brushes[ bi * 3 + 1 ] ]
+        if [ nsides == 0 ] return
+        enterfrac : f32 [ -1.0 ]
+        leavefrac : f32 [ 1.0 ]
+        clip : i32 [ -1 ]
+        getout : bool [ false ]
+        startout : bool [ false ]
+        eps : f32 [ 0.03125 ]
+        for [ i: i32 0, i < nsides, i += 1 ]
+            pl : i32 [ brushsides[ first + i ] * 4 ]
+            nx : f32 [ planes[ pl ] ]
+            ny : f32 [ planes[ pl + 1 ] ]
+            nz : f32 [ planes[ pl + 2 ] ]
+            dist : f32 [ planes[ pl + 3 ] ]
+            if [ !tr_point ]
+                # push the plane out by the box's near corner
+                ox : f32 [ (nx < 0.0) ? tr_maxs[ 0 ] : tr_mins[ 0 ] ]
+                oy : f32 [ (ny < 0.0) ? tr_maxs[ 1 ] : tr_mins[ 1 ] ]
+                oz : f32 [ (nz < 0.0) ? tr_maxs[ 2 ] : tr_mins[ 2 ] ]
+                dist = dist - (ox * nx + oy * ny + oz * nz)
+            d1 : f32 [ tr_sx * nx + tr_sy * ny + tr_sz * nz - dist ]
+            d2 : f32 [ tr_ex * nx + tr_ey * ny + tr_ez * nz - dist ]
+            if [ d2 > 0.0 ] getout = true
+            if [ d1 > 0.0 ] startout = true
+            if [ d1 > 0.0 && d2 >= d1 ] return
+            if [ d1 <= 0.0 && d2 <= 0.0 ] continue
+            if [ d1 > d2 ]
+                f : f32 [ (d1 - eps) / (d1 - d2) ]
+                if [ f > enterfrac ]
+                    enterfrac = f
+                    clip = pl
+            el
+                f : f32 [ (d1 + eps) / (d1 - d2) ]
+                if [ f < leavefrac ] leavefrac = f
+        if [ !startout ]
+            tr.startsolid = true
+            if [ !getout ] tr.allsolid = true
+            return
+        if [ enterfrac < leavefrac ]
+            if [ enterfrac > -1.0 && enterfrac < tr.fraction ]
+                if [ enterfrac < 0.0 ] enterfrac = 0.0
+                tr.fraction = enterfrac
+                tr.nx = planes[ clip ]
+                tr.ny = planes[ clip + 1 ]
+                tr.nz = planes[ clip + 2 ]
+                tr.contents = brushes[ bi * 3 + 2 ]
+
+    # CM_TraceToLeaf: every brush of the leaf, once per trace
+    func trace_leaf [ l: i32 ]
+        if [ (leaf_contents[ l ] & tr_contents) == 0 ] return
+        lb : i32 [ leaf_bfirst[ l ] ]
+        for [ k: i32 0, k < leaf_bcount[ l ], k += 1 ]
+            bi : i32 [ leafbrushes[ lb + k ] ]
+            if [ brush_check[ bi ] == checkcount ] continue
+            brush_check[ bi ] = checkcount
+            if [ (brushes[ bi * 3 + 2 ] & tr_contents) == 0 ] continue
+            clip_brush[ bi ]
+            if [ tr.fraction == 0.0 ] return
+
+    # CM_RecursiveHullCheck: the segment p1..p2 down the tree
+    func hull_check [ num: i32, p1f: f32, p2f: f32,
+                      x1: f32, y1: f32, z1: f32,
+                      x2: f32, y2: f32, z2: f32 ]
+        if [ tr.fraction <= p1f ] return
+        if [ num < 0 ]
+            trace_leaf[ 0 - 1 - num ]
+            return
+        pl : i32 [ nodes[ num * 3 ] * 4 ]
+        nx : f32 [ planes[ pl ] ]
+        ny : f32 [ planes[ pl + 1 ] ]
+        nz : f32 [ planes[ pl + 2 ] ]
+        dist : f32 [ planes[ pl + 3 ] ]
+        t1 : f32 [ nx * x1 + ny * y1 + nz * z1 - dist ]
+        t2 : f32 [ nx * x2 + ny * y2 + nz * z2 - dist ]
+        offset : f32 [ 0.0 ]
+        if [ !tr_point ]
+            offset = fabs[ tr_ext[ 0 ] * nx ] + fabs[ tr_ext[ 1 ] * ny ]
+                   + fabs[ tr_ext[ 2 ] * nz ]
+        c0 : i32 [ nodes[ num * 3 + 1 ] ]
+        c1 : i32 [ nodes[ num * 3 + 2 ] ]
+        if [ t1 >= offset && t2 >= offset ]
+            hull_check[ c0, p1f, p2f, x1, y1, z1, x2, y2, z2 ]
+            return
+        if [ t1 < 0.0 - offset && t2 < 0.0 - offset ]
+            hull_check[ c1, p1f, p2f, x1, y1, z1, x2, y2, z2 ]
+            return
+        eps : f32 [ 0.03125 ]
+        side : i32 [ 0 ]
+        frac : f32 [ 1.0 ]
+        frac2 : f32 [ 0.0 ]
+        if [ t1 < t2 ]
+            idist : f32 [ 1.0 / (t1 - t2) ]
+            side  = 1
+            frac2 = (t1 + offset + eps) * idist
+            frac  = (t1 - offset + eps) * idist
+        el
+            if [ t1 > t2 ]
+                idist : f32 [ 1.0 / (t1 - t2) ]
+                frac2 = (t1 - offset - eps) * idist
+                frac  = (t1 + offset + eps) * idist
+        if [ frac < 0.0 ] frac = 0.0
+        if [ frac > 1.0 ] frac = 1.0
+        midf : f32 [ p1f + (p2f - p1f) * frac ]
+        mx : f32 [ x1 + frac * (x2 - x1) ]
+        my : f32 [ y1 + frac * (y2 - y1) ]
+        mz : f32 [ z1 + frac * (z2 - z1) ]
+        near : i32 [ (side == 0) ? c0 : c1 ]
+        far  : i32 [ (side == 0) ? c1 : c0 ]
+        hull_check[ near, p1f, midf, x1, y1, z1, mx, my, mz ]
+        if [ frac2 < 0.0 ] frac2 = 0.0
+        if [ frac2 > 1.0 ] frac2 = 1.0
+        midf = p1f + (p2f - p1f) * frac2
+        mx = x1 + frac2 * (x2 - x1)
+        my = y1 + frac2 * (y2 - y1)
+        mz = z1 + frac2 * (z2 - z1)
+        hull_check[ far, midf, p2f, mx, my, mz, x2, y2, z2 ]
+
+    # CM_TestBoxInBrush: is the box at the start inside this brush
+    func test_box_in_brush [ bi: i32 ]
+        first : i32 [ brushes[ bi * 3 ] ]
+        nsides : i32 [ brushes[ bi * 3 + 1 ] ]
+        if [ nsides == 0 ] return
+        for [ i: i32 0, i < nsides, i += 1 ]
+            pl : i32 [ brushsides[ first + i ] * 4 ]
+            nx : f32 [ planes[ pl ] ]
+            ny : f32 [ planes[ pl + 1 ] ]
+            nz : f32 [ planes[ pl + 2 ] ]
+            ox : f32 [ (nx < 0.0) ? tr_maxs[ 0 ] : tr_mins[ 0 ] ]
+            oy : f32 [ (ny < 0.0) ? tr_maxs[ 1 ] : tr_mins[ 1 ] ]
+            oz : f32 [ (nz < 0.0) ? tr_maxs[ 2 ] : tr_mins[ 2 ] ]
+            dist : f32 [ planes[ pl + 3 ] - (ox * nx + oy * ny + oz * nz) ]
+            d1 : f32 [ tr_sx * nx + tr_sy * ny + tr_sz * nz - dist ]
+            if [ d1 > 0.0 ] return
+        tr.startsolid = true
+        tr.allsolid = true
+        tr.fraction = 0.0
+        tr.contents = brushes[ bi * 3 + 2 ]
+
+    # CM_TestInLeaf
+    func test_in_leaf [ l: i32 ]
+        if [ (leaf_contents[ l ] & tr_contents) == 0 ] return
+        lb : i32 [ leaf_bfirst[ l ] ]
+        for [ k: i32 0, k < leaf_bcount[ l ], k += 1 ]
+            bi : i32 [ leafbrushes[ lb + k ] ]
+            if [ brush_check[ bi ] == checkcount ] continue
+            brush_check[ bi ] = checkcount
+            if [ (brushes[ bi * 3 + 2 ] & tr_contents) == 0 ] continue
+            test_box_in_brush[ bi ]
+            if [ tr.fraction == 0.0 ] return
+
+    # CM_BoxLeafnums_r: every leaf the box x0..x1 touches is tested
+    func box_leafs_test [ num: i32, x0: f32, y0: f32, z0: f32,
+                          x1: f32, y1: f32, z1: f32 ]
+        n : i32 [ num ]
+        while [ true ]
+            if [ tr.allsolid ] return
+            if [ n < 0 ]
+                test_in_leaf[ 0 - 1 - n ]
+                return
+            pl : i32 [ nodes[ n * 3 ] * 4 ]
+            nx : f32 [ planes[ pl ] ]
+            ny : f32 [ planes[ pl + 1 ] ]
+            nz : f32 [ planes[ pl + 2 ] ]
+            dist : f32 [ planes[ pl + 3 ] ]
+            # the box's nearest and farthest corners to the plane
+            dmin : f32 [ ((nx >= 0.0) ? nx * x0 : nx * x1)
+                       + ((ny >= 0.0) ? ny * y0 : ny * y1)
+                       + ((nz >= 0.0) ? nz * z0 : nz * z1) - dist ]
+            dmax : f32 [ ((nx >= 0.0) ? nx * x1 : nx * x0)
+                       + ((ny >= 0.0) ? ny * y1 : ny * y0)
+                       + ((nz >= 0.0) ? nz * z1 : nz * z0) - dist ]
+            c0 : i32 [ nodes[ n * 3 + 1 ] ]
+            c1 : i32 [ nodes[ n * 3 + 2 ] ]
+            if [ dmin >= 0.0 ]
+                n = c0
+            el
+                if [ dmax < 0.0 ]
+                    n = c1
+                el
+                    box_leafs_test[ c0, x0, y0, z0, x1, y1, z1 ]
+                    n = c1
+
+    # CM_BoxTrace through the world, quake axes; mask as contents
+    public func box_trace [ sx: f32, sy: f32, sz: f32,
+                            ex: f32, ey: f32, ez: f32,
+                            mins: vec f32, maxs: vec f32,
+                            mask: i32 ] -> Trace
+        checkcount += 1
+        tr = Trace [ fraction: 1.0 ]
+        tr_contents = mask
+        tr_sx = sx
+        tr_sy = sy
+        tr_sz = sz
+        tr_ex = ex
+        tr_ey = ey
+        tr_ez = ez
+        for [ i: i32 0, i < 3, i += 1 ]
+            tr_mins[ i ] = mins[ i ]
+            tr_maxs[ i ] = maxs[ i ]
+            tr_ext[ i ] = (0.0 - mins[ i ] > maxs[ i ]) ? 0.0 - mins[ i ]
+                                                         : maxs[ i ]
+        tr_point = mins[ 0 ] == 0.0 && mins[ 1 ] == 0.0 &&
+            mins[ 2 ] == 0.0 && maxs[ 0 ] == 0.0 && maxs[ 1 ] == 0.0 &&
+            maxs[ 2 ] == 0.0
+        # the sweep's bounds, for the inline models' boxes
+        bx0 : f32 [ ((sx < ex) ? sx : ex) + mins[ 0 ] - 1.0 ]
+        by0 : f32 [ ((sy < ey) ? sy : ey) + mins[ 1 ] - 1.0 ]
+        bz0 : f32 [ ((sz < ez) ? sz : ez) + mins[ 2 ] - 1.0 ]
+        bx1 : f32 [ ((sx > ex) ? sx : ex) + maxs[ 0 ] + 1.0 ]
+        by1 : f32 [ ((sy > ey) ? sy : ey) + maxs[ 1 ] + 1.0 ]
+        bz1 : f32 [ ((sz > ez) ? sz : ez) + maxs[ 2 ] + 1.0 ]
+        still : bool [ sx == ex && sy == ey && sz == ez ]
+        # the world, then the inline models at their map place
+        for [ m: i32 0, m < model_head.count, m += 1 ]
+            if [ m > 0 ]
+                if [ !model_solid[ m ] ] continue
+                mb : i32 [ m * 6 ]
+                if [ model_box[ mb ] > bx1 || model_box[ mb + 3 ] < bx0 ||
+                     model_box[ mb + 1 ] > by1 || model_box[ mb + 4 ] < by0 ||
+                     model_box[ mb + 2 ] > bz1 || model_box[ mb + 5 ] < bz0 ]
+                    continue
+            if [ still ]
+                # the position test: is the box in anything
+                box_leafs_test[ model_head[ m ], bx0, by0, bz0,
+                                bx1, by1, bz1 ]
+            el
+                hull_check[ model_head[ m ], 0.0, 1.0, sx, sy, sz,
+                            ex, ey, ez ]
+            if [ tr.allsolid ] break
+        if [ still ]
+            tr.ex = sx
+            tr.ey = sy
+            tr.ez = sz
+            return tr
+        tr.ex = sx + tr.fraction * (ex - sx)
+        tr.ey = sy + tr.fraction * (ey - sy)
+        tr.ez = sz + tr.fraction * (ez - sz)
+        return tr
+
+    func load_leaffaces [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 2 ]
+        leaffaces = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            leaffaces[ i ] = bsp_u16[ b, off + i * 2 ]
+
+    # the leaf holding a point, quake axes
+    public func leaf_at [ x: f32, y: f32, z: f32 ] -> i32
+        node : i32 [ headnode ]
+        while [ node >= 0 ]
+            pl : i32 [ nodes[ node * 3 ] * 4 ]
+            d : f32 [ x * planes[ pl ] + y * planes[ pl + 1 ]
+                      + z * planes[ pl + 2 ] - planes[ pl + 3 ] ]
+            node = (d >= 0.0) ? nodes[ node * 3 + 1 ]
+                              : nodes[ node * 3 + 2 ]
+        return 0 - 1 - node
+
+    public func cluster_at [ x: f32, y: f32, z: f32 ] -> i32
+        l : i32 [ leaf_at[ x, y, z ] ]
+        if [ l < 0 || l >= leaf_cluster.count ] return -1
+        return leaf_cluster[ l ]
+
+    # the cluster's pvs row into vis_row, run lengths of zero expanded
+    func cluster_row [ c: i32 ]
+        row : i32 [ (clusters + 7) / 8 ]
+        if [ c < 0 || c >= clusters ]
+            for [ i: i32 0, i < row, i += 1 ] vis_row[ i ] = 255
+            return
+        d  : @u8 [ vis.data ]
+        at : i32 [ bsp_i32[ d, 4 + c * 8 ] ]
+        o  : i32 [ 0 ]
+        while [ o < row ]
+            v : u8 [ d[ at ] ]
+            if [ v != 0 ]
+                vis_row[ o ] = v
+                o += 1
+                at += 1
+            el
+                z : i32 [ i32[ d[ at + 1 ] ] ]
+                at += 2
+                while [ z > 0 && o < row ]
+                    vis_row[ o ] = 0
+                    o += 1
+                    z = z - 1
+
+    # indices of the faces seen from a cluster, into out; the count
+    public func visible_indices [ c: i32, out: @u32 ] -> i32
+        if [ c < 0 || clusters == 0 ]
+            memcpy[ out, idx_all, idx_n * 4 ]
+            return idx_n
+        cluster_row[ c ]
+        mark_gen += 1
+        n : i32 [ 0 ]
+        for [ l: i32 0, l < leaf_cluster.count, l += 1 ]
+            cl : i32 [ leaf_cluster[ l ] ]
+            if [ cl < 0 ] continue
+            bit : i32 [ i32[ vis_row[ cl >> 3 ] ] & (1 << (cl & 7)) ]
+            if [ bit == 0 ] continue
+            lf : i32 [ leaf_first[ l ] ]
+            for [ i: i32 0, i < leaf_count[ l ], i += 1 ]
+                f : i32 [ leaffaces[ lf + i ] ]
+                if [ face_first[ f ] < 0 ] continue
+                if [ face_mark[ f ] == mark_gen ] continue
+                face_mark[ f ] = mark_gen
+                cnt : i32 [ face_tris[ f ] * 3 ]
+                memcpy[ @out[ n ], @idx_all[ face_first[ f ] ], cnt * 4 ]
+                n += cnt
+        # the inline models (doors, lifts) always, until they move
+        for [ m: i32 1, m < model_head.count, m += 1 ]
+            if [ !model_solid[ m ] ] continue
+            mf : i32 [ model_face[ m * 2 ] ]
+            for [ i: i32 0, i < model_face[ m * 2 + 1 ], i += 1 ]
+                f : i32 [ mf + i ]
+                if [ face_first[ f ] < 0 ] continue
+                cnt : i32 [ face_tris[ f ] * 3 ]
+                memcpy[ @out[ n ], @idx_all[ face_first[ f ] ], cnt * 4 ]
+                n += cnt
+        return n
+
+    func load_verts [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 4 ]
+        verts = vec f32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            verts[ i ] = bsp_f32[ b, off + i * 4 ]
+
+    func load_edges [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 2 ]
+        edges = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            edges[ i ] = bsp_u16[ b, off + i * 2 ]
+
+    func load_surfedges [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 4 ]
+        surfedges = vec i32 [ n ]
+        for [ i: i32 0, i < n, i += 1 ]
+            surfedges[ i ] = bsp_i32[ b, off + i * 4 ]
+
+    func load_texinfo [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 76 ]
+        texinfos = vec BspTexinfo []
+        nb : local i8 [ 33 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 76 ]
+            memcpy[ nb, @b[ at + 40 ], 32 ]
+            nb[ 32 ] = 0
+            ti : BspTexinfo [
+                sx: bsp_f32[ b, at ],      sy: bsp_f32[ b, at + 4 ],
+                sz: bsp_f32[ b, at + 8 ],  so: bsp_f32[ b, at + 12 ],
+                tx: bsp_f32[ b, at + 16 ], ty: bsp_f32[ b, at + 20 ],
+                tz: bsp_f32[ b, at + 24 ], to: bsp_f32[ b, at + 28 ],
+                flags: bsp_i32[ b, at + 32 ],
+                name: string [ cast cstr [ nb ] ], tex: -1 ]
+            texinfos.push[ ti ]
+
+    func load_faces [ b: @u8, off: i32, cnt: i32 ]
+        n : i32 [ cnt / 20 ]
+        faces = vec BspFace []
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ off + i * 20 ]
+            f : BspFace [
+                first_edge: bsp_i32[ b, at + 4 ],
+                num_edges:  bsp_i16[ b, at + 8 ],
+                texinfo:    bsp_i16[ b, at + 10 ],
+                lightofs:   bsp_i32[ b, at + 16 ] ]
+            faces.push[ f ]
+
+    # the 256 colours: the last 768 bytes of pics/colormap.pcx
+    func load_palette [ pak: Pak ]
+        palette = vec u8 [ 768 ]
+        d : pak.read[ 'pics/colormap.pcx' ]
+        if [ !d || d.size < 769 ]
+            log 'bsp: no palette'
+            return
+        for [ i: i32 0, i < 768, i += 1 ]
+            palette[ i ] = d.data[ d.size - 768 + i ]
+
+    func tex_index [ nm: string ] -> i32
+        for [ i: i32 0, i < texs.count, i += 1 ]
+            t : texs[ i ]
+            if [ t.name == nm ] return i
+        return -1
+
+    # every texinfo's wal decoded once, then shelf-packed in rows
+    func load_textures [ pak: Pak ]
+        texs = vec BspTex []
+        for [ ti: BspTexinfo ] in texinfos
+            if [ ti.flags & surf_nodraw[] ] continue
+            if [ ti.flags & surf_sky[] ] continue
+            k : i32 [ tex_index[ ti.name ] ]
+            if [ k < 0 ]
+                t : load_wal[ pak, ti.name ]
+                if [ !t ] continue
+                k = texs.count
+                texs.push[ t ]
+            ti.tex = k
+        # pack: rows of 2048, each row as tall as its tallest
+        x : i32 [ 0 ]
+        y : i32 [ 0 ]
+        row : i32 [ 0 ]
+        for [ t: BspTex ] in texs
+            if [ x + t.width > atlas_w ]
+                x = 0
+                y = y + row
+                row = 0
+            t.ax = x
+            t.ay = y
+            x = x + t.width
+            if [ t.height > row ] row = t.height
+        atlas_h = y + row
+        tex_atlas = Image [ width: atlas_w, height: atlas_h,
+                            format: Pixel.rgba8, linear: true ]
+        ad : @u8 [ tex_atlas.vdata[] ]
+        for [ t: BspTex ] in texs
+            for [ r: i32 0, r < t.height, r += 1 ]
+                dst : i32 [ ((t.ay + r) * atlas_w + t.ax) * 4 ]
+                src : i32 [ r * t.width * 4 ]
+                memcpy[ @ad[ dst ], @t.pixels[ src ], t.width * 4 ]
+        log 'bsp: texture atlas {atlas_w}x{atlas_h}'
+
+    func load_wal [ pak: Pak, nm: string ] -> BspTex
+        d : pak.read[ 'textures/{nm}.wal' ]
+        if [ !d ]
+            log 'bsp: missing textures/{nm}.wal'
+            return null
+        b : @u8 [ d.data ]
+        w : i32 [ bsp_i32[ b, 32 ] ]
+        h : i32 [ bsp_i32[ b, 36 ] ]
+        o : i32 [ bsp_i32[ b, 40 ] ]
+        n : i32 [ w * h ]
+        px : new u8 [ n * 4 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            c : i32 [ i32[ b[ o + i ] ] * 3 ]
+            px[ i * 4 ]     = palette[ c ]
+            px[ i * 4 + 1 ] = palette[ c + 1 ]
+            px[ i * 4 + 2 ] = palette[ c + 2 ]
+            px[ i * 4 + 3 ] = 255
+        return BspTex [ name: nm, width: w, height: h, pixels: px ]
+
+    func face_drawn [ f: BspFace ] -> bool
+        if [ f.texinfo < 0 || f.texinfo >= texinfos.count ] return false
+        ti : texinfos[ f.texinfo ]
+        if [ ti.tex < 0 ] return false
+        return f.num_edges >= 3
+
+    # vertex index of edge i of a face, honouring the edge's sign
+    func face_vert [ f: BspFace, i: i32 ] -> i32
+        e : i32 [ surfedges[ f.first_edge + i ] ]
+        if [ e >= 0 ] return edges[ e * 2 ]
+        return edges[ (0 - e) * 2 + 1 ]
+
+    # the world as one mesh: position, texture uv in texels of
+    # the wal, lightmap uv in the atlas, the wal's atlas rect
+    public func build [] -> GltfModel
+        nv : i32 [ 0 ]
+        ni : i32 [ 0 ]
+        for [ fi: i32 0, fi < faces.count, fi += 1 ]
+            f : faces[ fi ]
+            if [ !face_drawn[ f ] ] continue
+            nv = nv + f.num_edges
+            ni = ni + (f.num_edges - 2) * 3
+        pb : i32 [ nv * 12 ]
+        ub : i32 [ nv * 8 ]
+        rb : i32 [ nv * 16 ]
+        ib : i32 [ ni * 4 ]
+        tsz : i32 [ pb + ub + ub + rb + ib ]
+        data : new u8 [ tsz ]
+        pf : @f32 [ data ]
+        uf : @f32 [ @data[ pb ] ]
+        lf : @f32 [ @data[ pb + ub ] ]
+        rf : @f32 [ @data[ pb + ub + ub ] ]
+        iu : @u32 [ @data[ pb + ub + ub + rb ] ]
+        # lightmap atlas: blocks shelf-packed in rows of lm_w
+        lm_h = 2048
+        lm_atlas = Image [ width: lm_w, height: lm_h,
+                           format: Pixel.rgba8, linear: true ]
+        ld : @u8 [ lm_atlas.vdata[] ]
+        lmn : i32 [ lm_w * lm_h * 4 ]
+        memset[ ld, 255, lmn ]
+        lx : i32 [ 0 ]
+        ly : i32 [ 0 ]
+        lrow : i32 [ 0 ]
+        v : i32 [ 0 ]
+        k : i32 [ 0 ]
+        face_first = vec i32 [ faces.count ]
+        face_tris  = vec i32 [ faces.count ]
+        face_mark  = vec i32 [ faces.count ]
+        for [ i: i32 0, i < faces.count, i += 1 ] face_first[ i ] = -1
+        idx_all = iu
+        idx_n   = ni
+        aw : f32 [ atlas_w ]
+        ah : f32 [ atlas_h ]
+        for [ fi: i32 0, fi < faces.count, fi += 1 ]
+            f : faces[ fi ]
+            if [ !face_drawn[ f ] ] continue
+            ti : texinfos[ f.texinfo ]
+            t  : texs[ ti.tex ]
+            n  : i32 [ f.num_edges ]
+            # texture extents in texels, as CalcSurfaceExtents
+            smin : f32 [ 999999.0 ]
+            smax : f32 [ -999999.0 ]
+            tmin : f32 [ 999999.0 ]
+            tmax : f32 [ -999999.0 ]
+            base : i32 [ v ]
+            for [ i: i32 0, i < n, i += 1 ]
+                vi : i32 [ face_vert[ f, i ] * 3 ]
+                x : f32 [ verts[ vi ] ]
+                y : f32 [ verts[ vi + 1 ] ]
+                z : f32 [ verts[ vi + 2 ] ]
+                s : f32 [ x * ti.sx + y * ti.sy + z * ti.sz + ti.so ]
+                tt : f32 [ x * ti.tx + y * ti.ty + z * ti.tz + ti.to ]
+                if [ s < smin ] smin = s
+                if [ s > smax ] smax = s
+                if [ tt < tmin ] tmin = tt
+                if [ tt > tmax ] tmax = tt
+                at : i32 [ (v + i) * 3 ]
+                # quake z up to trinity y up
+                pf[ at ]     = x
+                pf[ at + 1 ] = z
+                pf[ at + 2 ] = 0.0 - y
+                ut : i32 [ (v + i) * 2 ]
+                uf[ ut ]     = s / f32[ t.width ]
+                uf[ ut + 1 ] = tt / f32[ t.height ]
+                rt : i32 [ (v + i) * 4 ]
+                rf[ rt ]     = f32[ t.ax ] / aw
+                rf[ rt + 1 ] = f32[ t.ay ] / ah
+                rf[ rt + 2 ] = f32[ t.width ] / aw
+                rf[ rt + 3 ] = f32[ t.height ] / ah
+            bs0 : i32 [ i32[ floor[ smin / 16.0 ] ] ]
+            bs1 : i32 [ i32[ ceil[ smax / 16.0 ] ] ]
+            bt0 : i32 [ i32[ floor[ tmin / 16.0 ] ] ]
+            bt1 : i32 [ i32[ ceil[ tmax / 16.0 ] ] ]
+            bw : i32 [ bs1 - bs0 + 1 ]
+            bh : i32 [ bt1 - bt0 + 1 ]
+            lit : bool [ f.lightofs >= 0 && bw <= 34 && bh <= 34 &&
+                (ti.flags & surf_warp[]) == 0 ]
+            if [ lit ]
+                if [ lx + bw > lm_w ]
+                    lx = 0
+                    ly = ly + lrow
+                    lrow = 0
+                if [ ly + bh > lm_h ] lit = false
+            if [ lit ]
+                for [ r: i32 0, r < bh, r += 1 ]
+                    for [ c: i32 0, c < bw, c += 1 ]
+                        si : i32 [ f.lightofs + (r * bw + c) * 3 ]
+                        di : i32 [ ((ly + r) * lm_w + lx + c) * 4 ]
+                        ld[ di ]     = lighting.data[ si ]
+                        ld[ di + 1 ] = lighting.data[ si + 1 ]
+                        ld[ di + 2 ] = lighting.data[ si + 2 ]
+                        ld[ di + 3 ] = 255
+            for [ i: i32 0, i < n, i += 1 ]
+                vi : i32 [ face_vert[ f, i ] * 3 ]
+                x : f32 [ verts[ vi ] ]
+                y : f32 [ verts[ vi + 1 ] ]
+                z : f32 [ verts[ vi + 2 ] ]
+                s : f32 [ x * ti.sx + y * ti.sy + z * ti.sz + ti.so ]
+                tt : f32 [ x * ti.tx + y * ti.ty + z * ti.tz + ti.to ]
+                lt : i32 [ (v + i) * 2 ]
+                if [ lit ]
+                    # texel centre inside the block, then the atlas
+                    ls : f32 [ (s - f32[ bs0 * 16 ]) / 16.0 + 0.5 ]
+                    lu : f32 [ (tt - f32[ bt0 * 16 ]) / 16.0 + 0.5 ]
+                    lf[ lt ]     = (f32[ lx ] + ls) / f32[ lm_w ]
+                    lf[ lt + 1 ] = (f32[ ly ] + lu) / f32[ lm_h ]
+                el
+                    lf[ lt ]     = -1.0
+                    lf[ lt + 1 ] = -1.0
+            if [ lit ]
+                lx = lx + bw
+                if [ bh > lrow ] lrow = bh
+            face_first[ fi ] = k
+            face_tris[ fi ]  = n - 2
+            for [ i: i32 1, i + 1 < n, i += 1 ]
+                iu[ k ]     = u32[ base ]
+                iu[ k + 1 ] = u32[ base + i ]
+                iu[ k + 2 ] = u32[ base + i + 1 ]
+                k += 3
+            v = v + n
+        tri_count = ni / 3
+        log 'bsp: mesh {nv} verts, {tri_count} triangles, lightmap rows to {ly + lrow}'
+        bufs : vec GltfBuffer []
+        bufs += GltfBuffer [ byteLength: u64[ tsz ], data: data ]
+        views : vec BufferView []
+        views += BufferView [ buffer: 0, byteOffset: 0, byteLength: pb ]
+        views += BufferView [ buffer: 0, byteOffset: pb, byteLength: ub ]
+        views += BufferView [ buffer: 0, byteOffset: pb + ub,
+                              byteLength: ub ]
+        views += BufferView [ buffer: 0, byteOffset: pb + ub + ub,
+                              byteLength: rb ]
+        views += BufferView [ buffer: 0, byteOffset: pb + ub + ub + rb,
+                              byteLength: ib ]
+        accs : vec Accessor []
+        accs += Accessor [ bufferView: 0,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC3, count: nv ]
+        accs += Accessor [ bufferView: 1,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC2, count: nv ]
+        accs += Accessor [ bufferView: 2,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC2, count: nv ]
+        accs += Accessor [ bufferView: 3,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC4, count: nv ]
+        accs += Accessor [ bufferView: 4,
+                           componentType: ComponentType.UNSIGNED_INT,
+                           type: CompoundType.SCALAR, count: ni ]
+        am : map i64 [ string ] [ ]
+        am[ 'POSITION' ]   = i64[ 0 ]
+        am[ 'TEXCOORD_0' ] = i64[ 1 ]
+        am[ 'TEXCOORD_1' ] = i64[ 2 ]
+        am[ 'TEXCOORD_2' ] = i64[ 3 ]
+        prs : vec Primitive []
+        prs += Primitive [ name: 'world', attributes: am,
+                           indices: u64[ 4 ], material: 0,
+                           mode: Mode.TRIANGLES ]
+        mshs : vec Mesh []
+        mshs += Mesh [ name: 'world', primitives: prs ]
+        nds : vec Node []
+        nds += Node [ name: 'world', mesh: 0 ]
+        sn : vec i64 []
+        sn += 0
+        scns : vec Scene []
+        scns += Scene [ name: 'scene', nodes: sn ]
+        gm : GltfModel [ nodes: nds, meshes: mshs, scenes: scns,
+            scene: 0, buffers: bufs, bufferViews: views,
+            accessors: accs ]
+        return gm
+
+    # the sky faces alone: positions, fan triangles
+    public func build_sky [] -> GltfModel
+        nv : i32 [ 0 ]
+        ni : i32 [ 0 ]
+        for [ fi: i32 0, fi < num_faces, fi += 1 ]
+            f : faces[ first_face + fi ]
+            if [ !face_sky[ f ] ] continue
+            nv = nv + f.num_edges
+            ni = ni + (f.num_edges - 2) * 3
+        if [ nv == 0 ] return null
+        pb : i32 [ nv * 12 ]
+        ib : i32 [ ni * 4 ]
+        tsz : i32 [ pb + ib ]
+        data : new u8 [ tsz ]
+        pf : @f32 [ data ]
+        iu : @u32 [ @data[ pb ] ]
+        v : i32 [ 0 ]
+        k : i32 [ 0 ]
+        for [ fi: i32 0, fi < num_faces, fi += 1 ]
+            f : faces[ first_face + fi ]
+            if [ !face_sky[ f ] ] continue
+            n : i32 [ f.num_edges ]
+            for [ i: i32 0, i < n, i += 1 ]
+                vi : i32 [ face_vert[ f, i ] * 3 ]
+                at : i32 [ (v + i) * 3 ]
+                pf[ at ]     = verts[ vi ]
+                pf[ at + 1 ] = verts[ vi + 2 ]
+                pf[ at + 2 ] = 0.0 - verts[ vi + 1 ]
+            for [ i: i32 1, i + 1 < n, i += 1 ]
+                iu[ k ]     = u32[ v ]
+                iu[ k + 1 ] = u32[ v + i ]
+                iu[ k + 2 ] = u32[ v + i + 1 ]
+                k += 3
+            v = v + n
+        log 'bsp: sky mesh {nv} verts, {ni / 3} triangles'
+        bufs : vec GltfBuffer []
+        bufs += GltfBuffer [ byteLength: u64[ tsz ], data: data ]
+        views : vec BufferView []
+        views += BufferView [ buffer: 0, byteOffset: 0, byteLength: pb ]
+        views += BufferView [ buffer: 0, byteOffset: pb, byteLength: ib ]
+        accs : vec Accessor []
+        accs += Accessor [ bufferView: 0,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC3, count: nv ]
+        accs += Accessor [ bufferView: 1,
+                           componentType: ComponentType.UNSIGNED_INT,
+                           type: CompoundType.SCALAR, count: ni ]
+        am : map i64 [ string ] [ ]
+        am[ 'POSITION' ] = i64[ 0 ]
+        prs : vec Primitive []
+        prs += Primitive [ name: 'sky', attributes: am,
+                           indices: u64[ 1 ], material: 0,
+                           mode: Mode.TRIANGLES ]
+        mshs : vec Mesh []
+        mshs += Mesh [ name: 'sky', primitives: prs ]
+        nds : vec Node []
+        nds += Node [ name: 'sky', mesh: 0 ]
+        sn : vec i64 []
+        sn += 0
+        scns : vec Scene []
+        scns += Scene [ name: 'scene', nodes: sn ]
+        gm : GltfModel [ nodes: nds, meshes: mshs, scenes: scns,
+            scene: 0, buffers: bufs, bufferViews: views,
+            accessors: accs ]
+        return gm
+
+    func face_sky [ f: BspFace ] -> bool
+        if [ f.texinfo < 0 || f.texinfo >= texinfos.count ] return false
+        ti : texinfos[ f.texinfo ]
+        if [ (ti.flags & surf_sky[]) == 0 ] return false
+        return f.num_edges >= 3
+
+    # the six sky faces side by side, in gl_warp's axis order
+    public func load_sky [ pak: Pak ] -> Image
+        if [ !sky_name ] return null
+        sufs : vec string [] [ 'rt', 'lf', 'bk', 'ft', 'up', 'dn' ]
+        size : i32 [ 0 ]
+        strip : Image
+        for [ i: i32 0, i < 6, i += 1 ]
+            d : pak.read[ 'env/{sky_name}{sufs[ i ]}.tga' ]
+            if [ !d ]
+                log 'bsp: missing env/{sky_name}{sufs[ i ]}.tga'
+                continue
+            w : i32 [ bsp_u16[ d.data, 12 ] ]
+            h : i32 [ bsp_u16[ d.data, 14 ] ]
+            if [ !strip ]
+                size = w
+                strip = Image [ width: w * 6, height: h,
+                                format: Pixel.rgba8, linear: true ]
+            if [ w != size || h != strip.height ] continue
+            tga_into[ d, strip.vdata[], strip.width, i * size ]
+        if [ strip ] log 'bsp: sky {sky_name} {size}x{size} x6'
+        return strip
+
+    # a 24 or 32 bit tga, plain or run length, rows stored bottom up
+    func tga_into [ d: PakData, dst: @u8, dw: i32, x0: i32 ]
+        b : @u8 [ d.data ]
+        idlen : i32 [ i32[ b[ 0 ] ] ]
+        kind  : i32 [ i32[ b[ 2 ] ] ]
+        w : i32 [ bsp_u16[ b, 12 ] ]
+        h : i32 [ bsp_u16[ b, 14 ] ]
+        bpp : i32 [ i32[ b[ 16 ] ] ]
+        if [ (kind != 2 && kind != 10) || (bpp != 24 && bpp != 32) ]
+            log 'bsp: tga type {kind} bpp {bpp} not read'
+            return
+        p : i32 [ 18 + idlen ]
+        for [ row: i32 h - 1, row >= 0, row = row - 1 ]
+            col : i32 [ 0 ]
+            while [ col < w ]
+                run : i32 [ 1 ]
+                raw : bool [ true ]
+                if [ kind == 10 ]
+                    hdr : i32 [ i32[ b[ p ] ] ]
+                    p += 1
+                    run = (hdr & 127) + 1
+                    raw = (hdr & 128) == 0
+                r : u8 [ 0 ]
+                g : u8 [ 0 ]
+                bl : u8 [ 0 ]
+                al : u8 [ 255 ]
+                for [ j: i32 0, j < run, j += 1 ]
+                    if [ raw || j == 0 ]
+                        bl = b[ p ]
+                        g  = b[ p + 1 ]
+                        r  = b[ p + 2 ]
+                        if [ bpp == 32 ] al = b[ p + 3 ]
+                        p += bpp / 8
+                    if [ col < w ]
+                        o : i32 [ (row * dw + x0 + col) * 4 ]
+                        dst[ o ]     = r
+                        dst[ o + 1 ] = g
+                        dst[ o + 2 ] = bl
+                        dst[ o + 3 ] = al
+                    col += 1

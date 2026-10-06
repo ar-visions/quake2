@@ -1,0 +1,89 @@
+# pak archives under one game folder; loose files come first
+extend quake2
+
+class PakEntry
+    public name   : string
+    public pak    : i32
+    public offset : i32
+    public size   : i32
+
+# a file read out of the paks: the bytes and their count
+class PakData
+    public data : @u8
+    public size : i32
+
+func pak_i32 [ d: @u8, off: i32 ] -> i32
+    v : i32 [ 0 ]
+    memcpy[ @v, @d[ off ], 4 ]
+    return v
+
+class Pak
+    public dir     : path
+    public paks    : vec path
+    public entries : vec PakEntry
+
+    public func open [ d: path ]
+        dir     = d
+        paks    = vec path []
+        entries = vec PakEntry []
+        for [ i: i32 0, i < 10, i += 1 ]
+            p : path '{d}/pak{i}.pak'
+            if [ !p.exists[] ] continue
+            load_pak[ p ]
+        log 'pak: {paks.count} archives, {entries.count} files'
+
+    func load_pak [ p: path ]
+        f : handle [ fopen[ p, "rb" ] ]
+        if [ !f ] return
+        hdr : local u8 [ 12 ]
+        fread[ hdr, 1, 12, f ]
+        dir_off : i32 [ pak_i32[ hdr, 4 ] ]
+        dir_len : i32 [ pak_i32[ hdr, 8 ] ]
+        n : i32 [ dir_len / 64 ]
+        dirb : new u8 [ dir_len ]
+        fseek[ f, dir_off, SEEK_SET ]
+        fread[ dirb, 1, dir_len, f ]
+        fclose[ f ]
+        pi : i32 [ paks.count ]
+        paks.push[ p ]
+        nb : local i8 [ 57 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            at : i32 [ i * 64 ]
+            memcpy[ nb, @dirb[ at ], 56 ]
+            nb[ 56 ] = 0
+            e : PakEntry [ name: string [ cast cstr [ nb ] ], pak: pi,
+                offset: pak_i32[ dirb, at + 56 ],
+                size:   pak_i32[ dirb, at + 60 ] ]
+            entries.push[ e ]
+
+    func find [ name: string ] -> PakEntry
+        # later paks override earlier ones, as the engine did
+        for [ i: i32 entries.count - 1, i >= 0, i = i - 1 ]
+            e : entries[ i ]
+            if [ strcasecmp[ e.name.chars, name.chars ] == 0 ] return e
+        return null
+
+    func read_file [ p: path ] -> PakData
+        f : handle [ fopen[ p, "rb" ] ]
+        if [ !f ] return null
+        fseek[ f, 0, SEEK_END ]
+        n : i32 [ i32[ ftell[ f ] ] ]
+        fseek[ f, 0, SEEK_SET ]
+        d : new u8 [ n ]
+        fread[ d, 1, n, f ]
+        fclose[ f ]
+        return PakData [ data: d, size: n ]
+
+    # a loose file in the game folder wins over the paks
+    public func read [ name: string ] -> PakData
+        loose : path '{dir}/{name}'
+        if [ loose.exists[] ] return read_file[ loose ]
+        e : find[ name ]
+        if [ !e ] return null
+        f : handle [ fopen[ paks[ e.pak ], "rb" ] ]
+        if [ !f ] return null
+        d : new u8 [ e.size ]
+        fseek[ f, e.offset, SEEK_SET ]
+        fread[ d, 1, e.size, f ]
+        fclose[ f ]
+        return PakData [ data: d, size: e.size ]

@@ -1,0 +1,556 @@
+# quake2: id's Quake 2 in silver, drawn by trinity
+export 0.1.0
+
+import vec
+import img
+import gltf
+import trinity
+
+import <stdio.h>
+import <stdlib.h>
+import <string.h>
+import <strings.h>
+import <math.h>
+
+import Pak
+import Bsp
+
+# the shader's samplers, by name
+enum BspSurface
+    color : 0
+    lm    : 1
+
+# world faces: a wal from the atlas, tiled, times its lightmap
+ModelViewProject BspLit
+    attrib color : LayoutBinding [ type:typeid[ BspSurface ],
+                                   id:BspSurface.color, count:1,
+                                   format: typeid[ rgba8 ] ]
+    attrib lm    : LayoutBinding [ type:typeid[ BspSurface ],
+                                   id:BspSurface.lm, count:1,
+                                   format: typeid[ rgba8 ] ]
+
+    attrib a_pos  : VertexInput [ type:typeid[ vec3f ] ]
+    attrib a_uv   : VertexInput [ type:typeid[ vec2f ] ]
+    attrib a_lm   : VertexInput [ type:typeid[ vec2f ] ]
+    attrib a_rect : VertexInput [ type:typeid[ vec4f ] ]
+
+    attrib v_uv   : VertexOutput [ type:typeid[ vec2f ] ]
+    attrib v_lm   : VertexOutput [ type:typeid[ vec2f ] ]
+    attrib v_rect : VertexOutput [ type:typeid[ vec4f ] ]
+    attrib fragColor : FragmentOutput [ type:typeid[ vec4f ] ]
+
+    func init [ ]
+        model = mat4f.identity[]
+        view  = mat4f.identity[]
+        proj  = mat4f.identity[]
+
+    func vertex [] -> GLSL none {
+        v_uv        = a_uv;
+        v_lm        = a_lm;
+        v_rect      = a_rect;
+        gl_Position = ubo.proj * ubo.view * ubo.model * vec4(a_pos, 1.0);
+    }
+
+    func fragment [] -> GLSL none {
+        vec2 uv  = v_rect.xy + fract(v_uv) * v_rect.zw;
+        vec4 c   = texture(color, uv);
+        vec3 l   = vec3(1.0);
+        if (v_lm.x >= 0.0) l = texture(lm, v_lm).rgb * 2.0;
+        fragColor = vec4(c.rgb * l, 1.0);
+    }
+
+enum SkySurface
+    sky : 0
+
+# sky faces show the sky box in the view direction, as gl_warp did
+ModelViewProject BspSky
+    mutable eye : vec4f
+    attrib sky : LayoutBinding [ type:typeid[ SkySurface ],
+                                 id:SkySurface.sky, count:1,
+                                 format: typeid[ rgba8 ] ]
+    attrib a_pos  : VertexInput  [ type:typeid[ vec3f ] ]
+    attrib v_wpos : VertexOutput [ type:typeid[ vec3f ] ]
+    attrib fragColor : FragmentOutput [ type:typeid[ vec4f ] ]
+
+    func init [ ]
+        model = mat4f.identity[]
+        view  = mat4f.identity[]
+        proj  = mat4f.identity[]
+
+    func vertex [] -> GLSL none {
+        vec4 wp     = ubo.model * vec4(a_pos, 1.0);
+        v_wpos      = wp.xyz;
+        gl_Position = ubo.proj * ubo.view * wp;
+    }
+
+    func fragment [] -> GLSL none {
+        vec3 d  = normalize(v_wpos - ubo.eye.xyz);
+        // trinity axes back to quake's: x forward, y left, z up
+        vec3 q  = vec3(d.x, -d.z, d.y);
+        vec3 av = abs(q);
+        int axis = (av.x > av.y && av.x > av.z) ? ((q.x < 0.0) ? 1 : 0)
+                 : (av.y > av.z && av.y > av.x) ? ((q.y < 0.0) ? 3 : 2)
+                 : ((q.z < 0.0) ? 5 : 4);
+        // vec_to_st rows: which component gives s, t, and the divisor
+        ivec3 m = (axis == 0) ? ivec3(-2, 3, 1)
+                : (axis == 1) ? ivec3(2, 3, -1)
+                : (axis == 2) ? ivec3(1, 3, 2)
+                : (axis == 3) ? ivec3(-1, 3, -2)
+                : (axis == 4) ? ivec3(-2, -1, 3)
+                : ivec3(-2, 1, -3);
+        float dv = (m.z > 0) ? q[m.z - 1] : -q[-m.z - 1];
+        float s  = ((m.x > 0) ? q[m.x - 1] : -q[-m.x - 1]) / dv;
+        float t  = ((m.y > 0) ? q[m.y - 1] : -q[-m.y - 1]) / dv;
+        s = clamp((s + 1.0) * 0.5, 1.0 / 512.0, 511.0 / 512.0);
+        t = clamp((t + 1.0) * 0.5, 1.0 / 512.0, 511.0 / 512.0);
+        t = 1.0 - t;
+        vec2 uv = vec2((float(axis) + s) / 6.0, t);
+        fragColor = vec4(texture(sky, uv).rgb, 1.0);
+    }
+
+element MapView
+    expect  game     : string
+    expect  map_name : string
+    public  spawn    : string
+    mutable pak      : Pak
+    mutable bsp      : BspMap
+    mutable sh       : BspLit
+    mutable world    : GltfModel
+    mutable model    : Model
+    mutable target   : Render
+    mutable failed   : bool
+    mutable sky_sh   : BspSky
+    mutable sky_gltf : GltfModel
+    mutable sky_model : Model
+    mutable idx_live : @u32
+    mutable cluster  : i32 [ -2 ]
+    mutable vis_n    : i32
+    public  vis_tris : i32
+    # eye, trinity axes (y up); yaw and pitch in radians
+    mutable ex       : f32
+    mutable ey       : f32
+    mutable ez       : f32
+    # the player's origin, quake axes; the eye is 22 above it
+    mutable ox       : f32
+    mutable oy       : f32
+    mutable oz       : f32
+    mutable vx       : f32
+    mutable vy       : f32
+    mutable vz       : f32
+    mutable mins     : vec f32
+    mutable maxs     : vec f32
+    mutable on_ground : bool
+    mutable ground_nz : f32
+    mutable jump_held : bool
+    mutable land_time : f32
+    mutable collide_mask : i32
+    mutable yaw      : f32
+    mutable pitch    : f32
+    mutable k_fwd    : bool
+    mutable k_back   : bool
+    mutable k_left   : bool
+    mutable k_right  : bool
+    mutable k_up     : bool
+    mutable dragging : bool
+    mutable lastx    : f32
+    mutable lasty    : f32
+    mutable last_us  : i64
+
+    public func on_press [ ev: Event ]
+        dragging = true
+        lastx = ev.mouse.pos.x
+        lasty = ev.mouse.pos.y
+
+    public func on_release [ ev: Event ]
+        dragging = false
+
+    public func on_move [ ev: Event ]
+        if [ !dragging ] return
+        dx : f32 [ ev.mouse.pos.x - lastx ]
+        dy : f32 [ ev.mouse.pos.y - lasty ]
+        lastx = ev.mouse.pos.x
+        lasty = ev.mouse.pos.y
+        yaw   = yaw - dx * 0.004
+        pitch = pitch - dy * 0.004
+        if [ pitch >  1.5 ] pitch =  1.5
+        if [ pitch < -1.5 ] pitch = -1.5
+
+    public func on_key [ ev: Event ]
+        s : bool [ ev.key.state ]
+        if [ ev.key.unicode == 87  ] k_fwd   = s
+        if [ ev.key.unicode == 83  ] k_back  = s
+        if [ ev.key.unicode == 65  ] k_left  = s
+        if [ ev.key.unicode == 68  ] k_right = s
+        if [ ev.key.unicode == 32  ] k_up    = s
+        if [ !s ] log 'quake2: at {ox} {oy} {oz} ground {on_ground}'
+
+    func load []
+        pak = Pak [ ]
+        pak.open[ path [ game ] ]
+        bsp = BspMap [ ]
+        if [ !bsp.load[ pak, map_name ] ]
+            failed = true
+            return
+        world = bsp.build[]
+        world.compute_worlds[]
+        sky_gltf = bsp.build_sky[]
+        if [ sky_gltf ] sky_gltf.compute_worlds[]
+        live : new u32 [ bsp.idx_n ]
+        idx_live = live
+        # the player box and the start; the eye is viewheight 22 up
+        mins = vec f32 [] [ -16.0, -16.0, -24.0 ]
+        maxs = vec f32 [] [ 16.0, 16.0, 32.0 ]
+        # solid, playerclip, window, monster
+        collide_mask = 1 | 65536 | 2 | 33554432
+        ox = bsp.start_x
+        oy = bsp.start_y
+        oz = bsp.start_z
+        yaw = radians[ bsp.start_yaw ]
+        # a camera given as quake 'x y z yaw pitch' overrides the start
+        if [ spawn ]
+            sx : f32 [ 0.0 ]
+            sy : f32 [ 0.0 ]
+            sz : f32 [ 0.0 ]
+            syaw : f32 [ 0.0 ]
+            spit : f32 [ 0.0 ]
+            got : i32 [ sscanf[ spawn.chars, "%f %f %f %f %f",
+                                @sx, @sy, @sz, @syaw, @spit ] ]
+            if [ got >= 3 ]
+                ox = sx
+                oy = sy
+                oz = sz - 22.0
+                yaw = radians[ syaw ]
+                pitch = radians[ spit ]
+
+    func step []
+        now : i64 [ epoch_micros[] ]
+        if [ last_us == 0 ] last_us = now
+        dt : f32 [ f32[ now - last_us ] / 1000000.0 ]
+        last_us = now
+        if [ dt > 0.1 ] dt = 0.1
+        if [ dt > 0.0 ] pmove[ dt ]
+        ex = ox
+        ey = oz + 22.0
+        ez = 0.0 - oy
+
+    # Pmove, the walking path: ground, jump, friction, air move
+    func pmove [ dt: f32 ]
+        if [ land_time > 0.0 ]
+            land_time = land_time - dt
+            if [ land_time < 0.0 ] land_time = 0.0
+        categorize[]
+        check_jump[]
+        friction[ dt ]
+        air_move[ dt ]
+        categorize[]
+
+    # PM_CatagorizePosition: standing on something a quarter unit down
+    func categorize []
+        if [ vz > 180.0 ]
+            on_ground = false
+            return
+        t : bsp.box_trace[ ox, oy, oz, ox, oy, oz - 0.25, mins, maxs,
+                           collide_mask ]
+        hit : bool [ t.fraction < 1.0 || t.startsolid ]
+        ground_nz = t.nz
+        if [ !hit || (t.nz < 0.7 && !t.startsolid) ]
+            on_ground = false
+            return
+        if [ !on_ground ]
+            on_ground = true
+            # a hard landing holds the next jump off a moment
+            if [ vz < -200.0 ] land_time = (vz < -400.0) ? 0.2 : 0.144
+
+    # PM_CheckJump: 270 up off the ground, once per press
+    func check_jump []
+        if [ land_time > 0.0 ] return
+        if [ !k_up ]
+            jump_held = false
+            return
+        if [ jump_held ] return
+        if [ !on_ground ] return
+        jump_held = true
+        on_ground = false
+        vz = vz + 270.0
+        if [ vz < 270.0 ] vz = 270.0
+
+    # PM_Friction: ground friction 6, stop speed 100
+    func friction [ dt: f32 ]
+        speed : f32 [ sqrt[ vx * vx + vy * vy + vz * vz ] ]
+        if [ speed < 1.0 ]
+            vx = 0.0
+            vy = 0.0
+            return
+        drop : f32 [ 0.0 ]
+        if [ on_ground ]
+            control : f32 [ (speed < 100.0) ? 100.0 : speed ]
+            drop = drop + control * 6.0 * dt
+        newspeed : f32 [ speed - drop ]
+        if [ newspeed < 0.0 ] newspeed = 0.0
+        newspeed = newspeed / speed
+        vx = vx * newspeed
+        vy = vy * newspeed
+        vz = vz * newspeed
+
+    # PM_Accelerate
+    func accelerate [ wx: f32, wy: f32, wz: f32, wishspeed: f32,
+                      accel: f32, dt: f32 ]
+        current : f32 [ vx * wx + vy * wy + vz * wz ]
+        add : f32 [ wishspeed - current ]
+        if [ add <= 0.0 ] return
+        acc : f32 [ accel * dt * wishspeed ]
+        if [ acc > add ] acc = add
+        vx = vx + acc * wx
+        vy = vy + acc * wy
+        vz = vz + acc * wz
+
+    # PM_AirMove: the wish from the keys, run speed 400, max 300
+    func air_move [ dt: f32 ]
+        cp : f32 [ cos[ pitch ] ]
+        fx : f32 [ cp * cos[ yaw ] ]
+        fy : f32 [ cp * sin[ yaw ] ]
+        rx : f32 [ sin[ yaw ] ]
+        ry : f32 [ 0.0 - cos[ yaw ] ]
+        fmove : f32 [ 0.0 ]
+        smove : f32 [ 0.0 ]
+        if [ k_fwd ]   fmove = fmove + 400.0
+        if [ k_back ]  fmove = fmove - 400.0
+        if [ k_right ] smove = smove + 400.0
+        if [ k_left ]  smove = smove - 400.0
+        wx : f32 [ fx * fmove + rx * smove ]
+        wy : f32 [ fy * fmove + ry * smove ]
+        wishspeed : f32 [ sqrt[ wx * wx + wy * wy ] ]
+        if [ wishspeed > 0.0 ]
+            wx = wx / wishspeed
+            wy = wy / wishspeed
+        if [ wishspeed > 300.0 ] wishspeed = 300.0
+        if [ on_ground ]
+            vz = 0.0
+            accelerate[ wx, wy, 0.0, wishspeed, 10.0, dt ]
+            vz = 0.0
+            if [ vx == 0.0 && vy == 0.0 ] return
+            step_slide_move[ dt ]
+        el
+            accelerate[ wx, wy, 0.0, wishspeed, 1.0, dt ]
+            vz = vz - 800.0 * dt
+            step_slide_move[ dt ]
+
+    # PM_StepSlideMove: the plain slide, then again from a step up
+    func step_slide_move [ dt: f32 ]
+        sx : f32 [ ox ]
+        sy : f32 [ oy ]
+        sz : f32 [ oz ]
+        svx : f32 [ vx ]
+        svy : f32 [ vy ]
+        svz : f32 [ vz ]
+        slide_move[ dt ]
+        dx : f32 [ ox ]
+        dy : f32 [ oy ]
+        dz : f32 [ oz ]
+        dvx : f32 [ vx ]
+        dvy : f32 [ vy ]
+        dvz : f32 [ vz ]
+        upz : f32 [ sz + 18.0 ]
+        t : bsp.box_trace[ sx, sy, upz, sx, sy, upz, mins, maxs,
+                           collide_mask ]
+        if [ t.allsolid ] return
+        ox = sx
+        oy = sy
+        oz = upz
+        vx = svx
+        vy = svy
+        vz = svz
+        slide_move[ dt ]
+        t = bsp.box_trace[ ox, oy, oz, ox, oy, oz - 18.0, mins, maxs,
+                           collide_mask ]
+        if [ !t.allsolid ]
+            ox = t.ex
+            oy = t.ey
+            oz = t.ez
+        down_dist : f32 [ (dx - sx) * (dx - sx) + (dy - sy) * (dy - sy) ]
+        up_dist : f32 [ (ox - sx) * (ox - sx) + (oy - sy) * (oy - sy) ]
+        if [ down_dist > up_dist || t.nz < 0.7 ]
+            ox = dx
+            oy = dy
+            oz = dz
+            vx = dvx
+            vy = dvy
+            vz = dvz
+            return
+        vz = dvz
+
+    # PM_ClipVelocity: take the part of v into the plane out of it
+    func clip_velocity [ nx: f32, ny: f32, nz: f32 ]
+        backoff : f32 [ (vx * nx + vy * ny + vz * nz) * 1.01 ]
+        vx = vx - nx * backoff
+        vy = vy - ny * backoff
+        vz = vz - nz * backoff
+        if [ vx > -0.1 && vx < 0.1 ] vx = 0.0
+        if [ vy > -0.1 && vy < 0.1 ] vy = 0.0
+        if [ vz > -0.1 && vz < 0.1 ] vz = 0.0
+
+    # PM_StepSlideMove_: trace the box, slide along what it hits
+    func slide_move [ dt: f32 ]
+        px : f32 [ vx ]
+        py : f32 [ vy ]
+        pz : f32 [ vz ]
+        pn : vec f32 [ 15 ]
+        nplanes : i32 [ 0 ]
+        left : f32 [ dt ]
+        for [ bump: i32 0, bump < 4, bump += 1 ]
+            tx : f32 [ ox + left * vx ]
+            ty : f32 [ oy + left * vy ]
+            tz : f32 [ oz + left * vz ]
+            t : bsp.box_trace[ ox, oy, oz, tx, ty, tz, mins, maxs,
+                               collide_mask ]
+            if [ t.allsolid ]
+                vz = 0.0
+                return
+            if [ t.fraction > 0.0 ]
+                ox = t.ex
+                oy = t.ey
+                oz = t.ez
+                nplanes = 0
+            if [ t.fraction == 1.0 ] break
+            left = left - left * t.fraction
+            if [ nplanes >= 5 ]
+                vx = 0.0
+                vy = 0.0
+                vz = 0.0
+                break
+            pn[ nplanes * 3 ]     = t.nx
+            pn[ nplanes * 3 + 1 ] = t.ny
+            pn[ nplanes * 3 + 2 ] = t.nz
+            nplanes += 1
+            # a velocity along every plane hit so far
+            i : i32 [ 0 ]
+            while [ i < nplanes ]
+                clip_velocity[ pn[ i * 3 ], pn[ i * 3 + 1 ],
+                               pn[ i * 3 + 2 ] ]
+                j : i32 [ 0 ]
+                while [ j < nplanes ]
+                    if [ j != i ]
+                        d : f32 [ vx * pn[ j * 3 ] + vy * pn[ j * 3 + 1 ]
+                                  + vz * pn[ j * 3 + 2 ] ]
+                        if [ d < 0.0 ] break
+                    j += 1
+                if [ j == nplanes ] break
+                i += 1
+            if [ i != nplanes ]
+                # along the crease of two planes, else stop
+                if [ nplanes != 2 ]
+                    vx = 0.0
+                    vy = 0.0
+                    vz = 0.0
+                    break
+                cx : f32 [ pn[ 1 ] * pn[ 5 ] - pn[ 2 ] * pn[ 4 ] ]
+                cy : f32 [ pn[ 2 ] * pn[ 3 ] - pn[ 0 ] * pn[ 5 ] ]
+                cz : f32 [ pn[ 0 ] * pn[ 4 ] - pn[ 1 ] * pn[ 3 ] ]
+                d : f32 [ cx * vx + cy * vy + cz * vz ]
+                vx = cx * d
+                vy = cy * d
+                vz = cz * d
+            # against the first push: stop, no corner jitter
+            if [ vx * px + vy * py + vz * pz <= 0.0 ]
+                vx = 0.0
+                vy = 0.0
+                vz = 0.0
+                break
+
+    public func draw [ w: Window ]
+        if [ w.draw_stage != CanvasType.screen ] return
+        ux.will_animate = true
+        cv : Canvas [ w.screen ]
+        if [ failed ] return
+        if [ !target ]
+            load[]
+            if [ failed ] return
+            sh = BspLit [ vk: cv.vk, name: 'bsp' ]
+            tx_c : Texture [ vk: cv.vk, w: w, sampler: bsp.tex_atlas,
+                             mip_levels: 1, linear: true ]
+            tx_l : Texture [ vk: cv.vk, w: w, sampler: bsp.lm_atlas,
+                             mip_levels: 1, linear: true ]
+            samplers : map Au [string] [ 'color': tx_c, 'lm': tx_l ]
+            model = Model [ vk: cv.vk, w: w, s: sh, samplers: samplers,
+                            cull_none: true ]
+            model.id = world
+            ms : array Model [ model ]
+            strip : bsp.load_sky[ pak ]
+            if [ sky_gltf && strip ]
+                sky_sh = BspSky [ vk: cv.vk, name: 'bspsky' ]
+                tx_s : Texture [ vk: cv.vk, w: w, sampler: strip,
+                                 mip_levels: 1, linear: true ]
+                sky_samplers : map Au [string] [ 'sky': tx_s ]
+                sky_model = Model [ vk: cv.vk, w: w, s: sky_sh,
+                                    samplers: sky_samplers,
+                                    cull_none: true ]
+                sky_model.id = sky_gltf
+                ms.push[ sky_model ]
+            gw : i32 [ i32[ bounds.w * 2.0 ] ]
+            gh : i32 [ i32[ bounds.h * 2.0 ] ]
+            target = Render [ vk: cv.vk, w: w, width: gw, height: gh,
+                use_depth: true,
+                clear_color: vec4f [ 0.05, 0.07, 0.10, 1.0 ],
+                models: ms ]
+            target.owner = a
+            w.element_targets[ 'q2_{id}' ] = target
+            target.wscale = 0.0
+            log 'quake2: {bsp.name} drawn, {bsp.tri_count} triangles'
+        step[]
+        cp : f32 [ cos[ pitch ] ]
+        eye : vec3f [ ex, ey, ez ]
+        tgt : vec3f [ ex + cp * cos[ yaw ], ey + sin[ pitch ],
+                      ez - cp * sin[ yaw ] ]
+        up  : vec3f [ 0.0, 1.0, 0.0 ]
+        asp : f32 [ bounds.w / bounds.h ]
+        fov : f32 [ 2.0 * atan[ tan[ 0.7854 ] / asp ] ]
+        prj : mat4f [ mat4f.perspective[ fov, asp, 4.0, 8192.0 ] ]
+        prj.m[5] = 0.0 - prj.m[5]
+        sh.model = mat4f.identity[]
+        sh.view  = mat4f.look_at[ eye, tgt, up ]
+        sh.proj  = prj
+        if [ sky_sh ]
+            sky_sh.model = sh.model
+            sky_sh.view  = sh.view
+            sky_sh.proj  = sh.proj
+            sky_sh.eye   = vec4f [ ex, ey, ez, 1.0 ]
+        # the pvs: only faces seen from the eye's cluster are drawn
+        c : i32 [ bsp.cluster_at[ ex, 0.0 - ez, ey ] ]
+        wp : model.pipelines[ 0 ]
+        if [ c != cluster || wp.vbo.index_count != vis_n ]
+            cluster  = c
+            vis_n    = bsp.visible_indices[ c, idx_live ]
+            vis_tris = vis_n / 3
+            wp.vbo.upload_index[ idx_live, vis_n ]
+        target.update[]
+        cv.draw_image[ target.color,
+                       rect [ x: 0.0, y: 0.0, w: bounds.w, h: bounds.h ] ]
+
+element quake2 : trinity
+    public width      : i32    [ 1280 ]
+    public height     : i32    [ 800 ]
+    public title      : string [ 'Quake 2' ]
+    public background : string [ 'Background' ]
+    public game       : string [ '/home/kalen/.steam/debian-installation/steamapps/common/Quake 2/baseq2' ]
+    public map        : string [ 'base1' ]
+    # camera override, quake axes: 'x y z yaw pitch'
+    public spawn      : string
+    public view       : MapView
+
+    public func on_key [ ev: Event ]
+        if [ view ] view.on_key[ ev ]
+
+    public func on_press [ ev: Event ]
+        if [ view ] view.on_press[ ev ]
+
+    public func on_release [ ev: Event ]
+        if [ view ] view.on_release[ ev ]
+
+    public func on_move [ ev: Event ]
+        if [ view ] view.on_move[ ev ]
+
+    public func render [] -> Elements
+        e : Elements [ ]
+        e['view'] = MapView [ game: game, map_name: map, spawn: spawn,
+                              animated: true ]
+        return e
