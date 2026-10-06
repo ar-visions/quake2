@@ -41,34 +41,276 @@ SPAWNFLAG_NOT_MEDIUM     : i32 [ 512 ]
 SPAWNFLAG_NOT_HARD       : i32 [ 1024 ]
 SPAWNFLAG_NOT_DEATHMATCH : i32 [ 2048 ]
 SPAWNFLAG_NOT_COOP       : i32 [ 4096 ]
-
-# the functions an edict can point at (think, touch, use ...)
-enum Fn
-    none                    : 0
-    move_begin              : 1
-    move_final              : 2
-    move_done               : 3
-    angle_move_begin        : 4
-    angle_move_final        : 5
-    angle_move_done         : 6
-    think_accel_move        : 7
-    door_go_down            : 8
-    door_hit_top            : 9
-    door_hit_bottom         : 10
-    door_use                : 11
-    touch_door_trigger      : 12
-    think_calc_move_speed   : 13
-    think_spawn_door_trigger : 14
-    door_blocked            : 15
-    door_touch              : 16
-    think_delay             : 17
-    multi_wait              : 18
-    free_edict              : 19
-    use_multi               : 20
-    touch_multi             : 21
-    trigger_enable          : 22
-    use_areaportal          : 23
-    trigger_relay_use       : 24
+MOVETYPE_BOUNCE     : i32 [ 8 ]
+MOVETYPE_FLYMISSILE : i32 [ 9 ]
+CONTENTS_LAVA   : i32 [ 8 ]
+CONTENTS_SLIME  : i32 [ 16 ]
+CONTENTS_WATER  : i32 [ 32 ]
+CONTENTS_PLAYERCLIP  : i32 [ 65536 ]
+CONTENTS_MONSTERCLIP : i32 [ 131072 ]
+CONTENTS_CURRENT_0   : i32 [ 262144 ]
+CONTENTS_CURRENT_90  : i32 [ 524288 ]
+CONTENTS_CURRENT_180 : i32 [ 1048576 ]
+CONTENTS_CURRENT_270 : i32 [ 2097152 ]
+CONTENTS_CURRENT_UP  : i32 [ 4194304 ]
+CONTENTS_CURRENT_DOWN : i32 [ 8388608 ]
+CONTENTS_LADDER : i32 [ 536870912 ]
+MASK_WATER     : i32 [ 32 | 8 | 16 ]
+MASK_OPAQUE    : i32 [ 1 | 16 | 8 ]
+MASK_SHOT      : i32 [ 1 | 33554432 | 2 | 67108864 ]
+MASK_DEADSOLID : i32 [ 1 | 65536 | 2 ]
+MASK_CURRENT   : i32 [ 262144 | 524288 | 1048576 | 2097152
+                       | 4194304 | 8388608 ]
+SURF_SKY     : i32 [ 4 ]
+SURF_WARP    : i32 [ 8 ]
+SURF_TRANS33 : i32 [ 16 ]
+SURF_TRANS66 : i32 [ 32 ]
+SURF_FLOWING : i32 [ 64 ]
+DAMAGE_AIM : i32 [ 2 ]
+DEAD_NO    : i32 [ 0 ]
+DEAD_DYING : i32 [ 1 ]
+DEAD_DEAD  : i32 [ 2 ]
+DEAD_RESPAWNABLE : i32 [ 3 ]
+FL_INWATER       : i32 [ 8 ]
+FL_GODMODE       : i32 [ 16 ]
+FL_NOTARGET      : i32 [ 32 ]
+FL_IMMUNE_SLIME  : i32 [ 64 ]
+FL_IMMUNE_LAVA   : i32 [ 128 ]
+FL_PARTIALGROUND : i32 [ 256 ]
+FL_WATERJUMP     : i32 [ 512 ]
+FL_NO_KNOCKBACK  : i32 [ 2048 ]
+FL_POWER_ARMOR   : i32 [ 4096 ]
+FL_RESPAWN       : i32 [ 1 << 31 ]
+DAMAGE_RADIUS        : i32 [ 1 ]
+DAMAGE_NO_ARMOR      : i32 [ 2 ]
+DAMAGE_ENERGY        : i32 [ 4 ]
+DAMAGE_NO_KNOCKBACK  : i32 [ 8 ]
+DAMAGE_BULLET        : i32 [ 16 ]
+DAMAGE_NO_PROTECTION : i32 [ 32 ]
+# means of death
+MOD_UNKNOWN : i32 [ 0 ]
+MOD_BLASTER : i32 [ 1 ]
+MOD_SHOTGUN : i32 [ 2 ]
+MOD_SSHOTGUN : i32 [ 3 ]
+MOD_MACHINEGUN : i32 [ 4 ]
+MOD_CHAINGUN : i32 [ 5 ]
+MOD_GRENADE : i32 [ 6 ]
+MOD_G_SPLASH : i32 [ 7 ]
+MOD_ROCKET : i32 [ 8 ]
+MOD_R_SPLASH : i32 [ 9 ]
+MOD_HYPERBLASTER : i32 [ 10 ]
+MOD_RAILGUN : i32 [ 11 ]
+MOD_BFG_LASER : i32 [ 12 ]
+MOD_BFG_BLAST : i32 [ 13 ]
+MOD_BFG_EFFECT : i32 [ 14 ]
+MOD_HANDGRENADE : i32 [ 15 ]
+MOD_HG_SPLASH : i32 [ 16 ]
+MOD_WATER : i32 [ 17 ]
+MOD_SLIME : i32 [ 18 ]
+MOD_LAVA : i32 [ 19 ]
+MOD_CRUSH : i32 [ 20 ]
+MOD_TELEFRAG : i32 [ 21 ]
+MOD_FALLING : i32 [ 22 ]
+MOD_SUICIDE : i32 [ 23 ]
+MOD_HELD_GRENADE : i32 [ 24 ]
+MOD_EXPLOSIVE : i32 [ 25 ]
+MOD_BARREL : i32 [ 26 ]
+MOD_BOMB : i32 [ 27 ]
+MOD_EXIT : i32 [ 28 ]
+MOD_SPLASH : i32 [ 29 ]
+MOD_TARGET_LASER : i32 [ 30 ]
+MOD_TRIGGER_HURT : i32 [ 31 ]
+MOD_HIT : i32 [ 32 ]
+MOD_TARGET_BLASTER : i32 [ 33 ]
+MOD_FRIENDLY_FIRE : i32 [ 134217728 ]
+# monster ai flags and states
+AI_STAND_GROUND : i32 [ 1 ]
+AI_TEMP_STAND_GROUND : i32 [ 2 ]
+AI_SOUND_TARGET : i32 [ 4 ]
+AI_LOST_SIGHT : i32 [ 8 ]
+AI_PURSUIT_LAST_SEEN : i32 [ 16 ]
+AI_PURSUE_NEXT : i32 [ 32 ]
+AI_PURSUE_TEMP : i32 [ 64 ]
+AI_HOLD_FRAME : i32 [ 128 ]
+AI_GOOD_GUY : i32 [ 256 ]
+AI_BRUTAL : i32 [ 512 ]
+AI_NOSTEP : i32 [ 1024 ]
+AI_DUCKED : i32 [ 2048 ]
+AI_COMBAT_POINT : i32 [ 4096 ]
+AI_MEDIC : i32 [ 8192 ]
+AI_RESURRECTING : i32 [ 16384 ]
+AS_STRAIGHT : i32 [ 1 ]
+AS_SLIDING  : i32 [ 2 ]
+AS_MELEE    : i32 [ 3 ]
+AS_MISSILE  : i32 [ 4 ]
+RANGE_MELEE : i32 [ 0 ]
+RANGE_NEAR  : i32 [ 1 ]
+RANGE_MID   : i32 [ 2 ]
+RANGE_FAR   : i32 [ 3 ]
+MELEE_DISTANCE : f32 [ 80.0 ]
+STEPSIZE : f32 [ 18.0 ]
+# effects, render flags, events
+EF_ROTATE : i32 [ 1 ]
+EF_GIB    : i32 [ 2 ]
+EF_BLASTER : i32 [ 8 ]
+EF_ROCKET  : i32 [ 16 ]
+EF_GRENADE : i32 [ 32 ]
+EF_HYPERBLASTER : i32 [ 64 ]
+EF_BFG : i32 [ 128 ]
+EF_COLOR_SHELL : i32 [ 256 ]
+EF_POWERSCREEN : i32 [ 512 ]
+EF_FLIES : i32 [ 16384 ]
+EF_QUAD  : i32 [ 32768 ]
+EF_PENT  : i32 [ 65536 ]
+EF_TELEPORTER : i32 [ 131072 ]
+RF_FRAMELERP : i32 [ 64 ]
+RF_GLOW : i32 [ 512 ]
+RF_SHELL_RED : i32 [ 1024 ]
+RF_SHELL_GREEN : i32 [ 2048 ]
+RF_SHELL_BLUE : i32 [ 4096 ]
+EV_ITEM_RESPAWN : i32 [ 1 ]
+EV_FOOTSTEP : i32 [ 2 ]
+EV_FALLSHORT : i32 [ 3 ]
+EV_FALL : i32 [ 4 ]
+EV_FALLFAR : i32 [ 5 ]
+EV_PLAYER_TELEPORT : i32 [ 6 ]
+# temp entity kinds and splash colors
+TE_GUNSHOT : i32 [ 0 ]
+TE_BLOOD : i32 [ 1 ]
+TE_BLASTER : i32 [ 2 ]
+TE_RAILTRAIL : i32 [ 3 ]
+TE_SHOTGUN : i32 [ 4 ]
+TE_EXPLOSION1 : i32 [ 5 ]
+TE_EXPLOSION2 : i32 [ 6 ]
+TE_ROCKET_EXPLOSION : i32 [ 7 ]
+TE_GRENADE_EXPLOSION : i32 [ 8 ]
+TE_SPARKS : i32 [ 9 ]
+TE_SPLASH : i32 [ 10 ]
+TE_BUBBLETRAIL : i32 [ 11 ]
+TE_SCREEN_SPARKS : i32 [ 12 ]
+TE_SHIELD_SPARKS : i32 [ 13 ]
+TE_BULLET_SPARKS : i32 [ 14 ]
+TE_LASER_SPARKS : i32 [ 15 ]
+TE_PARASITE_ATTACK : i32 [ 16 ]
+TE_ROCKET_EXPLOSION_WATER : i32 [ 17 ]
+TE_GRENADE_EXPLOSION_WATER : i32 [ 18 ]
+TE_MEDIC_CABLE_ATTACK : i32 [ 19 ]
+TE_BFG_EXPLOSION : i32 [ 20 ]
+TE_BFG_BIGEXPLOSION : i32 [ 21 ]
+TE_BOSSTPORT : i32 [ 22 ]
+TE_BFG_LASER : i32 [ 23 ]
+SPLASH_UNKNOWN : i32 [ 0 ]
+SPLASH_SPARKS : i32 [ 1 ]
+SPLASH_BLUE_WATER : i32 [ 2 ]
+SPLASH_BROWN_WATER : i32 [ 3 ]
+SPLASH_SLIME : i32 [ 4 ]
+SPLASH_LAVA : i32 [ 5 ]
+SPLASH_BLOOD : i32 [ 6 ]
+# sound channels and attenuations
+CHAN_AUTO : i32 [ 0 ]
+CHAN_WEAPON : i32 [ 1 ]
+CHAN_VOICE : i32 [ 2 ]
+CHAN_ITEM : i32 [ 3 ]
+CHAN_BODY : i32 [ 4 ]
+CHAN_NO_PHS_ADD : i32 [ 8 ]
+ATTN_NONE : f32 [ 0.0 ]
+ATTN_NORM : f32 [ 1.0 ]
+ATTN_IDLE : f32 [ 2.0 ]
+ATTN_STATIC : f32 [ 3.0 ]
+# items
+IT_WEAPON : i32 [ 1 ]
+IT_AMMO : i32 [ 2 ]
+IT_ARMOR : i32 [ 4 ]
+IT_STAY_COOP : i32 [ 8 ]
+IT_KEY : i32 [ 16 ]
+IT_POWERUP : i32 [ 32 ]
+MAX_ITEMS : i32 [ 256 ]
+ARMOR_NONE : i32 [ 0 ]
+ARMOR_JACKET : i32 [ 1 ]
+ARMOR_COMBAT : i32 [ 2 ]
+ARMOR_BODY : i32 [ 3 ]
+ARMOR_SHARD : i32 [ 4 ]
+POWER_ARMOR_NONE : i32 [ 0 ]
+POWER_ARMOR_SCREEN : i32 [ 1 ]
+POWER_ARMOR_SHIELD : i32 [ 2 ]
+AMMO_BULLETS : i32 [ 0 ]
+AMMO_SHELLS : i32 [ 1 ]
+AMMO_ROCKETS : i32 [ 2 ]
+AMMO_GRENADES : i32 [ 3 ]
+AMMO_CELLS : i32 [ 4 ]
+AMMO_SLUGS : i32 [ 5 ]
+WEAP_BLASTER : i32 [ 1 ]
+WEAP_SHOTGUN : i32 [ 2 ]
+WEAP_SUPERSHOTGUN : i32 [ 3 ]
+WEAP_MACHINEGUN : i32 [ 4 ]
+WEAP_CHAINGUN : i32 [ 5 ]
+WEAP_GRENADES : i32 [ 6 ]
+WEAP_GRENADELAUNCHER : i32 [ 7 ]
+WEAP_ROCKETLAUNCHER : i32 [ 8 ]
+WEAP_HYPERBLASTER : i32 [ 9 ]
+WEAP_RAILGUN : i32 [ 10 ]
+WEAP_BFG : i32 [ 11 ]
+ITEM_TRIGGER_SPAWN : i32 [ 1 ]
+ITEM_NO_TOUCH : i32 [ 2 ]
+DROPPED_ITEM : i32 [ 65536 ]
+DROPPED_PLAYER_ITEM : i32 [ 131072 ]
+ITEM_TARGETS_USED : i32 [ 262144 ]
+HEALTH_IGNORE_MAX : i32 [ 1 ]
+HEALTH_TIMED : i32 [ 2 ]
+GIB_ORGANIC : i32 [ 0 ]
+GIB_METALLIC : i32 [ 1 ]
+# the client
+WEAPON_READY : i32 [ 0 ]
+WEAPON_ACTIVATING : i32 [ 1 ]
+WEAPON_DROPPING : i32 [ 2 ]
+WEAPON_FIRING : i32 [ 3 ]
+BUTTON_ATTACK : i32 [ 1 ]
+BUTTON_USE : i32 [ 2 ]
+BUTTON_ANY : i32 [ 128 ]
+PMF_DUCKED : i32 [ 1 ]
+PMF_JUMP_HELD : i32 [ 2 ]
+PMF_ON_GROUND : i32 [ 4 ]
+PMF_TIME_WATERJUMP : i32 [ 8 ]
+PMF_TIME_LAND : i32 [ 16 ]
+PMF_TIME_TELEPORT : i32 [ 32 ]
+PMF_NO_PREDICTION : i32 [ 64 ]
+PM_NORMAL : i32 [ 0 ]
+PM_SPECTATOR : i32 [ 1 ]
+PM_DEAD : i32 [ 2 ]
+PM_GIB : i32 [ 3 ]
+PM_FREEZE : i32 [ 4 ]
+ANIM_BASIC : i32 [ 0 ]
+ANIM_WAVE : i32 [ 1 ]
+ANIM_JUMP : i32 [ 2 ]
+ANIM_PAIN : i32 [ 3 ]
+ANIM_ATTACK : i32 [ 4 ]
+ANIM_DEATH : i32 [ 5 ]
+ANIM_REVERSE : i32 [ 6 ]
+STAT_HEALTH_ICON : i32 [ 0 ]
+STAT_HEALTH : i32 [ 1 ]
+STAT_AMMO_ICON : i32 [ 2 ]
+STAT_AMMO : i32 [ 3 ]
+STAT_ARMOR_ICON : i32 [ 4 ]
+STAT_ARMOR : i32 [ 5 ]
+STAT_SELECTED_ICON : i32 [ 6 ]
+STAT_PICKUP_ICON : i32 [ 7 ]
+STAT_PICKUP_STRING : i32 [ 8 ]
+STAT_TIMER_ICON : i32 [ 9 ]
+STAT_TIMER : i32 [ 10 ]
+STAT_HELPICON : i32 [ 11 ]
+STAT_SELECTED_ITEM : i32 [ 12 ]
+STAT_LAYOUTS : i32 [ 13 ]
+STAT_FRAGS : i32 [ 14 ]
+STAT_FLASHES : i32 [ 15 ]
+PNOISE_SELF : i32 [ 0 ]
+PNOISE_WEAPON : i32 [ 1 ]
+PNOISE_IMPACT : i32 [ 2 ]
+RIGHT_HANDED : i32 [ 0 ]
+LEFT_HANDED : i32 [ 1 ]
+CENTER_HANDED : i32 [ 2 ]
+DAMAGE_TIME : f32 [ 0.5 ]
+FALL_TIME : f32 [ 0.3 ]
+BODY_QUEUE_SIZE : i32 [ 8 ]
 
 # the string fields G_Find can match on
 enum EField
@@ -117,6 +359,53 @@ func v_cross [ a: vec3f, b: vec3f ] -> vec3f
     return vec3f [ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
                    a.x * b.y - a.y * b.x ]
 
+# random, crandom: 0..1 and -1..1
+func frand [] -> f32
+    return f32[ rand[] & 32767 ] * (1.0 / 32767.0)
+
+func crandom [] -> f32
+    return 2.0 * (frand[] - 0.5)
+
+# vectoyaw: whole degrees, as the original truncates
+func vectoyaw [ v: vec3f ] -> f32
+    if [ v.y == 0.0 && v.x == 0.0 ] return 0.0
+    whole : i32 [ atan2[ v.y, v.x ] * 180.0 / 3.14159265358979 ]
+    yaw : f32 [ whole ]
+    if [ yaw < 0.0 ] yaw = yaw + 360.0
+    return yaw
+
+# vectoangles: pitch and yaw of a direction, whole degrees
+func vectoangles [ v: vec3f ] -> vec3f
+    yaw : f32 [ 0.0 ]
+    pitch : f32 [ 0.0 ]
+    if [ v.y == 0.0 && v.x == 0.0 ]
+        pitch = (v.z > 0.0) ? 90.0 : 270.0
+    el
+        if [ v.x != 0.0 ]
+            whole : i32 [ atan2[ v.y, v.x ] * 180.0 / 3.14159265358979 ]
+            yaw = whole
+        el [ v.y > 0.0 ]
+            yaw = 90.0
+        el
+            yaw = -90.0
+        if [ yaw < 0.0 ] yaw = yaw + 360.0
+        forward : f32 [ sqrt[ v.x * v.x + v.y * v.y ] ]
+        wp : i32 [ atan2[ v.z, forward ] * 180.0 / 3.14159265358979 ]
+        pitch = wp
+        if [ pitch < 0.0 ] pitch = pitch + 360.0
+    return vec3f [ 0.0 - pitch, yaw, 0.0 ]
+
+# G_ProjectSource: a point offset along forward, right and up
+func project_source [ point: vec3f, distance: vec3f, forward: vec3f,
+                      right: vec3f ] -> vec3f
+    return vec3f [ point.x + forward.x * distance.x + right.x * distance.y,
+                   point.y + forward.y * distance.x + right.y * distance.y,
+                   point.z + forward.z * distance.x + right.z * distance.y
+                   + distance.z ]
+
+func anglemod [ a: f32 ] -> f32
+    return (360.0 / 65536.0) * f32[ i32[ a * (65536.0 / 360.0) ] & 65535 ]
+
 # AngleVectors: forward, right and up from pitch yaw roll degrees
 class Axes
     public forward : vec3f
@@ -163,20 +452,206 @@ class MoveInfo
     public next_speed   : f32
     public remaining_distance : f32
     public decel_distance : f32
-    public endfunc      : Fn
+    public endfunc      : lambda none [ Edict ]
 
 # edict_t: entity_state_t folded in, the fields the port uses
+# gitem_t: one entry of the item list
+class GItem
+    public index       : i32
+    public classname   : string
+    public pickup      : lambda bool [ Edict, Edict ]
+    public use         : lambda none [ Edict, GItem ]
+    public drop        : lambda none [ Edict, GItem ]
+    public weaponthink : lambda none [ Edict ]
+    public pickup_sound : string
+    public world_model : string
+    public world_model_flags : i32
+    public view_model  : string
+    public icon        : string
+    public pickup_name : string
+    public count_width : i32
+    public quantity    : i32
+    public ammo        : string
+    public flags       : i32
+    public weapmodel   : i32
+    public tag         : i32
+    public precaches   : string
+    # gitem_armor_t for the armors
+    public base_count  : i32
+    public max_count   : i32
+    public normal_protection : f32
+    public energy_protection : f32
+
+# player_state_t with the pmove_state folded in
+class PlayerState
+    public pm_type    : i32
+    public pm_flags   : i32
+    public pm_time    : i32
+    public gravity    : i32
+    public delta_angles : vec3f
+    public viewangles : vec3f
+    public viewoffset : vec3f
+    public kick_angles : vec3f
+    public gunangles  : vec3f
+    public gunoffset  : vec3f
+    public gunindex   : i32
+    public gunframe   : i32
+    public blend      : vec4f
+    public fov        : f32
+    public rdflags    : i32
+    public stats      : vec i32
+
+# client_persistant_t: kept across level loads
+class ClientPersistant
+    public netname    : string
+    public hand       : i32
+    public connected  : bool
+    public health     : i32
+    public max_health : i32
+    public savedFlags : i32
+    public selected_item : i32
+    public inventory  : vec i32
+    public max_bullets : i32
+    public max_shells : i32
+    public max_rockets : i32
+    public max_grenades : i32
+    public max_cells  : i32
+    public max_slugs  : i32
+    public weapon     : GItem
+    public lastweapon : GItem
+    public power_cubes : i32
+    public score      : i32
+    public game_helpchanged : i32
+    public helpchanged : i32
+    public spectator  : bool
+
+# client_respawn_t: kept across deathmatch respawns
+class ClientRespawn
+    public coop_respawn : ClientPersistant
+    public enterframe : i32
+    public score      : i32
+    public cmd_angles : vec3f
+    public spectator  : bool
+
+# gclient_t
+class Client
+    public ps         : PlayerState
+    public ping       : i32
+    public pers       : ClientPersistant
+    public resp       : ClientRespawn
+    public showscores : bool
+    public showinventory : bool
+    public showhelp   : bool
+    public showhelpicon : bool
+    public ammo_index : i32
+    public buttons    : i32
+    public oldbuttons : i32
+    public latched_buttons : i32
+    public weapon_thunk : bool
+    public newweapon  : GItem
+    public damage_armor : i32
+    public damage_parmor : i32
+    public damage_blood : i32
+    public damage_knockback : i32
+    public damage_from : vec3f
+    public killer_yaw : f32
+    public weaponstate : i32
+    public kick_angles : vec3f
+    public kick_origin : vec3f
+    public v_dmg_roll : f32
+    public v_dmg_pitch : f32
+    public v_dmg_time : f32
+    public fall_time  : f32
+    public fall_value : f32
+    public damage_alpha : f32
+    public bonus_alpha : f32
+    public damage_blend : vec3f
+    public v_angle    : vec3f
+    public bobtime    : f32
+    public oldviewangles : vec3f
+    public oldvelocity : vec3f
+    public next_drown_time : f32
+    public old_waterlevel : i32
+    public breather_sound : i32
+    public machinegun_shots : i32
+    public anim_end   : i32
+    public anim_priority : i32
+    public anim_duck  : bool
+    public anim_run   : bool
+    public quad_framenum : f32
+    public invincible_framenum : f32
+    public breather_framenum : f32
+    public enviro_framenum : f32
+    public grenade_blew_up : bool
+    public grenade_time : f32
+    public silencer_shots : i32
+    public weapon_sound : i32
+    public pickup_msg_time : f32
+    public respawn_time : f32
+    public chase_target : Edict
+    public update_chase : bool
+    # the last centerprint, for the hud
+    public centerprint : string
+    public centerprint_time : f32
+
+# mframe_t: one frame of a monster animation
+class MFrame
+    public ai    : lambda none [ Edict, f32 ]
+    public dist  : f32
+    public think : lambda none [ Edict ]
+
+# mmove_t
+class MMove
+    public firstframe : i32
+    public lastframe  : i32
+    public frames     : vec MFrame
+    public endfunc    : lambda none [ Edict ]
+
+# monsterinfo_t: the function slots are lambdas
+class MonsterInfo
+    public currentmove : MMove
+    public aiflags    : i32
+    public nextframe  : i32
+    public scale      : f32 [ 1.0 ]
+    public stand      : lambda none [ Edict ]
+    public idle       : lambda none [ Edict ]
+    public search     : lambda none [ Edict ]
+    public walk       : lambda none [ Edict ]
+    public run        : lambda none [ Edict ]
+    public dodge      : lambda none [ Edict, Edict, f32 ]
+    public attack     : lambda none [ Edict ]
+    public melee      : lambda none [ Edict ]
+    public sight      : lambda none [ Edict, Edict ]
+    public checkattack : lambda bool [ Edict ]
+    public pausetime  : f32
+    public attack_finished : f32
+    public saved_goal : vec3f
+    public search_time : f32
+    public trail_time : f32
+    public last_sighting : vec3f
+    public attack_state : i32
+    public lefty      : i32
+    public idle_time  : f32
+    public linkcount  : i32
+    public power_armor_type : i32
+    public power_armor_power : i32
+
 class Edict
     public number     : i32
     public origin     : vec3f
     public angles     : vec3f
     public old_origin : vec3f
     public modelindex : i32
+    public modelindex2 : i32
+    public modelindex3 : i32
     public frame      : i32
     public effects    : i32
+    public event      : i32
+    public skinnum    : i32
+    public renderfx   : i32
     public solid_bits : i32
     public sound      : i32
-    public client     : bool
+    public client     : Client
     public inuse      : bool
     public linkcount  : i32
     public linked     : bool
@@ -215,13 +690,31 @@ class Edict
     public velocity   : vec3f
     public avelocity  : vec3f
     public mass       : i32
+    public air_finished : f32
     public gravity    : f32
+    public yaw_speed  : f32
+    public pain       : lambda none [ Edict, Edict, f32, i32 ]
+    public pain_debounce_time : f32
+    public damage_debounce_time : f32
+    public gib_health : i32
+    public show_hostile : f32
+    public powerarmor_time : f32
+    public radius_dmg : i32
+    public dmg_radius : f32
+    public oldenemy   : Edict
+    public mynoise    : Edict
+    public mynoise2   : Edict
+    public noise_index2 : i32
+    public teleport_time : f32
+    public light_level : i32
+    public monsterinfo : MonsterInfo
     public nextthink  : f32
-    public prethink   : Fn
-    public think      : Fn
-    public blocked    : Fn
-    public touch      : Fn
-    public use        : Fn
+    public prethink   : lambda none [ Edict ]
+    public think      : lambda none [ Edict ]
+    public blocked    : lambda none [ Edict, Edict ]
+    public touch      : lambda none [ Edict, Edict ]
+    public use        : lambda none [ Edict, Edict, Edict ]
+    public die        : lambda none [ Edict, Edict, Edict, i32, vec3f ]
     public touch_debounce_time : f32
     public health     : i32
     public max_health : i32
@@ -234,6 +727,12 @@ class Edict
     public count      : i32
     public chain      : Edict
     public enemy      : Edict
+    public movetarget : Edict
+    public goalentity : Edict
+    public ideal_yaw  : f32
+    public item       : GItem
+    public last_move_time : f32
+    public fly_sound_debounce_time : f32
     public activator  : Edict
     public groundentity : Edict
     public groundentity_linkcount : i32
@@ -277,9 +776,48 @@ class Level
     public level_name : string
     public mapname    : string
     public nextmap    : string
+    public changemap  : string
     public current_entity : Edict
+    public found_secrets : i32
+    public total_secrets : i32
+    public found_goals   : i32
+    public total_goals   : i32
+    public intermissiontime : f32
+    public exitintermission : bool
+    public intermission_origin : vec3f
+    public intermission_angle : vec3f
+    public sight_client : Edict
+    public sight_entity : Edict
+    public sight_entity_framenum : i32
+    public sound_entity : Edict
+    public sound_entity_framenum : i32
+    public sound2_entity : Edict
+    public sound2_entity_framenum : i32
+    public pic_health : i32
+    public total_monsters : i32
+    public killed_monsters : i32
+    public body_que  : i32
+    public power_cubes : i32
 
 # a pushed entity's place, for backing a blocked move out
+# a sound, temp entity or muzzle flash the client side plays
+class GameEvent
+    public kind    : i32
+    public ent     : Edict
+    public origin  : vec3f
+    public dir     : vec3f
+    public index   : i32
+    public channel : i32
+    public volume  : f32
+    public attenuation : f32
+    public count   : i32
+    public color   : i32
+
+EVENT_SOUND : i32 [ 1 ]
+EVENT_TEMP  : i32 [ 2 ]
+EVENT_FLASH : i32 [ 3 ]
+EVENT_FLASH2 : i32 [ 4 ]
+
 class Pushed
     public ent    : Edict
     public origin : vec3f
@@ -295,6 +833,66 @@ class Game
     public st        : SpawnTemp
     public skill     : i32 [ 1 ]
     public deathmatch : bool
+    public coop       : bool
+    public serverflags : i32
+    public helpmessage1 : string
+    public helpmessage2 : string
+    public helpchanged : i32
+    public lightstyles : vec i32
+    public dmflags   : i32
+    public spawnpoint : string [ '' ]
+    public items     : vec GItem
+    public num_items : i32
+    public means_of_death : i32
+    public sm_meat_index : i32
+    public snd_fry   : i32
+    public jacket_armor_index : i32
+    public combat_armor_index : i32
+    public body_armor_index : i32
+    public power_screen_index : i32
+    public power_shield_index : i32
+    public quad_drop_timeout_hack : i32
+    public is_quad   : bool
+    public is_silenced : i32
+    public sv_maxvelocity : f32 [ 2000.0 ]
+    public sv_gravity : f32 [ 800.0 ]
+    public g_select_empty : bool
+    # the asset tables: an index per name, as the configstrings
+    public sounds    : vec string
+    public models    : vec string
+    public images    : vec string
+    # the client effects queued this frame
+    public events    : vec GameEvent
+    public autosaved : bool
+    # SV_Impact's plane: a copy kept for the touch that reads it
+    public touch_plane : Trace
+    public touch_plane_on : bool
+    # the level ends: a restart (single player death) or the next map
+    public restart   : bool
+    public next_map  : string
+    # the player's data from the level before; null starts afresh
+    public carry     : ClientPersistant
+    # p_trail.c
+    public trail     : vec Edict
+    public trail_head : i32
+    public trail_active : bool
+    # p_client.c and p_view.c statics
+    public death_anim : i32
+    public pain_anim : i32
+    public view_forward : vec3f
+    public view_right : vec3f
+    public view_up   : vec3f
+    public xyspeed   : f32
+    public bobmove   : f32
+    public bobcycle  : i32
+    public bobfracsin : f32
+    # g_ai.c statics
+    public enemy_vis : bool
+    public enemy_infront : bool
+    public enemy_range : i32
+    public enemy_yaw : f32
+    # m_flash.c
+    public flash_offsets : vec f32
     public pushed    : vec Pushed
     public obstacle  : Edict
     # the edict each inline model belongs to, by model index
@@ -303,6 +901,7 @@ class Game
     public portal_open : vec bool
 
     public func setup [ map: BspMap ]
+        g = a
         bsp = map
         world = World [ ]
         world.setup[ map ]
@@ -312,26 +911,50 @@ class Game
         unknown = vec string []
         model_ent = vec Edict [ map.model_head.count ]
         portal_open = vec bool [ 64 ]
+        map.flood_areas[ portal_open ]
         edicts = vec Edict []
         world.edicts = edicts
+        touch_plane = Trace [ ]
+        sounds = vec string [] [ '' ]
+        models = vec string [] [ '' ]
+        # the inline models keep their own numbers: '*3' is 3
+        for [ i: i32 1, i < map.model_head.count, i += 1 ]
+            models.push[ '*{i}' ]
+        images = vec string [] [ '' ]
+        events = vec GameEvent []
+        init_items[]
+        init_flash_offsets[]
         # the world and one client
         for [ i: i32 0, i <= maxclients, i += 1 ]
             e : Edict [ number: i ]
             e.moveinfo = MoveInfo [ ]
+            e.monsterinfo = MonsterInfo [ ]
             edicts.push[ e ]
         num_edicts = maxclients + 1
         pl : edicts[ 1 ]
-        pl.client = true
+        pl.client = Client [ ]
+        pl.client.ps = PlayerState [ ]
+        pl.client.ps.stats = vec i32 [ 32 ]
+        pl.client.pers = ClientPersistant [ ]
+        pl.client.pers.inventory = vec i32 [ MAX_ITEMS ]
+        pl.client.resp = ClientRespawn [ ]
+        pl.client.resp.coop_respawn = ClientPersistant [ ]
+        pl.client.resp.coop_respawn.inventory = vec i32 [ MAX_ITEMS ]
         pl.inuse  = true
         pl.classname = 'player'
-        pl.health = 100
-        pl.solid  = SOLID_BBOX
-        pl.movetype = MOVETYPE_WALK
-        pl.clipmask = MASK_PLAYERSOLID
-        pl.mins = vec3f [ -16.0, -16.0, -24.0 ]
-        pl.maxs = vec3f [ 16.0, 16.0, 32.0 ]
-        pl.viewheight = 22
+        lightstyles = vec i32 [ 64 ]
+        level.pic_health = imageindex[ 'i_health' ]
+        snd_fry = soundindex[ 'player/fry.wav' ]
+        sm_meat_index = modelindex[ 'models/objects/gibs/sm_meat/tris.md2' ]
         spawn_entities[ map.name, map.entities ]
+        # ClientConnect and ClientBegin for the one player
+        # the game's clients outlive a level: the last one's data
+        if [ carry ] pl.client.pers = carry
+        el           init_client_persistant[ pl.client ]
+        init_client_resp[ pl.client ]
+        put_client_in_server[ pl ]
+        player_trail_init[]
+        client_end_server_frame[ pl ]
 
     public func player [] -> Edict
         return edicts[ 1 ]
@@ -355,6 +978,7 @@ class Game
                 return e
         e : Edict [ number: num_edicts ]
         e.moveinfo = MoveInfo [ ]
+        e.monsterinfo = MonsterInfo [ ]
         edicts.push[ e ]
         num_edicts += 1
         init_edict[ e ]
@@ -368,10 +992,19 @@ class Game
         ft : f32 [ level.time ]
         fresh : Edict [ number: n ]
         fresh.moveinfo = MoveInfo [ ]
+        fresh.monsterinfo = MonsterInfo [ ]
         fresh.classname = 'freed'
         fresh.freetime = ft
         fresh.inuse = false
         edicts[ n ] = fresh
+        # a reference kept elsewhere sees a dead edict
+        ed.inuse = false
+        ed.solid = SOLID_NOT
+        ed.linked = false
+        ed.think = null
+        ed.touch = null
+        ed.use = null
+        ed.classname = 'freed'
 
     func ent_str [ e: Edict, f: EField ] -> string
         if [ f == EField.targetname ] return e.targetname
@@ -414,7 +1047,7 @@ class Game
             t : spawn[]
             t.classname = 'DelayedUse'
             t.nextthink = level.time + ent.delay
-            t.think = Fn.think_delay
+            t.think = lambda think_delay[]
             t.activator = activator
             if [ !activator ] dprintf[ 'Think_Delay with no activator' ]
             t.message = ent.message
@@ -446,7 +1079,7 @@ class Game
                 if [ t == ent ]
                     dprintf[ 'WARNING: Entity used itself.' ]
                 el
-                    if [ t.use != Fn.none ] call_use[ t.use, t, ent, activator ]
+                    if [ t.use ] t.use[ t, ent, activator ]
                 if [ !ent.inuse ]
                     dprintf[ 'entity was removed while using targets' ]
                     return
@@ -481,6 +1114,8 @@ class Game
                                  bsp.model_box[ b + 5 ] + 1.0 ]
                 model_ent[ mi ] = e
                 world.link[ e ]
+        el
+            e.modelindex = modelindex[ name ]
 
     # G_TouchTriggers: every trigger the box overlaps gets a touch
     public func touch_triggers [ ent: Edict ]
@@ -490,8 +1125,356 @@ class Game
         touch : world.area_edicts[ ent.absmin, ent.absmax, AREA_TRIGGERS ]
         for [ hit: Edict ] in touch
             if [ !hit.inuse ] continue
-            if [ hit.touch == Fn.none ] continue
-            call_touch[ hit.touch, hit, ent ]
+            if [ !hit.touch ] continue
+            hit.touch[ hit, ent ]
+
+    # ---- gi.soundindex, modelindex, imageindex: names interned
+    func name_index [ table: vec string, name: string ] -> i32
+        if [ !name ] return 0
+        for [ i: i32 1, i < table.count, i += 1 ]
+            if [ table[ i ] == name ] return i
+        table.push[ name ]
+        return table.count - 1
+
+    public func soundindex [ name: string ] -> i32
+        return name_index[ sounds, name ]
+
+    public func modelindex [ name: string ] -> i32
+        return name_index[ models, name ]
+
+    public func imageindex [ name: string ] -> i32
+        return name_index[ images, name ]
+
+    # ---- gi.sound and friends: queued for the client side
+    public func sound [ e: Edict, channel: i32, index: i32, volume: f32,
+                        attenuation: f32 ]
+        if [ index == 0 ] return
+        # SV_StartSound: a brush model is heard from its box's middle
+        from : vec3f [ 0.0, 0.0, 0.0 ]
+        if [ e ] from = e.origin
+        if [ e && e.solid == SOLID_BSP ]
+            from = v_ma[ from, 0.5, v_add[ e.mins, e.maxs ] ]
+        events.push[ GameEvent [ kind: EVENT_SOUND, ent: e,
+            origin: from, index: index, channel: channel,
+            volume: volume, attenuation: attenuation ] ]
+
+    public func positioned_sound [ origin: vec3f, e: Edict, channel: i32,
+                                   index: i32, volume: f32,
+                                   attenuation: f32 ]
+        if [ index == 0 ] return
+        events.push[ GameEvent [ kind: EVENT_SOUND, ent: e,
+            origin: origin, index: index, channel: channel,
+            volume: volume, attenuation: attenuation ] ]
+
+    # svc_temp_entity: kind, place, direction, count and color
+    public func temp_entity [ kind: i32, origin: vec3f, dir: vec3f,
+                              count: i32, color: i32 ]
+        events.push[ GameEvent [ kind: EVENT_TEMP, index: kind,
+            origin: origin, dir: dir, count: count, color: color ] ]
+
+    public func temp_entity_at [ kind: i32, origin: vec3f ]
+        temp_entity[ kind, origin, vec3f [ 0.0, 0.0, 0.0 ], 0, 0 ]
+
+    public func temp_entity_dir [ kind: i32, origin: vec3f, dir: vec3f ]
+        temp_entity[ kind, origin, dir, 0, 0 ]
+
+    # a two point temp entity (rail trail, bubble trail, laser)
+    public func temp_entity_line [ kind: i32, from: vec3f, to: vec3f ]
+        events.push[ GameEvent [ kind: EVENT_TEMP, index: kind,
+            origin: from, dir: to ] ]
+
+    # a cable from an entity (the parasite's tongue, the medic's)
+    public func temp_entity_beam [ kind: i32, e: Edict, from: vec3f,
+                                   to: vec3f ]
+        events.push[ GameEvent [ kind: EVENT_TEMP, index: kind, ent: e,
+            origin: from, dir: to ] ]
+
+    public func muzzleflash [ e: Edict, flash: i32 ]
+        events.push[ GameEvent [ kind: EVENT_FLASH, ent: e,
+            origin: e.origin, index: flash ] ]
+
+    public func muzzleflash2 [ e: Edict, flash: i32 ]
+        events.push[ GameEvent [ kind: EVENT_FLASH2, ent: e,
+            origin: e.origin, index: flash ] ]
+
+    # gi.cprintf, centerprintf, bprintf
+    public func cprintf [ e: Edict, s: string ]
+        dprintf[ s ]
+
+    public func centerprintf [ e: Edict, s: string ]
+        if [ e && e.client ]
+            e.client.centerprint = s
+            e.client.centerprint_time = level.time + 5.0
+        dprintf[ 'centerprint: {s}' ]
+
+    public func bprintf [ s: string ]
+        dprintf[ s ]
+
+    # ---- findradius: the next entity whose centre is within rad
+    public func findradius [ from: Edict, org: vec3f, rad: f32 ] -> Edict
+        i : i32 [ (from) ? from.number + 1 : 0 ]
+        while [ i < num_edicts ]
+            e : edicts[ i ]
+            i += 1
+            if [ !e.inuse ] continue
+            if [ e.solid == SOLID_NOT ] continue
+            eorg : vec3f [ org.x - (e.origin.x + (e.mins.x + e.maxs.x) * 0.5),
+                           org.y - (e.origin.y + (e.mins.y + e.maxs.y) * 0.5),
+                           org.z - (e.origin.z + (e.mins.z + e.maxs.z) * 0.5) ]
+            if [ v_len[ eorg ] > rad ] continue
+            return e
+        return null
+
+    # KillBox: everything in the entity's box takes a telefrag
+    public func kill_box [ e: Edict ] -> bool
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        while [ true ]
+            tr : world.trace[ e.origin, e.mins, e.maxs, e.origin, null,
+                              MASK_PLAYERSOLID ]
+            if [ !tr.ent ] break
+            t_damage[ tr.ent, e, e, zero, e.origin, zero, 100000, 0,
+                      DAMAGE_NO_PROTECTION, MOD_TELEFRAG ]
+            if [ tr.ent.solid != SOLID_NOT ] return false
+        return true
+
+    # G_TouchSolids: the solids the box overlaps get a touch
+    public func touch_solids [ ent: Edict ]
+        touch : world.area_edicts[ ent.absmin, ent.absmax, AREA_SOLID ]
+        for [ hit: Edict ] in touch
+            if [ !hit.inuse ] continue
+            if [ hit.touch ] hit.touch[ hit, ent ]
+            if [ !ent.inuse ] break
+
+    # ---- g_phys.c
+    func check_velocity [ e: Edict ]
+        mx : f32 [ sv_maxvelocity ]
+        e.velocity = vec3f [ clamp[ e.velocity.x, 0.0 - mx, mx ],
+                             clamp[ e.velocity.y, 0.0 - mx, mx ],
+                             clamp[ e.velocity.z, 0.0 - mx, mx ] ]
+
+    # SV_Impact: two entities touched; the trace carries the plane
+    func impact [ e: Edict, tr: Trace ]
+        other : tr.ent
+        if [ e.touch != null && e.solid != SOLID_NOT ]
+            touch_plane.fraction = tr.fraction
+            touch_plane.nx = tr.nx
+            touch_plane.ny = tr.ny
+            touch_plane.nz = tr.nz
+            touch_plane.ex = tr.ex
+            touch_plane.ey = tr.ey
+            touch_plane.ez = tr.ez
+            touch_plane.ent = tr.ent
+            touch_plane.contents = tr.contents
+            touch_plane.surf_flags = tr.surf_flags
+            touch_plane_on = true
+            e.touch[ e, other ]
+            touch_plane_on = false
+        if [ other && other.touch && other.solid != SOLID_NOT ]
+            other.touch[ other, e ]
+
+    # ClipVelocity: slides off the plane; 1 floor, 2 wall or step
+    public func clip_velocity [ v: vec3f, normal: vec3f,
+                                overbounce: f32 ] -> vec3f
+        backoff : f32 [ v_dot[ v, normal ] * overbounce ]
+        out : vec3f [ v.x - normal.x * backoff, v.y - normal.y * backoff,
+                      v.z - normal.z * backoff ]
+        if [ out.x > -0.1 && out.x < 0.1 ] out = vec3f [ 0.0, out.y, out.z ]
+        if [ out.y > -0.1 && out.y < 0.1 ] out = vec3f [ out.x, 0.0, out.z ]
+        if [ out.z > -0.1 && out.z < 0.1 ] out = vec3f [ out.x, out.y, 0.0 ]
+        return out
+
+    # SV_FlyMove: the slide along up to five planes
+    func fly_move [ e: Edict, time: f32, mask: i32 ] -> i32
+        blocked : i32 [ 0 ]
+        original : vec3f [ e.velocity ]
+        primal : vec3f [ e.velocity ]
+        planes : vec vec3f []
+        time_left : f32 [ time ]
+        e.groundentity = null
+        for [ bump: i32 0, bump < 4, bump += 1 ]
+            endp : v_ma[ e.origin, time_left, e.velocity ]
+            tr : world.trace[ e.origin, e.mins, e.maxs, endp, e, mask ]
+            if [ tr.allsolid ]
+                e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+                return 3
+            if [ tr.fraction > 0.0 ]
+                e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+                original = e.velocity
+                planes = vec vec3f []
+            if [ tr.fraction == 1.0 ] break
+            hit : tr.ent
+            if [ tr.nz > 0.7 ]
+                blocked = blocked | 1
+                if [ hit.solid == SOLID_BSP ]
+                    e.groundentity = hit
+                    e.groundentity_linkcount = hit.linkcount
+            if [ tr.nz == 0.0 ] blocked = blocked | 2
+            impact[ e, tr ]
+            if [ !e.inuse ] break
+            time_left = time_left - time_left * tr.fraction
+            if [ planes.count >= 5 ]
+                e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+                return 3
+            planes.push[ vec3f [ tr.nx, tr.ny, tr.nz ] ]
+            n : i32 [ planes.count ]
+            i : i32 [ 0 ]
+            fresh : vec3f [ e.velocity ]
+            while [ i < n ]
+                fresh = clip_velocity[ original, planes[ i ], 1.0 ]
+                j : i32 [ 0 ]
+                while [ j < n ]
+                    if [ j != i && !v_eq[ planes[ i ], planes[ j ] ] ]
+                        if [ v_dot[ fresh, planes[ j ] ] < 0.0 ] break
+                    j += 1
+                if [ j == n ] break
+                i += 1
+            if [ i != n ]
+                e.velocity = fresh
+            el
+                if [ n != 2 ]
+                    e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+                    return 7
+                dir : v_cross[ planes[ 0 ], planes[ 1 ] ]
+                e.velocity = v_scale[ dir, v_dot[ dir, e.velocity ] ]
+            if [ v_dot[ e.velocity, primal ] <= 0.0 ]
+                e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+                return blocked
+        return blocked
+
+    func add_gravity [ e: Edict ]
+        e.velocity = vec3f [ e.velocity.x, e.velocity.y,
+            e.velocity.z - e.gravity * sv_gravity * FRAMETIME ]
+
+    # SV_PushEntity: moved by push, touching what it hits
+    func push_entity [ e: Edict, push: vec3f ] -> Trace
+        start : vec3f [ e.origin ]
+        endp : v_add[ start, push ]
+        mask : i32 [ (e.clipmask != 0) ? e.clipmask : MASK_SOLID ]
+        tr : world.trace[ start, e.mins, e.maxs, endp, e, mask ]
+        while [ true ]
+            tr = world.trace[ start, e.mins, e.maxs, endp, e, mask ]
+            e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+            world.link[ e ]
+            if [ tr.fraction != 1.0 ]
+                impact[ e, tr ]
+                # what it hit went away: the move again
+                if [ tr.ent && !tr.ent.inuse && e.inuse ]
+                    e.origin = start
+                    world.link[ e ]
+                    continue
+            break
+        if [ e.inuse ] touch_triggers[ e ]
+        return tr
+
+    # SV_Physics_Toss: toss, bounce and fly; still on the ground
+    func physics_toss [ e: Edict ]
+        run_think[ e ]
+        if [ e.flags & FL_TEAMSLAVE ] return
+        if [ e.velocity.z > 0.0 ] e.groundentity = null
+        if [ e.groundentity && !e.groundentity.inuse ] e.groundentity = null
+        if [ e.groundentity ] return
+        old_origin : vec3f [ e.origin ]
+        check_velocity[ e ]
+        if [ e.movetype != MOVETYPE_FLY && e.movetype != MOVETYPE_FLYMISSILE ]
+            add_gravity[ e ]
+        e.angles = v_ma[ e.angles, FRAMETIME, e.avelocity ]
+        move : v_scale[ e.velocity, FRAMETIME ]
+        tr : push_entity[ e, move ]
+        if [ !e.inuse ] return
+        if [ tr.fraction < 1.0 ]
+            backoff : f32 [ (e.movetype == MOVETYPE_BOUNCE) ? 1.5 : 1.0 ]
+            normal : vec3f [ tr.nx, tr.ny, tr.nz ]
+            e.velocity = clip_velocity[ e.velocity, normal, backoff ]
+            # stopped on a floor
+            if [ tr.nz > 0.7 ]
+                if [ e.velocity.z < 60.0 || e.movetype != MOVETYPE_BOUNCE ]
+                    e.groundentity = tr.ent
+                    e.groundentity_linkcount = tr.ent.linkcount
+                    e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+                    e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
+        wasinwater : bool [ (e.watertype & MASK_WATER) != 0 ]
+        e.watertype = world.point_contents[ e.origin ]
+        isinwater : bool [ (e.watertype & MASK_WATER) != 0 ]
+        e.waterlevel = (isinwater) ? 1 : 0
+        if [ !wasinwater && isinwater ]
+            positioned_sound[ old_origin, edicts[ 0 ], CHAN_AUTO,
+                soundindex[ 'misc/h2ohit1.wav' ], 1.0, 1.0 ]
+        el [ wasinwater && !isinwater ]
+            positioned_sound[ e.origin, edicts[ 0 ], CHAN_AUTO,
+                soundindex[ 'misc/h2ohit1.wav' ], 1.0, 1.0 ]
+        slave : e.teamchain
+        while [ slave ]
+            slave.origin = e.origin
+            world.link[ slave ]
+            slave = slave.teamchain
+
+    func add_rotational_friction [ e: Edict ]
+        e.angles = v_ma[ e.angles, FRAMETIME, e.avelocity ]
+        adjustment : f32 [ FRAMETIME * 100.0 * 6.0 ]
+        e.avelocity = vec3f [ friction_toward_zero[ e.avelocity.x, adjustment ],
+                              friction_toward_zero[ e.avelocity.y, adjustment ],
+                              friction_toward_zero[ e.avelocity.z, adjustment ] ]
+
+    func friction_toward_zero [ v: f32, adjustment: f32 ] -> f32
+        if [ v > 0.0 ]
+            r : f32 [ v - adjustment ]
+            return (r < 0.0) ? 0.0 : r
+        r : f32 [ v + adjustment ]
+        return (r > 0.0) ? 0.0 : r
+
+    # SV_Physics_Step: monsters fall free, else move in steps
+    func physics_step [ e: Edict ]
+        hitsound : bool [ false ]
+        if [ !e.groundentity ] m_check_ground[ e ]
+        groundentity : e.groundentity
+        check_velocity[ e ]
+        wasonground : bool [ groundentity ]
+        if [ !v_zero[ e.avelocity ] ] add_rotational_friction[ e ]
+        if [ !wasonground && (e.flags & FL_FLY) == 0 &&
+             !((e.flags & FL_SWIM) != 0 && e.waterlevel > 2) ]
+            if [ e.velocity.z < sv_gravity * -0.1 ] hitsound = true
+            if [ e.waterlevel == 0 ] add_gravity[ e ]
+        # friction for flying monsters that have been given vertical velocity
+        if [ (e.flags & FL_FLY) != 0 && e.velocity.z != 0.0 ]
+            speed : f32 [ fabs[ e.velocity.z ] ]
+            control : f32 [ (speed < 100.0) ? 100.0 : speed ]
+            newspeed : f32 [ speed - FRAMETIME * control * 2.0 ]
+            if [ newspeed < 0.0 ] newspeed = 0.0
+            e.velocity = vec3f [ e.velocity.x, e.velocity.y,
+                                 e.velocity.z * (newspeed / speed) ]
+        # friction for swimming monsters that have been given vertical velocity
+        if [ (e.flags & FL_SWIM) != 0 && e.velocity.z != 0.0 ]
+            speed : f32 [ fabs[ e.velocity.z ] ]
+            control : f32 [ (speed < 100.0) ? 100.0 : speed ]
+            newspeed : f32 [ speed - FRAMETIME * control * 1.0
+                             * f32[ e.waterlevel ] ]
+            if [ newspeed < 0.0 ] newspeed = 0.0
+            e.velocity = vec3f [ e.velocity.x, e.velocity.y,
+                                 e.velocity.z * (newspeed / speed) ]
+        if [ !v_zero[ e.velocity ] ]
+            # apply friction: let dead monsters who aren't completely
+            # onground slide
+            if [ wasonground || (e.flags & (FL_SWIM | FL_FLY)) != 0 ]
+                if [ !(e.health <= 0 && !m_check_bottom[ e ]) ]
+                    speed : f32 [ sqrt[ e.velocity.x * e.velocity.x
+                                        + e.velocity.y * e.velocity.y ] ]
+                    if [ speed != 0.0 ]
+                        control : f32 [ (speed < 100.0) ? 100.0 : speed ]
+                        newspeed : f32 [ speed - FRAMETIME * control * 6.0 ]
+                        if [ newspeed < 0.0 ] newspeed = 0.0
+                        newspeed = newspeed / speed
+                        e.velocity = vec3f [ e.velocity.x * newspeed,
+                                             e.velocity.y * newspeed,
+                                             e.velocity.z ]
+            mask : i32 [ (e.svflags & SVF_MONSTER) ? MASK_MONSTERSOLID
+                         : MASK_SOLID ]
+            fly_move[ e, FRAMETIME, mask ]
+            world.link[ e ]
+            touch_triggers[ e ]
+            if [ !e.inuse ] return
+            if [ e.groundentity && !wasonground && hitsound ]
+                sound[ e, 0, soundindex[ 'world/land.wav' ], 1.0, 1.0 ]
+        run_think[ e ]
 
     # ---- the entity string: COM_Parse over the lump text
     func parse_token [ s: cstr, pos: vec i32 ] -> string
@@ -534,6 +1517,22 @@ class Game
         return vec3f [ x, y, z ]
 
     # ED_ParseField: the fields table of g_save.c
+    # ED_NewString: a written backslash n is a line break
+    func new_string [ v: string ] -> string
+        buf : local i8 [ 1024 ]
+        n : i32 [ 0 ]
+        i : i32 [ 0 ]
+        while [ i < v.count && n < 1023 ]
+            c : i32 [ v[ i ] ]
+            if [ c == 92 && i + 1 < v.count ]
+                i += 1
+                c = (v[ i ] == 110) ? 10 : 92
+            buf[ n ] = c
+            n += 1
+            i += 1
+        buf[ n ] = 0
+        return string [ cast cstr [ buf ] ]
+
     func parse_field [ key: string, v: string, e: Edict ]
         k : string [ key ]
         if [ k == 'classname' ]    e.classname = v
@@ -548,7 +1547,7 @@ class Game
         el [ k == 'deathtarget' ]  e.deathtarget = v
         el [ k == 'killtarget' ]   e.killtarget = v
         el [ k == 'combattarget' ] e.combattarget = v
-        el [ k == 'message' ]      e.message = v
+        el [ k == 'message' ]      e.message = new_string[ v ]
         el [ k == 'team' ]         e.team = v
         el [ k == 'wait' ]         e.wait = atof[ v.chars ]
         el [ k == 'delay' ]        e.delay = atof[ v.chars ]
@@ -582,6 +1581,7 @@ class Game
         el [ k == 'minpitch' ]     st.minpitch = atof[ v.chars ]
         el [ k == 'maxpitch' ]     st.maxpitch = atof[ v.chars ]
         el [ k == 'nextmap' ]      st.nextmap = v
+        el [ k == 'light' ]        return
         el
             dprintf[ '{k} is not a field' ]
 
@@ -652,7 +1652,7 @@ class Game
             if [ !e.inuse ] continue
             if [ !e.team ] continue
             if [ e.flags & FL_TEAMSLAVE ] continue
-            chain : Edict [ e ]
+            chain : e
             e.teammaster = e
             c += 1
             c2 += 1
@@ -670,24 +1670,65 @@ class Game
         dprintf[ '{c} teams with {c2} entities' ]
 
     # ED_CallSpawn: the spawn table
-    func call_spawn [ e: Edict ]
+    public func call_spawn [ e: Edict ]
         c : string [ e.classname ]
         if [ !c ]
             dprintf[ 'ED_CallSpawn: NULL classname' ]
             return
         if [ c == 'worldspawn' ]       sp_worldspawn[ e ]
-        el [ c == 'info_player_start' ] sp_info_player_start[ e ]
-        el [ c == 'func_door' ]        sp_func_door[ a, e ]
-        el [ c == 'func_door_rotating' ] sp_func_door_rotating[ a, e ]
+        el [ c == 'func_door' ]        sp_func_door[ e ]
+        el [ c == 'func_plat' ]        sp_func_plat[ e ]
+        el [ c == 'func_button' ]      sp_func_button[ e ]
+        el [ c == 'func_train' ]       sp_func_train[ e ]
+        el [ c == 'path_corner' ]      sp_path_corner[ e ]
+        el [ c == 'func_rotating' ]    sp_func_rotating[ e ]
+        el [ c == 'func_water' ]       sp_func_water[ e ]
+        el [ c == 'trigger_elevator' ] sp_trigger_elevator[ e ]
+        el [ c == 'func_timer' ]       sp_func_timer[ e ]
+        el [ c == 'func_conveyor' ]    sp_func_conveyor[ e ]
+        el [ c == 'func_door_secret' ] sp_func_door_secret[ e ]
+        el [ c == 'func_killbox' ]     sp_func_killbox[ e ]
+        el [ c == 'func_wall' ]        sp_func_wall[ e ]
+        el [ c == 'func_object' ]      sp_func_object[ e ]
+        el [ c == 'func_explosive' ]   sp_func_explosive[ e ]
+        el [ c == 'trigger_key' ]      sp_trigger_key[ e ]
+        el [ c == 'trigger_counter' ]  sp_trigger_counter[ e ]
+        el [ c == 'trigger_always' ]   sp_trigger_always[ e ]
+        el [ c == 'trigger_push' ]     sp_trigger_push[ e ]
+        el [ c == 'trigger_hurt' ]     sp_trigger_hurt[ e ]
+        el [ c == 'trigger_gravity' ]  sp_trigger_gravity[ e ]
+        el [ c == 'trigger_monsterjump' ] sp_trigger_monsterjump[ e ]
+        el [ c == 'target_temp_entity' ] sp_target_temp_entity[ e ]
+        el [ c == 'target_speaker' ]   sp_target_speaker[ e ]
+        el [ c == 'target_help' ]      sp_target_help[ e ]
+        el [ c == 'target_secret' ]    sp_target_secret[ e ]
+        el [ c == 'target_goal' ]      sp_target_goal[ e ]
+        el [ c == 'target_explosion' ] sp_target_explosion[ e ]
+        el [ c == 'target_changelevel' ] sp_target_changelevel[ e ]
+        el [ c == 'target_splash' ]    sp_target_splash[ e ]
+        el [ c == 'target_spawner' ]   sp_target_spawner[ e ]
+        el [ c == 'target_blaster' ]   sp_target_blaster[ e ]
+        el [ c == 'target_crosslevel_trigger' ]
+            sp_target_crosslevel_trigger[ e ]
+        el [ c == 'target_crosslevel_target' ]
+            sp_target_crosslevel_target[ e ]
+        el [ c == 'target_laser' ]     sp_target_laser[ e ]
+        el [ c == 'target_lightramp' ] sp_target_lightramp[ e ]
+        el [ c == 'target_earthquake' ] sp_target_earthquake[ e ]
+        el [ c == 'func_door_rotating' ] sp_func_door_rotating[ e ]
         el [ c == 'func_areaportal' ]  sp_func_areaportal[ e ]
         el [ c == 'trigger_once' ]     sp_trigger_once[ e ]
         el [ c == 'trigger_multiple' ] sp_trigger_multiple[ e ]
         el [ c == 'trigger_relay' ]    sp_trigger_relay[ e ]
-        el [ c == 'light' ]            sp_light[ e ]
         el [ c == 'info_null' || c == 'func_group' ] free_edict[ e ]
-        el [ c == 'info_notnull' || c == 'path_corner' ||
-             c == 'point_combat' ]
-            e.solid = SOLID_NOT
+        el [ c == 'item_health' ]      sp_item_health[ e ]
+        el [ c == 'item_health_small' ] sp_item_health_small[ e ]
+        el [ c == 'item_health_large' ] sp_item_health_large[ e ]
+        el [ c == 'item_health_mega' ] sp_item_health_mega[ e ]
+        el [ find_item_by_classname[ c ] ]
+            spawn_item[ e, find_item_by_classname[ c ] ]
+        el [ spawn_class[ c, e ] ]
+            return
         el
             # brush entities not yet ported stay solid where they are
             if [ e.model && e.model[ 0 ] == 42 ]
@@ -727,170 +1768,27 @@ class Game
         setmodel[ e, e.model ]
 
     # ---- triggers (g_trigger.c)
-    func init_trigger [ e: Edict ]
-        if [ !v_zero[ e.angles ] ] set_movedir[ e ]
-        e.solid = SOLID_TRIGGER
-        e.movetype = MOVETYPE_NONE
-        setmodel[ e, e.model ]
-        e.svflags = SVF_NOCLIENT
-
-    func multi_wait [ e: Edict ]
-        e.nextthink = 0.0
-
-    func multi_trigger [ e: Edict ]
-        if [ e.nextthink != 0.0 ] return
-        use_targets[ e, e.activator ]
-        if [ e.wait > 0.0 ]
-            e.think = Fn.multi_wait
-            e.nextthink = level.time + e.wait
-        el
-            e.touch = Fn.none
-            e.nextthink = level.time + FRAMETIME
-            e.think = Fn.free_edict
-
-    func use_multi [ e: Edict, other: Edict, activator: Edict ]
-        e.activator = activator
-        multi_trigger[ e ]
-
-    func touch_multi [ e: Edict, other: Edict ]
-        if [ other.client ]
-            if [ e.spawnflags & 2 ] return
-        el
-            if [ other.svflags & SVF_MONSTER ]
-                if [ (e.spawnflags & 1) == 0 ] return
-            el
-                return
-        if [ !v_zero[ e.movedir ] ]
-            ax : angle_vectors[ other.angles ]
-            if [ v_dot[ ax.forward, e.movedir ] < 0.0 ] return
-        e.activator = other
-        multi_trigger[ e ]
-
-    func trigger_enable [ e: Edict ]
-        e.solid = SOLID_TRIGGER
-        e.use = Fn.use_multi
-        world.link[ e ]
-
-    func sp_trigger_multiple [ e: Edict ]
-        if [ e.wait == 0.0 ] e.wait = 0.2
-        e.touch = Fn.touch_multi
-        e.movetype = MOVETYPE_NONE
-        e.svflags = e.svflags | SVF_NOCLIENT
-        if [ e.spawnflags & 4 ]
-            e.solid = SOLID_NOT
-            e.use = Fn.trigger_enable
-        el
-            e.solid = SOLID_TRIGGER
-            e.use = Fn.use_multi
-        if [ !v_zero[ e.angles ] ] set_movedir[ e ]
-        setmodel[ e, e.model ]
-        world.link[ e ]
-
-    func sp_trigger_once [ e: Edict ]
-        # old maps: triggered was bit 1, it belongs on bit 4
-        if [ e.spawnflags & 1 ]
-            e.spawnflags = (e.spawnflags & ~1) | 4
-        e.wait = -1.0
-        sp_trigger_multiple[ e ]
-
-    func sp_trigger_relay [ e: Edict ]
-        e.use = Fn.trigger_relay_use
-
-    # func_areaportal: count toggles, the portal follows
-    func sp_func_areaportal [ e: Edict ]
-        e.use = Fn.use_areaportal
-        e.count = 0
-
-    func use_areaportal [ e: Edict ]
-        e.count = e.count ^ 1
-        set_areaportal[ e.style, e.count != 0 ]
+    # CS_LIGHTS style strings: one letter kept per style
+    public func set_lightstyle [ style: i32, letter: i32 ]
+        if [ style < 0 || style >= 64 ] return
+        lightstyles[ style ] = letter
 
     public func set_areaportal [ portal: i32, open: bool ]
         if [ portal >= 0 && portal < portal_open.count ]
             portal_open[ portal ] = open
+            # CM_SetAreaPortalState
+            bsp.flood_areas[ portal_open ]
 
-    # ---- the dispatch of an edict's function slots
-    public func call_think [ fn: Fn, e: Edict ]
-        switch [ fn ]
-        case move_begin
-            move_begin[ a, e ]
-        case move_final
-            move_final[ a, e ]
-        case move_done
-            move_done[ a, e ]
-        case angle_move_begin
-            angle_move_begin[ a, e ]
-        case angle_move_final
-            angle_move_final[ a, e ]
-        case angle_move_done
-            angle_move_done[ a, e ]
-        case think_accel_move
-            think_accel_move[ a, e ]
-        case door_go_down
-            door_go_down[ a, e ]
-        case door_hit_top
-            door_hit_top[ a, e ]
-        case door_hit_bottom
-            door_hit_bottom[ a, e ]
-        case think_calc_move_speed
-            think_calc_move_speed[ a, e ]
-        case think_spawn_door_trigger
-            think_spawn_door_trigger[ a, e ]
-        case think_delay
-            use_targets[ e, e.activator ]
-            free_edict[ e ]
-        case multi_wait
-            multi_wait[ e ]
-        case free_edict
-            free_edict[ e ]
-        default
-            dprintf[ 'think {i32[ fn ]} not a think' ]
-
-    public func call_use [ fn: Fn, e: Edict, other: Edict,
-                           activator: Edict ]
-        switch [ fn ]
-        case door_use
-            door_use[ a, e, other, activator ]
-        case use_multi
-            use_multi[ e, other, activator ]
-        case trigger_enable
-            trigger_enable[ e ]
-        case use_areaportal
-            use_areaportal[ e ]
-        case trigger_relay_use
-            use_targets[ e, activator ]
-        default
-            dprintf[ 'use {i32[ fn ]} not a use' ]
-
-    public func call_touch [ fn: Fn, e: Edict, other: Edict ]
-        switch [ fn ]
-        case touch_door_trigger
-            touch_door_trigger[ a, e, other ]
-        case touch_multi
-            touch_multi[ e, other ]
-        case door_touch
-            door_touch[ a, e, other ]
-        default
-            dprintf[ 'touch {i32[ fn ]} not a touch' ]
-
-    public func call_blocked [ fn: Fn, e: Edict, other: Edict ]
-        switch [ fn ]
-        case door_blocked
-            door_blocked[ a, e, other ]
-        default
-            dprintf[ 'blocked {i32[ fn ]} not a blocked' ]
-
-    # ---- g_phys.c: the pushers and thinking
     # SV_RunThink: false when the entity thought this frame
     func run_think [ e: Edict ] -> bool
         t : f32 [ e.nextthink ]
         if [ t <= 0.0 ] return true
         if [ t > level.time + 0.001 ] return true
         e.nextthink = 0.0
-        if [ e.think == Fn.none ]
+        if [ !e.think ]
             dprintf[ 'NULL ent->think on {e.classname}' ]
             return false
-        call_think[ e.think, e ]
+        e.think[ e ]
         return false
 
     # SV_TestEntityPosition: the world when the box sits in solid
@@ -975,7 +1873,7 @@ class Game
     func physics_pusher [ ent: Edict ]
         if [ ent.flags & FL_TEAMSLAVE ] return
         pushed = vec Pushed []
-        part : Edict [ ent ]
+        part : ent
         while [ part ]
             if [ !v_zero[ part.velocity ] || !v_zero[ part.avelocity ] ]
                 move  : v_scale[ part.velocity, FRAMETIME ]
@@ -983,12 +1881,11 @@ class Game
                 if [ !push[ part, move, amove ] ] break
             part = part.teamchain
         if [ part ]
-            mv : Edict [ ent ]
+            mv : ent
             while [ mv ]
                 if [ mv.nextthink > 0.0 ] mv.nextthink += FRAMETIME
                 mv = mv.teamchain
-            if [ part.blocked != Fn.none ]
-                call_blocked[ part.blocked, part, obstacle ]
+            if [ part.blocked ] part.blocked[ part, obstacle ]
         el
             part = ent
             while [ part ]
@@ -1003,7 +1900,7 @@ class Game
 
     # G_RunEntity
     func run_entity [ e: Edict ]
-        if [ e.prethink != Fn.none ] call_think[ e.prethink, e ]
+        if [ e.prethink ] e.prethink[ e ]
         m : i32 [ e.movetype ]
         if [ m == MOVETYPE_PUSH || m == MOVETYPE_STOP ]
             physics_pusher[ e ]
@@ -1011,21 +1908,46 @@ class Game
             run_think[ e ]
         el [ m == MOVETYPE_NOCLIP ]
             physics_noclip[ e ]
+        el [ m == MOVETYPE_STEP ]
+            physics_step[ e ]
+        el [ m == MOVETYPE_TOSS || m == MOVETYPE_BOUNCE ||
+             m == MOVETYPE_FLY || m == MOVETYPE_FLYMISSILE ]
+            physics_toss[ e ]
         el
-            # step, toss, fly: monsters and missiles, later
+            # walk: the client's own pmove moves it
             run_think[ e ]
 
     # G_RunFrame: one tenth of a second of the world
     public func run_frame []
         level.framenum += 1
         level.time = f32[ level.framenum ] * FRAMETIME
+        # choose a client for monsters to target this frame
+        ai_set_sight_client[]
+        # exit intermissions
+        if [ level.exitintermission ]
+            exit_level[]
+            return
         for [ i: i32 0, i < num_edicts, i += 1 ]
             e : edicts[ i ]
             if [ !e.inuse ] continue
             level.current_entity = e
             e.old_origin = e.origin
+            # if the ground entity moved, make sure we are still on it
             if [ e.groundentity &&
                  e.groundentity.linkcount != e.groundentity_linkcount ]
                 e.groundentity = null
-            if [ i > 0 && i <= maxclients ] continue
+                if [ (e.flags & (FL_SWIM | FL_FLY)) == 0 &&
+                     (e.svflags & SVF_MONSTER) != 0 ]
+                    m_check_ground[ e ]
+            if [ i > 0 && i <= maxclients ]
+                client_begin_server_frame[ e ]
+                continue
             run_entity[ e ]
+        # build the playerstate_t structures for all players
+        for [ i: i32 1, i <= maxclients, i += 1 ]
+            e : edicts[ i ]
+            if [ !e.inuse || !e.client ] continue
+            client_end_server_frame[ e ]
+
+# the one game; every free function of the game folder reaches it
+g : Game

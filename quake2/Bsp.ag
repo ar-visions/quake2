@@ -19,6 +19,15 @@ class BspFace
     public num_edges  : i32
     public texinfo    : i32
     public lightofs   : i32
+    # the lightmap block: first texel s and t, then its size
+    public lm_s       : i32
+    public lm_t       : i32
+    public lm_w       : i32
+    public lm_h       : i32
+    # its four light styles, a byte each; where its block sits
+    public styles     : i32
+    public lm_ax      : i32
+    public lm_ay      : i32
 
 # one wall texture: 8-bit wal decoded to rgba, placed in the atlas
 class BspTex
@@ -31,6 +40,8 @@ class BspTex
 
 # a trace's result: how far, the plane hit, where it stopped
 class Trace
+    # SURF_* of the side the trace stopped on
+    public surf_flags : i32
     public fraction   : f32
     public allsolid   : bool
     public startsolid : bool
@@ -70,6 +81,11 @@ func surf_warp   [] -> i32
     return 8
 func surf_nodraw [] -> i32
     return 128
+# seen through at a third or two thirds; a texture that flows
+func surf_trans  [] -> i32
+    return 16 | 32
+func surf_flowing [] -> i32
+    return 64
 
 class BspMap
     public name      : string
@@ -99,8 +115,35 @@ class BspMap
     # planes nx ny nz dist; nodes plane child0 child1
     public planes     : vec f32
     public nodes      : vec i32
+    # each node's faces: the first, then how many
+    public node_faces : vec i32
+    # which faces the builders take: the alpha surfaces, or the rest
+    public clear_pass : bool
+    # the alpha mesh's nodes: each one's model (0 is the world)
+    public clear_model : vec i32
+    # R_LightPoint's answer, 0..1 a channel
+    public light_color : vec3f
+    # faces lit by more than plain style 0, and their last values
+    public styled       : vec i32
+    public styled_last  : vec f32
+    # each light style's strength now: 1 is the letter m
+    public style_values : vec f32
+    # the atlas rows relight changed: first, and one past the last
+    public dirty_first  : i32
+    public dirty_end    : i32
     public headnode   : i32
     public leaf_cluster : vec i32
+    # each leaf's area, and its box: mins then maxs
+    public leaf_area  : vec i32
+    public leaf_box   : vec i32
+    # per area: how many portals, the first; per portal: its
+    # number, the area beyond
+    public areas       : vec i32
+    public areaportals : vec i32
+    # areas joined by open portals share a number; 0 is solid
+    public area_flood  : vec i32
+    # counts up each time a portal opens or shuts
+    public flood_gen   : i32
     public leaf_first : vec i32
     public leaf_count : vec i32
     public leaffaces  : vec i32
@@ -115,6 +158,9 @@ class BspMap
     public idx_all    : @u32
     public idx_n      : i32
     public sky_name   : string
+    # worldspawn's skyrotate (degrees a second) and skyaxis
+    public sky_rotate : f32
+    public sky_axis   : vec3f
     # collision: brushes first_side num_sides contents; sides plane
     public leaf_contents : vec i32
     public leaf_bfirst : vec i32
@@ -122,6 +168,7 @@ class BspMap
     public leafbrushes : vec i32
     public brushes    : vec i32
     public brushsides : vec i32
+    public side_tex   : vec i32
     public brush_check : vec i32
     public checkcount : i32
     # the trace in flight (cmodel.c's trace_* globals)
@@ -171,9 +218,8 @@ class BspMap
         load_texinfo[ b, lump_off[ b, 5 ], lump_len[ b, 5 ] ]
         load_faces[ b, lump_off[ b, 6 ], lump_len[ b, 6 ] ]
         ll : i32 [ lump_len[ b, 7 ] ]
-        ld : new u8 [ ll ]
-        memcpy[ ld, @b[ lump_off[ b, 7 ] ], ll ]
-        lighting = PakData [ data: ld, size: ll ]
+        lighting = pak_data[ ll ]
+        memcpy[ lighting.data, @b[ lump_off[ b, 7 ] ], ll ]
         load_edges[ b, lump_off[ b, 11 ], lump_len[ b, 11 ] ]
         load_surfedges[ b, lump_off[ b, 12 ], lump_len[ b, 12 ] ]
         mo : i32 [ lump_off[ b, 13 ] ]
@@ -184,6 +230,7 @@ class BspMap
         load_planes[ b, lump_off[ b, 1 ], lump_len[ b, 1 ] ]
         load_nodes[ b, lump_off[ b, 4 ], lump_len[ b, 4 ] ]
         load_leafs[ b, lump_off[ b, 8 ], lump_len[ b, 8 ] ]
+        load_areas[ b ]
         load_leaffaces[ b, lump_off[ b, 9 ], lump_len[ b, 9 ] ]
         load_leafbrushes[ b, lump_off[ b, 10 ], lump_len[ b, 10 ] ]
         load_brushes[ b, lump_off[ b, 14 ], lump_len[ b, 14 ] ]
@@ -193,12 +240,22 @@ class BspMap
         tr_ext  = vec f32 [ 3 ]
         init_box_hull[]
         vl : i32 [ lump_len[ b, 3 ] ]
-        vd : new u8 [ vl ]
-        memcpy[ vd, @b[ lump_off[ b, 3 ] ], vl ]
-        vis = PakData [ data: vd, size: vl ]
-        clusters = (vl >= 4) ? bsp_i32[ vd, 0 ] : 0
+        vis = pak_data[ vl ]
+        memcpy[ vis.data, @b[ lump_off[ b, 3 ] ], vl ]
+        clusters = (vl >= 4) ? bsp_i32[ vis.data, 0 ] : 0
         vis_row = vec u8 [ (clusters + 7) / 8 + 1 ]
         sky_name = ent_key[ 'sky' ]
+        sky_rotate = 0.0
+        sky_axis = vec3f [ 0.0, 0.0, 0.0 ]
+        turn : ent_key[ 'skyrotate' ]
+        axis : ent_key[ 'skyaxis' ]
+        if [ turn ] sky_rotate = atof[ turn.chars ]
+        if [ axis ]
+            ax : f32 [ 0.0 ]
+            ay : f32 [ 0.0 ]
+            az : f32 [ 0.0 ]
+            sscanf[ axis.chars, "%f %f %f", @ax, @ay, @az ]
+            sky_axis = vec3f [ ax, ay, az ]
         model_entities[]
         log 'bsp: {nodes.count / 3} nodes, {leaf_cluster.count} leafs, {clusters} clusters, sky {sky_name}'
         load_palette[ pak ]
@@ -324,11 +381,14 @@ class BspMap
     func load_nodes [ b: @u8, off: i32, cnt: i32 ]
         n : i32 [ cnt / 28 ]
         nodes = vec i32 [ n * 3 ]
+        node_faces = vec i32 [ n * 2 ]
         for [ i: i32 0, i < n, i += 1 ]
             at : i32 [ off + i * 28 ]
             nodes[ i * 3 ]     = bsp_i32[ b, at ]
             nodes[ i * 3 + 1 ] = bsp_i32[ b, at + 4 ]
             nodes[ i * 3 + 2 ] = bsp_i32[ b, at + 8 ]
+            node_faces[ i * 2 ]     = bsp_i16[ b, at + 24 ] & 65535
+            node_faces[ i * 2 + 1 ] = bsp_i16[ b, at + 26 ] & 65535
 
     func load_leafs [ b: @u8, off: i32, cnt: i32 ]
         n : i32 [ cnt / 28 ]
@@ -338,10 +398,15 @@ class BspMap
         leaf_contents = vec i32 [ n ]
         leaf_bfirst   = vec i32 [ n ]
         leaf_bcount   = vec i32 [ n ]
+        leaf_area     = vec i32 [ n ]
+        leaf_box      = vec i32 [ n * 6 ]
         for [ i: i32 0, i < n, i += 1 ]
             at : i32 [ off + i * 28 ]
             leaf_contents[ i ] = bsp_i32[ b, at ]
             leaf_cluster[ i ]  = bsp_i16[ b, at + 4 ]
+            leaf_area[ i ]     = bsp_i16[ b, at + 6 ]
+            for [ k: i32 0, k < 6, k += 1 ]
+                leaf_box[ i * 6 + k ] = bsp_i16[ b, at + 8 + k * 2 ]
             leaf_first[ i ]    = bsp_u16[ b, at + 20 ]
             leaf_count[ i ]    = bsp_u16[ b, at + 22 ]
             leaf_bfirst[ i ]   = bsp_u16[ b, at + 24 ]
@@ -366,8 +431,10 @@ class BspMap
     func load_brushsides [ b: @u8, off: i32, cnt: i32 ]
         n : i32 [ cnt / 4 ]
         brushsides = vec i32 [ n ]
+        side_tex = vec i32 [ n ]
         for [ i: i32 0, i < n, i += 1 ]
             brushsides[ i ] = bsp_u16[ b, off + i * 4 ]
+            side_tex[ i ] = bsp_i16[ b, off + i * 4 + 2 ]
 
     # CM_ClipBoxToBrush: the trace's segment against one brush
     func clip_brush [ bi: i32 ]
@@ -377,6 +444,7 @@ class BspMap
         enterfrac : f32 [ -1.0 ]
         leavefrac : f32 [ 1.0 ]
         clip : i32 [ -1 ]
+        clip_side : i32 [ -1 ]
         getout : bool [ false ]
         startout : bool [ false ]
         eps : f32 [ 0.03125 ]
@@ -403,6 +471,7 @@ class BspMap
                 if [ f > enterfrac ]
                     enterfrac = f
                     clip = pl
+                    clip_side = first + i
             el
                 f : f32 [ (d1 + eps) / (d1 - d2) ]
                 if [ f < leavefrac ] leavefrac = f
@@ -418,6 +487,9 @@ class BspMap
                 tr.ny = planes[ clip + 1 ]
                 tr.nz = planes[ clip + 2 ]
                 tr.contents = brushes[ bi * 3 + 2 ]
+                ti : i32 [ side_tex[ clip_side ] ]
+                tr.surf_flags = (ti >= 0 && ti < texinfos.count)
+                    ? texinfos[ ti ].flags : 0
 
     # CM_TraceToLeaf: every brush of the leaf, once per trace
     func trace_leaf [ l: i32 ]
@@ -582,6 +654,7 @@ class BspMap
             side : i32 [ i & 1 ]
             pside : i32 [ box_planes + i * 2 + side ]
             brushsides.push[ pside ]
+            side_tex.push[ -1 ]
             # the node: its plane, the empty leaf on one side
             c0 : i32 [ 0 ]
             c1 : i32 [ 0 ]
@@ -670,6 +743,7 @@ class BspMap
     func trace_copy [] -> Trace
         return Trace [ fraction: tr.fraction, allsolid: tr.allsolid,
                        startsolid: tr.startsolid, contents: tr.contents,
+                       surf_flags: tr.surf_flags,
                        nx: tr.nx, ny: tr.ny, nz: tr.nz,
                        ex: tr.ex, ey: tr.ey, ez: tr.ez ]
 
@@ -742,7 +816,7 @@ class BspMap
         return leaf_cluster[ l ]
 
     # the cluster's pvs row into vis_row, run lengths of zero expanded
-    func cluster_row [ c: i32 ]
+    public func cluster_row [ c: i32 ]
         row : i32 [ (clusters + 7) / 8 ]
         if [ c < 0 || c >= clusters ]
             for [ i: i32 0, i < row, i += 1 ] vis_row[ i ] = 255
@@ -765,7 +839,69 @@ class BspMap
                     z = z - 1
 
     # indices of the faces seen from a cluster, into out; the count
-    public func visible_indices [ c: i32, out: @u32 ] -> i32
+    # CMod_LoadAreas, CMod_LoadAreaPortals: lumps 17 and 18
+    func load_areas [ b: @u8 ]
+        an : i32 [ lump_len[ b, 17 ] / 8 ]
+        pn : i32 [ lump_len[ b, 18 ] / 8 ]
+        areas = vec i32 [ an * 2 ]
+        areaportals = vec i32 [ pn * 2 ]
+        area_flood = vec i32 [ an ]
+        for [ i: i32 0, i < an * 2, i += 1 ]
+            areas[ i ] = bsp_i32[ b, lump_off[ b, 17 ] + i * 4 ]
+        for [ i: i32 0, i < pn * 2, i += 1 ]
+            areaportals[ i ] = bsp_i32[ b, lump_off[ b, 18 ] + i * 4 ]
+
+    # FloodArea_r: this area and all it reaches by open portals
+    func flood_area [ area: i32, num: i32, open: vec bool ]
+        if [ area_flood[ area ] != 0 ] return
+        area_flood[ area ] = num
+        first : i32 [ areas[ area * 2 + 1 ] ]
+        for [ i: i32 0, i < areas[ area * 2 ], i += 1 ]
+            portal : i32 [ areaportals[ (first + i) * 2 ] ]
+            other : i32 [ areaportals[ (first + i) * 2 + 1 ] ]
+            if [ portal < 0 || portal >= open.count ] continue
+            if [ open[ portal ] ] flood_area[ other, num, open ]
+
+    # FloodAreaConnections: area 0 is not used
+    public func flood_areas [ open: vec bool ]
+        n : i32 [ area_flood.count ]
+        for [ i: i32 0, i < n, i += 1 ] area_flood[ i ] = 0
+        num : i32 [ 0 ]
+        for [ i: i32 1, i < n, i += 1 ]
+            if [ area_flood[ i ] != 0 ] continue
+            num += 1
+            flood_area[ i, num, open ]
+        flood_gen += 1
+
+    # CM_AreasConnected
+    public func areas_connected [ one: i32, two: i32 ] -> bool
+        n : i32 [ area_flood.count ]
+        if [ one < 0 || two < 0 || one >= n || two >= n ] return true
+        return area_flood[ one ] == area_flood[ two ]
+
+    public func area_at [ x: f32, y: f32, z: f32 ] -> i32
+        l : i32 [ leaf_at[ x, y, z ] ]
+        if [ l < 0 || l >= leaf_area.count ] return 0
+        return leaf_area[ l ]
+
+    # is the box wholly behind one of the frustum's four planes
+    public func box_culled [ box: vec i32, at: i32, sides: vec f32 ]
+                           -> bool
+        for [ k: i32 0, k < 4, k += 1 ]
+            nx : f32 [ sides[ k * 4 ] ]
+            ny : f32 [ sides[ k * 4 + 1 ] ]
+            nz : f32 [ sides[ k * 4 + 2 ] ]
+            # the corner farthest along the plane's normal
+            x : f32 [ (nx > 0.0) ? box[ at + 3 ] : box[ at ] ]
+            y : f32 [ (ny > 0.0) ? box[ at + 4 ] : box[ at + 1 ] ]
+            z : f32 [ (nz > 0.0) ? box[ at + 5 ] : box[ at + 2 ] ]
+            if [ x * nx + y * ny + z * nz < sides[ k * 4 + 3 ] ]
+                return true
+        return false
+
+    # the leaves the eye's cluster sees, in a joined area, in view
+    public func visible_indices [ c: i32, area: i32, sides: vec f32,
+                                  out: @u32 ] -> i32
         if [ c < 0 || clusters == 0 ]
             memcpy[ out, idx_all, idx_n * 4 ]
             return idx_n
@@ -777,6 +913,8 @@ class BspMap
             if [ cl < 0 ] continue
             bit : i32 [ i32[ vis_row[ cl >> 3 ] ] & (1 << (cl & 7)) ]
             if [ bit == 0 ] continue
+            if [ !areas_connected[ area, leaf_area[ l ] ] ] continue
+            if [ box_culled[ leaf_box, l * 6, sides ] ] continue
             lf : i32 [ leaf_first[ l ] ]
             for [ i: i32 0, i < leaf_count[ l ], i += 1 ]
                 f : i32 [ leaffaces[ lf + i ] ]
@@ -787,6 +925,75 @@ class BspMap
                 memcpy[ @out[ n ], @idx_all[ face_first[ f ] ], cnt * 4 ]
                 n += cnt
         return n
+
+    # RecursiveLightPoint: the lightmap texel under a point
+    func light_walk [ node: i32, sx: f32, sy: f32, sz: f32, ex: f32,
+                      ey: f32, ez: f32 ] -> i32
+        # didn't hit anything
+        if [ node < 0 ] return -1
+        pl : i32 [ nodes[ node * 3 ] * 4 ]
+        front : f32 [ sx * planes[ pl ] + sy * planes[ pl + 1 ]
+                      + sz * planes[ pl + 2 ] - planes[ pl + 3 ] ]
+        back : f32 [ ex * planes[ pl ] + ey * planes[ pl + 1 ]
+                     + ez * planes[ pl + 2 ] - planes[ pl + 3 ] ]
+        side : i32 [ (front < 0.0) ? 1 : 0 ]
+        if [ (back < 0.0) == (front < 0.0) ]
+            return light_walk[ nodes[ node * 3 + 1 + side ], sx, sy, sz,
+                               ex, ey, ez ]
+        frac : f32 [ front / (front - back) ]
+        mx : f32 [ sx + (ex - sx) * frac ]
+        my : f32 [ sy + (ey - sy) * frac ]
+        mz : f32 [ sz + (ez - sz) * frac ]
+        # go down front side
+        r : i32 [ light_walk[ nodes[ node * 3 + 1 + side ], sx, sy, sz,
+                              mx, my, mz ] ]
+        if [ r >= 0 ] return r
+        # check for impact on this node
+        first : i32 [ node_faces[ node * 2 ] ]
+        last  : i32 [ first + node_faces[ node * 2 + 1 ] ]
+        for [ fi: i32 first, fi < last && fi < faces.count, fi += 1 ]
+            f : faces[ fi ]
+            if [ f.texinfo < 0 || f.texinfo >= texinfos.count ] continue
+            ti : texinfos[ f.texinfo ]
+            # no lightmaps
+            if [ ti.flags & (surf_sky[] | surf_warp[]) ] continue
+            if [ f.lm_w == 0 ] continue
+            s : i32 [ mx * ti.sx + my * ti.sy + mz * ti.sz + ti.so ]
+            t : i32 [ mx * ti.tx + my * ti.ty + mz * ti.tz + ti.to ]
+            if [ s < f.lm_s || t < f.lm_t ] continue
+            ds : i32 [ s - f.lm_s ]
+            dt : i32 [ t - f.lm_t ]
+            if [ ds > (f.lm_w - 1) * 16 || dt > (f.lm_h - 1) * 16 ]
+                continue
+            if [ f.lightofs < 0 ] return 0
+            texel : i32 [ 3 * ((dt >> 4) * f.lm_w + (ds >> 4)) ]
+            block : i32 [ 3 * f.lm_w * f.lm_h ]
+            # each style's map follows the last, scaled by its style
+            for [ m: i32 0, m < 4, m += 1 ]
+                style : i32 [ (f.styles >> (m * 8)) & 255 ]
+                if [ style == 255 ] break
+                at : i32 [ f.lightofs + m * block + texel ]
+                if [ at + 2 >= lighting.size ] break
+                v : f32 [ (style_values) ? style_values[ style ] : 1.0 ]
+                light_color = vec3f [
+                    light_color.x
+                        + f32[ lighting.data[ at ] ] * v / 255.0,
+                    light_color.y
+                        + f32[ lighting.data[ at + 1 ] ] * v / 255.0,
+                    light_color.z
+                        + f32[ lighting.data[ at + 2 ] ] * v / 255.0 ]
+            return 1
+        # go down back side
+        return light_walk[ nodes[ node * 3 + 2 - side ], mx, my, mz,
+                           ex, ey, ez ]
+
+    # R_LightPoint: the light at a point, read off the floor under it
+    public func light_point [ p: vec3f ] -> vec3f
+        if [ !lighting || lighting.size == 0 ]
+            return vec3f [ 1.0, 1.0, 1.0 ]
+        light_color = vec3f [ 0.0, 0.0, 0.0 ]
+        light_walk[ headnode, p.x, p.y, p.z, p.x, p.y, p.z - 2048.0 ]
+        return light_color
 
     func load_verts [ b: @u8, off: i32, cnt: i32 ]
         n : i32 [ cnt / 4 ]
@@ -832,6 +1039,7 @@ class BspMap
                 first_edge: bsp_i32[ b, at + 4 ],
                 num_edges:  bsp_i16[ b, at + 8 ],
                 texinfo:    bsp_i16[ b, at + 10 ],
+                styles:     bsp_i32[ b, at + 12 ],
                 lightofs:   bsp_i32[ b, at + 16 ] ]
             faces.push[ f ]
 
@@ -911,6 +1119,9 @@ class BspMap
         if [ f.texinfo < 0 || f.texinfo >= texinfos.count ] return false
         ti : texinfos[ f.texinfo ]
         if [ ti.tex < 0 ] return false
+        # the alpha surfaces are their own mesh, drawn last
+        seen_through : bool [ (ti.flags & surf_trans[]) != 0 ]
+        if [ seen_through != clear_pass ] return false
         return f.num_edges >= 3
 
     # vertex index of edge i of a face, honouring the edge's sign
@@ -975,8 +1186,20 @@ class BspMap
         bt1 : i32 [ i32[ ceil[ tmax / 16.0 ] ] ]
         bw : i32 [ bs1 - bs0 + 1 ]
         bh : i32 [ bt1 - bt0 + 1 ]
+        f.lm_s = bs0 * 16
+        f.lm_t = bt0 * 16
+        f.lm_w = bw
+        f.lm_h = bh
         lit : bool [ f.lightofs >= 0 && bw <= 34 && bh <= 34 &&
-            (ti.flags & surf_warp[]) == 0 ]
+            (ti.flags & (surf_warp[] | surf_trans[])) == 0 ]
+        # an unlit face says how it draws: minus its alpha, then
+        # 1 for a warp, 2 for a flow, 3 for both
+        alpha : f32 [ -1.0 ]
+        if [ ti.flags & 16 ]      alpha = -0.33
+        el [ ti.flags & 32 ]      alpha = -0.66
+        kind : f32 [ 0.0 ]
+        if [ ti.flags & surf_warp[] ]    kind = kind + 1.0
+        if [ ti.flags & surf_flowing[] ] kind = kind + 2.0
         ld : @u8 [ lm_atlas.vdata[] ]
         if [ lit ]
             if [ lm_x + bw > lm_w ]
@@ -1008,11 +1231,70 @@ class BspMap
                 lf[ lt ]     = (f32[ lm_x ] + ls) / f32[ lm_w ]
                 lf[ lt + 1 ] = (f32[ lm_y ] + lu) / f32[ lm_h ]
             el
-                lf[ lt ]     = -1.0
-                lf[ lt + 1 ] = -1.0
+                lf[ lt ]     = alpha
+                lf[ lt + 1 ] = kind
         if [ lit ]
+            f.lm_ax = lm_x
+            f.lm_ay = lm_y
+            # styles 0 255 255 255 is the plain face
+            if [ f.styles != -256 ]
+                if [ !styled ]
+                    styled = vec i32 []
+                    styled_last = vec f32 []
+                styled.push[ fi ]
+                for [ m: i32 0, m < 4, m += 1 ]
+                    never : f32 [ -1.0 ]
+                    styled_last.push[ never ]
             lm_x = lm_x + bw
             if [ bh > lm_row ] lm_row = bh
+
+    # R_BuildLightMap, for each face whose styles changed strength
+    public func relight [ values: vec f32 ] -> bool
+        style_values = values
+        dirty_first = lm_h
+        dirty_end = 0
+        if [ !styled || !lm_atlas ] return false
+        ld : @u8 [ lm_atlas.vdata[] ]
+        for [ k: i32 0, k < styled.count, k += 1 ]
+            f : faces[ styled[ k ] ]
+            changed : bool [ false ]
+            for [ m: i32 0, m < 4, m += 1 ]
+                style : i32 [ (f.styles >> (m * 8)) & 255 ]
+                if [ style == 255 ] break
+                if [ styled_last[ k * 4 + m ] != values[ style ] ]
+                    styled_last[ k * 4 + m ] = values[ style ]
+                    changed = true
+            if [ !changed ] continue
+            n : i32 [ f.lm_w * f.lm_h ]
+            for [ t: i32 0, t < n, t += 1 ]
+                r : f32 [ 0.0 ]
+                gr : f32 [ 0.0 ]
+                b : f32 [ 0.0 ]
+                for [ m: i32 0, m < 4, m += 1 ]
+                    style : i32 [ (f.styles >> (m * 8)) & 255 ]
+                    if [ style == 255 ] break
+                    si : i32 [ f.lightofs + (m * n + t) * 3 ]
+                    if [ si + 2 >= lighting.size ] break
+                    v : f32 [ values[ style ] ]
+                    r  = r  + f32[ lighting.data[ si ] ] * v
+                    gr = gr + f32[ lighting.data[ si + 1 ] ] * v
+                    b  = b  + f32[ lighting.data[ si + 2 ] ] * v
+                # too bright keeps its colour: all three come down
+                top : f32 [ (r > gr) ? r : gr ]
+                if [ b > top ] top = b
+                if [ top > 255.0 ]
+                    r  = r  * 255.0 / top
+                    gr = gr * 255.0 / top
+                    b  = b  * 255.0 / top
+                row : i32 [ f.lm_ay + t / f.lm_w ]
+                di : i32 [ (row * lm_w + f.lm_ax + t % f.lm_w) * 4 ]
+                ld[ di ]     = u8[ r ]
+                ld[ di + 1 ] = u8[ gr ]
+                ld[ di + 2 ] = u8[ b ]
+            if [ f.lm_ay < dirty_first ] dirty_first = f.lm_ay
+            if [ f.lm_ay + f.lm_h > dirty_end ]
+                dirty_end = f.lm_ay + f.lm_h
+        return dirty_end > dirty_first
 
     # a face's fan triangles into iu at k; the index count added
     func emit_fan [ iu: @u32, k: i32, base: i32, n: i32 ] -> i32
@@ -1135,11 +1417,25 @@ class BspMap
 
     # every solid inline model as its own node, so it can move
     public func build_models [] -> GltfModel
+        clear_pass = false
+        node_model = vec i32 []
+        return build_set[ 1, node_model ]
+
+    # the alpha surfaces of the world and of every inline model
+    public func build_clear [] -> GltfModel
+        clear_pass = true
+        clear_model = vec i32 []
+        mesh : build_set[ 0, clear_model ]
+        clear_pass = false
+        return mesh
+
+    # models from `from` up, a node each, by the pass's faces
+    func build_set [ from: i32, made: vec i32 ] -> GltfModel
         nm : i32 [ model_head.count ]
         nv : i32 [ 0 ]
         ni : i32 [ 0 ]
         cnt : vec i32 [ 2 ]
-        for [ m: i32 1, m < nm, m += 1 ]
+        for [ m: i32 from, m < nm, m += 1 ]
             if [ !model_solid[ m ] ] continue
             count_faces[ model_face[ m * 2 ], model_face[ m * 2 + 1 ], cnt ]
             nv = nv + cnt[ 0 ]
@@ -1159,10 +1455,9 @@ class BspMap
         lm_begin[]
         ranges : vec i32 []
         names : vec string []
-        node_model = vec i32 []
         v : i32 [ 0 ]
         k : i32 [ 0 ]
-        for [ m: i32 1, m < nm, m += 1 ]
+        for [ m: i32 from, m < nm, m += 1 ]
             if [ !model_solid[ m ] ] continue
             k0 : i32 [ k ]
             f0 : i32 [ model_face[ m * 2 ] ]
@@ -1178,8 +1473,8 @@ class BspMap
             ranges.push[ kn ]
             names.push[ '*{m}' ]
             mi : i32 [ m ]
-            node_model.push[ mi ]
-        log 'bsp: {node_model.count} inline models, {nv} verts, {ni / 3} triangles'
+            made.push[ mi ]
+        log 'bsp: {made.count} model nodes, {nv} verts, {ni / 3} triangles'
         return assemble[ data, tsz, nv, pb, ub, rb, ranges, names ]
 
     # the sky faces alone: positions, fan triangles

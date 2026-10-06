@@ -118,6 +118,14 @@ class World
                 tr.startsolid = true
         return tr
 
+    # gi.inPHS: the two points' clusters see each other (the PVS)
+    public func in_phs [ p1: vec3f, p2: vec3f ] -> bool
+        c1 : i32 [ bsp.cluster_at[ p1.x, p1.y, p1.z ] ]
+        c2 : i32 [ bsp.cluster_at[ p2.x, p2.y, p2.z ] ]
+        if [ c1 < 0 || c2 < 0 ] return false
+        bsp.cluster_row[ c1 ]
+        return (i32[ bsp.vis_row[ c2 >> 3 ] ] & (1 << (c2 & 7))) != 0
+
     # SV_PointContents: the world's and every solid entity's
     public func point_contents [ p: vec3f ] -> i32
         c : i32 [ bsp.point_contents[ p, bsp.headnode ] ]

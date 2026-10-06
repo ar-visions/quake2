@@ -9,8 +9,15 @@ class PakEntry
 
 # a file read out of the paks: the bytes and their count
 class PakData
-    public data : @u8
+    # a real new member: it owns the bytes
+    public data : new u8
     public size : i32
+
+# n bytes that live as long as their PakData does
+func pak_data [ n: i32 ] -> PakData
+    r : PakData [ size: n ]
+    r.data = new u8 [ n ]
+    return r
 
 func pak_i32 [ d: @u8, off: i32 ] -> i32
     v : i32 [ 0 ]
@@ -69,10 +76,10 @@ class Pak
         fseek[ f, 0, SEEK_END ]
         n : i32 [ i32[ ftell[ f ] ] ]
         fseek[ f, 0, SEEK_SET ]
-        d : new u8 [ n ]
-        fread[ d, 1, n, f ]
+        r : pak_data[ n ]
+        fread[ r.data, 1, n, f ]
         fclose[ f ]
-        return PakData [ data: d, size: n ]
+        return r
 
     # a loose file in the game folder wins over the paks
     public func read [ name: string ] -> PakData
@@ -82,8 +89,8 @@ class Pak
         if [ !e ] return null
         f : handle [ fopen[ paks[ e.pak ], "rb" ] ]
         if [ !f ] return null
-        d : new u8 [ e.size ]
+        r : pak_data[ e.size ]
         fseek[ f, e.offset, SEEK_SET ]
-        fread[ d, 1, e.size, f ]
+        fread[ r.data, 1, e.size, f ]
         fclose[ f ]
-        return PakData [ data: d, size: e.size ]
+        return r

@@ -10,32 +10,33 @@ DOOR_X_AXIS     : i32 [ 64 ]
 DOOR_Y_AXIS     : i32 [ 128 ]
 
 # ---- linear movement
-func move_done [ g: Game, e: Edict ]
+func move_done [ e: Edict ]
     e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
-    call_endfunc[ g, e ]
+    call_endfunc[ e ]
 
-func move_final [ g: Game, e: Edict ]
+func move_final [ e: Edict ]
     mi : e.moveinfo
     if [ mi.remaining_distance == 0.0 ]
-        move_done[ g, e ]
+        move_done[ e ]
         return
     e.velocity = v_scale[ mi.dir, mi.remaining_distance / FRAMETIME ]
-    e.think = Fn.move_done
+    e.think = lambda move_done[]
     e.nextthink = g.level.time + FRAMETIME
 
-func move_begin [ g: Game, e: Edict ]
+func move_begin [ e: Edict ]
     mi : e.moveinfo
     if [ mi.speed * FRAMETIME >= mi.remaining_distance ]
-        move_final[ g, e ]
+        move_final[ e ]
         return
     e.velocity = v_scale[ mi.dir, mi.speed ]
-    frames : f32 [ floor[ (mi.remaining_distance / mi.speed) / FRAMETIME ] ]
+    frames : f32 [ floor[ (mi.remaining_distance / mi.speed)
+                          / FRAMETIME ] ]
     mi.remaining_distance = mi.remaining_distance
         - frames * mi.speed * FRAMETIME
     e.nextthink = g.level.time + frames * FRAMETIME
-    e.think = Fn.move_final
+    e.think = lambda move_final[]
 
-func move_calc [ g: Game, e: Edict, dest: vec3f, endfunc: Fn ]
+func move_calc [ e: Edict, dest: vec3f, endfunc: lambda none [ Edict ] ]
     mi : e.moveinfo
     e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
     d : v_sub[ dest, e.origin ]
@@ -45,33 +46,33 @@ func move_calc [ g: Game, e: Edict, dest: vec3f, endfunc: Fn ]
     if [ mi.speed == mi.accel && mi.speed == mi.decel ]
         lead : Edict [ (e.flags & FL_TEAMSLAVE) ? e.teammaster : e ]
         if [ g.level.current_entity == lead ]
-            move_begin[ g, e ]
+            move_begin[ e ]
         el
             e.nextthink = g.level.time + FRAMETIME
-            e.think = Fn.move_begin
+            e.think = lambda move_begin[]
     el
         mi.current_speed = 0.0
-        e.think = Fn.think_accel_move
+        e.think = lambda think_accel_move[]
         e.nextthink = g.level.time + FRAMETIME
 
 # ---- angular movement
-func angle_move_done [ g: Game, e: Edict ]
+func angle_move_done [ e: Edict ]
     e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
-    call_endfunc[ g, e ]
+    call_endfunc[ e ]
 
-func angle_move_final [ g: Game, e: Edict ]
+func angle_move_final [ e: Edict ]
     mi : e.moveinfo
     move : vec3f [ (mi.state == STATE_UP)
         ? v_sub[ mi.end_angles, e.angles ]
         : v_sub[ mi.start_angles, e.angles ] ]
     if [ v_zero[ move ] ]
-        angle_move_done[ g, e ]
+        angle_move_done[ e ]
         return
     e.avelocity = v_scale[ move, 1.0 / FRAMETIME ]
-    e.think = Fn.angle_move_done
+    e.think = lambda angle_move_done[]
     e.nextthink = g.level.time + FRAMETIME
 
-func angle_move_begin [ g: Game, e: Edict ]
+func angle_move_begin [ e: Edict ]
     mi : e.moveinfo
     destdelta : vec3f [ (mi.state == STATE_UP)
         ? v_sub[ mi.end_angles, e.angles ]
@@ -79,22 +80,22 @@ func angle_move_begin [ g: Game, e: Edict ]
     len : f32 [ v_len[ destdelta ] ]
     traveltime : f32 [ len / mi.speed ]
     if [ traveltime < FRAMETIME ]
-        angle_move_final[ g, e ]
+        angle_move_final[ e ]
         return
     frames : f32 [ floor[ traveltime / FRAMETIME ] ]
     e.avelocity = v_scale[ destdelta, 1.0 / traveltime ]
     e.nextthink = g.level.time + frames * FRAMETIME
-    e.think = Fn.angle_move_final
+    e.think = lambda angle_move_final[]
 
-func angle_move_calc [ g: Game, e: Edict, endfunc: Fn ]
+func angle_move_calc [ e: Edict, endfunc: lambda none [ Edict ] ]
     e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
     e.moveinfo.endfunc = endfunc
     lead : Edict [ (e.flags & FL_TEAMSLAVE) ? e.teammaster : e ]
     if [ g.level.current_entity == lead ]
-        angle_move_begin[ g, e ]
+        angle_move_begin[ e ]
     el
         e.nextthink = g.level.time + FRAMETIME
-        e.think = Fn.angle_move_begin
+        e.think = lambda angle_move_begin[]
 
 # ---- accelerated movement (plats, doors with accel or decel)
 func accel_distance [ target: f32, rate: f32 ] -> f32
@@ -125,7 +126,8 @@ func plat_accelerate [ mi: MoveInfo ]
                 mi.current_speed = mi.current_speed - mi.decel
         return
     if [ mi.current_speed == mi.move_speed ]
-        if [ mi.remaining_distance - mi.current_speed < mi.decel_distance ]
+        if [ mi.remaining_distance - mi.current_speed
+             < mi.decel_distance ]
             p1 : f32 [ mi.remaining_distance - mi.decel_distance ]
             p2 : f32 [ mi.move_speed * (1.0 - p1 / mi.move_speed) ]
             distance : f32 [ p1 + p2 ]
@@ -136,7 +138,8 @@ func plat_accelerate [ mi: MoveInfo ]
         old_speed : f32 [ mi.current_speed ]
         mi.current_speed = mi.current_speed + mi.accel
         if [ mi.current_speed > mi.speed ] mi.current_speed = mi.speed
-        if [ mi.remaining_distance - mi.current_speed >= mi.decel_distance ]
+        if [ mi.remaining_distance - mi.current_speed
+             >= mi.decel_distance ]
             return
         p1 : f32 [ mi.remaining_distance - mi.decel_distance ]
         p1_speed : f32 [ (old_speed + mi.move_speed) / 2.0 ]
@@ -146,25 +149,23 @@ func plat_accelerate [ mi: MoveInfo ]
             + mi.move_speed * (p2 / distance)
         mi.next_speed = mi.move_speed - mi.decel * (p2 / distance)
 
-func think_accel_move [ g: Game, e: Edict ]
+func think_accel_move [ e: Edict ]
     mi : e.moveinfo
     mi.remaining_distance = mi.remaining_distance - mi.current_speed
     if [ mi.current_speed == 0.0 ] plat_calc_accelerated_move[ mi ]
     plat_accelerate[ mi ]
     if [ mi.remaining_distance <= mi.current_speed ]
-        move_final[ g, e ]
+        move_final[ e ]
         return
     e.velocity = v_scale[ mi.dir, mi.current_speed * 10.0 ]
     e.nextthink = g.level.time + FRAMETIME
-    e.think = Fn.think_accel_move
+    e.think = lambda think_accel_move[]
 
-func call_endfunc [ g: Game, e: Edict ]
-    fn : Fn [ e.moveinfo.endfunc ]
-    if [ fn == Fn.none ] return
-    g.call_think[ fn, e ]
+func call_endfunc [ e: Edict ]
+    if [ e.moveinfo.endfunc ] e.moveinfo.endfunc[ e ]
 
 # ---- doors
-func door_use_areaportals [ g: Game, e: Edict, open: bool ]
+func door_use_areaportals [ e: Edict, open: bool ]
     if [ !e.target ] return
     t : Edict [ null ]
     while [ true ]
@@ -173,64 +174,67 @@ func door_use_areaportals [ g: Game, e: Edict, open: bool ]
         if [ t.classname == 'func_areaportal' ]
             g.set_areaportal[ t.style, open ]
 
-func door_hit_top [ g: Game, e: Edict ]
+func door_hit_top [ e: Edict ]
     if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
     e.moveinfo.state = STATE_TOP
     if [ e.spawnflags & DOOR_TOGGLE ] return
     if [ e.moveinfo.wait >= 0.0 ]
-        e.think = Fn.door_go_down
+        e.think = lambda door_go_down[]
         e.nextthink = g.level.time + e.moveinfo.wait
 
-func door_hit_bottom [ g: Game, e: Edict ]
+func door_hit_bottom [ e: Edict ]
     if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
     e.moveinfo.state = STATE_BOTTOM
-    door_use_areaportals[ g, e, false ]
+    door_use_areaportals[ e, false ]
 
-func door_go_down [ g: Game, e: Edict ]
-    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = e.moveinfo.sound_middle
+func door_go_down [ e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ]
+        e.sound = e.moveinfo.sound_middle
     if [ e.max_health != 0 ]
         e.takedamage = DAMAGE_YES
         e.health = e.max_health
     e.moveinfo.state = STATE_DOWN
     if [ e.classname == 'func_door' ]
-        move_calc[ g, e, e.moveinfo.start_origin, Fn.door_hit_bottom ]
+        move_calc[ e, e.moveinfo.start_origin, lambda door_hit_bottom[] ]
     el [ e.classname == 'func_door_rotating' ]
-        angle_move_calc[ g, e, Fn.door_hit_bottom ]
+        angle_move_calc[ e, lambda door_hit_bottom[] ]
 
-func door_go_up [ g: Game, e: Edict, activator: Edict ]
+func door_go_up [ e: Edict, activator: Edict ]
     if [ e.moveinfo.state == STATE_UP ] return
     if [ e.moveinfo.state == STATE_TOP ]
         if [ e.moveinfo.wait >= 0.0 ]
             e.nextthink = g.level.time + e.moveinfo.wait
         return
-    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = e.moveinfo.sound_middle
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ]
+        e.sound = e.moveinfo.sound_middle
     e.moveinfo.state = STATE_UP
     if [ e.classname == 'func_door' ]
-        move_calc[ g, e, e.moveinfo.end_origin, Fn.door_hit_top ]
+        move_calc[ e, e.moveinfo.end_origin, lambda door_hit_top[] ]
     el [ e.classname == 'func_door_rotating' ]
-        angle_move_calc[ g, e, Fn.door_hit_top ]
+        angle_move_calc[ e, lambda door_hit_top[] ]
     g.use_targets[ e, activator ]
-    door_use_areaportals[ g, e, true ]
+    door_use_areaportals[ e, true ]
 
-func door_use [ g: Game, e: Edict, other: Edict, activator: Edict ]
+func door_use [ e: Edict, other: Edict, activator: Edict ]
     if [ e.flags & FL_TEAMSLAVE ] return
     if [ e.spawnflags & DOOR_TOGGLE ]
-        if [ e.moveinfo.state == STATE_UP || e.moveinfo.state == STATE_TOP ]
-            ent : Edict [ e ]
+        if [ e.moveinfo.state == STATE_UP
+             || e.moveinfo.state == STATE_TOP ]
+            ent : e
             while [ ent ]
                 ent.message = null
-                ent.touch = Fn.none
-                door_go_down[ g, ent ]
+                ent.touch = null
+                door_go_down[ ent ]
                 ent = ent.teamchain
             return
-    ent : Edict [ e ]
+    ent : e
     while [ ent ]
         ent.message = null
-        ent.touch = Fn.none
-        door_go_up[ g, ent, activator ]
+        ent.touch = null
+        door_go_up[ ent, activator ]
         ent = ent.teamchain
 
-func touch_door_trigger [ g: Game, e: Edict, other: Edict ]
+func touch_door_trigger [ e: Edict, other: Edict ]
     if [ other.health <= 0 ] return
     if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ] return
     if [ (e.owner.spawnflags & DOOR_NOMONSTER) != 0 &&
@@ -238,13 +242,13 @@ func touch_door_trigger [ g: Game, e: Edict, other: Edict ]
         return
     if [ g.level.time < e.touch_debounce_time ] return
     e.touch_debounce_time = g.level.time + 1.0
-    door_use[ g, e.owner, other, other ]
+    door_use[ e.owner, other, other ]
 
 # every door of a team finishes its move at the same moment
-func think_calc_move_speed [ g: Game, e: Edict ]
+func think_calc_move_speed [ e: Edict ]
     if [ e.flags & FL_TEAMSLAVE ] return
     min : f32 [ fabs[ e.moveinfo.distance ] ]
-    ent : Edict [ e.teamchain ]
+    ent : e.teamchain
     while [ ent ]
         dist : f32 [ fabs[ ent.moveinfo.distance ] ]
         if [ dist < min ] min = dist
@@ -263,18 +267,18 @@ func think_calc_move_speed [ g: Game, e: Edict ]
         ent = ent.teamchain
 
 # the trigger field round a door team, 60 units out to the sides
-func think_spawn_door_trigger [ g: Game, e: Edict ]
+func think_spawn_door_trigger [ e: Edict ]
     if [ e.flags & FL_TEAMSLAVE ] return
     mins : vec3f [ e.absmin ]
     maxs : vec3f [ e.absmax ]
-    other : Edict [ e.teamchain ]
+    other : e.teamchain
     while [ other ]
-        mins = vec3f [ (other.absmin.x < mins.x) ? other.absmin.x : mins.x,
-                       (other.absmin.y < mins.y) ? other.absmin.y : mins.y,
-                       (other.absmin.z < mins.z) ? other.absmin.z : mins.z ]
-        maxs = vec3f [ (other.absmax.x > maxs.x) ? other.absmax.x : maxs.x,
-                       (other.absmax.y > maxs.y) ? other.absmax.y : maxs.y,
-                       (other.absmax.z > maxs.z) ? other.absmax.z : maxs.z ]
+        mins = vec3f [ min[ other.absmin.x, mins.x ],
+                       min[ other.absmin.y, mins.y ],
+                       min[ other.absmin.z, mins.z ] ]
+        maxs = vec3f [ max[ other.absmax.x, maxs.x ],
+                       max[ other.absmax.y, maxs.y ],
+                       max[ other.absmax.z, maxs.z ] ]
         other = other.teamchain
     mins = vec3f [ mins.x - 60.0, mins.y - 60.0, mins.z ]
     maxs = vec3f [ maxs.x + 60.0, maxs.y + 60.0, maxs.z ]
@@ -284,47 +288,53 @@ func think_spawn_door_trigger [ g: Game, e: Edict ]
     other.owner = e
     other.solid = SOLID_TRIGGER
     other.movetype = MOVETYPE_NONE
-    other.touch = Fn.touch_door_trigger
+    other.touch = lambda touch_door_trigger[]
     g.world.link[ other ]
-    if [ e.spawnflags & DOOR_START_OPEN ] door_use_areaportals[ g, e, true ]
-    think_calc_move_speed[ g, e ]
+    if [ e.spawnflags & DOOR_START_OPEN ]
+        door_use_areaportals[ e, true ]
+    think_calc_move_speed[ e ]
 
-func door_blocked [ g: Game, e: Edict, other: Edict ]
+func door_blocked [ e: Edict, other: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
     if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ]
-        # T_Damage and BecomeExplosion1: the combat port's
+        t_damage[ other, e, e, zero, other.origin, zero, 100000, 1, 0,
+                  MOD_CRUSH ]
+        if [ other.inuse ] become_explosion1[ other ]
         return
-    # T_Damage dmg to the blocker: the combat port's
+    t_damage[ other, e, e, zero, other.origin, zero, e.dmg, 1, 0, MOD_CRUSH ]
     if [ e.spawnflags & DOOR_CRUSHER ] return
     if [ e.moveinfo.wait >= 0.0 ]
         if [ e.moveinfo.state == STATE_DOWN ]
-            ent : Edict [ e.teammaster ]
+            ent : e.teammaster
             while [ ent ]
-                door_go_up[ g, ent, ent.activator ]
+                door_go_up[ ent, ent.activator ]
                 ent = ent.teamchain
         el
-            ent : Edict [ e.teammaster ]
+            ent : e.teammaster
             while [ ent ]
-                door_go_down[ g, ent ]
+                door_go_down[ ent ]
                 ent = ent.teamchain
 
-func door_touch [ g: Game, e: Edict, other: Edict ]
+func door_touch [ e: Edict, other: Edict ]
     if [ !other.client ] return
     if [ g.level.time < e.touch_debounce_time ] return
     e.touch_debounce_time = g.level.time + 5.0
-    g.dprintf[ 'centerprint: {e.message}' ]
+    g.centerprintf[ other, e.message ]
+    g.sound[ other, CHAN_AUTO, g.soundindex[ 'misc/talk.wav' ], 1.0,
+             ATTN_NORM ]
 
-func sp_func_door [ g: Game, e: Edict ]
+func sp_func_door [ e: Edict ]
     mi : e.moveinfo
     if [ e.sounds != 1 ]
-        mi.sound_start  = 1
-        mi.sound_middle = 2
-        mi.sound_end    = 3
+        mi.sound_start  = g.soundindex[ 'doors/dr1_strt.wav' ]
+        mi.sound_middle = g.soundindex[ 'doors/dr1_mid.wav' ]
+        mi.sound_end    = g.soundindex[ 'doors/dr1_end.wav' ]
     g.set_movedir[ e ]
     e.movetype = MOVETYPE_PUSH
     e.solid = SOLID_BSP
     g.setmodel[ e, e.model ]
-    e.blocked = Fn.door_blocked
-    e.use = Fn.door_use
+    e.blocked = lambda door_blocked[]
+    e.use = lambda door_use[]
     if [ e.speed == 0.0 ] e.speed = 100.0
     if [ g.deathmatch ] e.speed = e.speed * 2.0
     if [ e.accel == 0.0 ] e.accel = e.speed
@@ -345,9 +355,10 @@ func sp_func_door [ g: Game, e: Edict ]
     mi.state = STATE_BOTTOM
     if [ e.health != 0 ]
         e.takedamage = DAMAGE_YES
+        e.die = lambda door_killed[]
         e.max_health = e.health
     el
-        if [ e.targetname && e.message ] e.touch = Fn.door_touch
+        if [ e.targetname && e.message ] e.touch = lambda door_touch[]
     mi.speed = e.speed
     mi.accel = e.accel
     mi.decel = e.decel
@@ -360,11 +371,11 @@ func sp_func_door [ g: Game, e: Edict ]
     g.world.link[ e ]
     e.nextthink = g.level.time + FRAMETIME
     if [ e.health != 0 || e.targetname ]
-        e.think = Fn.think_calc_move_speed
+        e.think = lambda think_calc_move_speed[]
     el
-        e.think = Fn.think_spawn_door_trigger
+        e.think = lambda think_spawn_door_trigger[]
 
-func sp_func_door_rotating [ g: Game, e: Edict ]
+func sp_func_door_rotating [ e: Edict ]
     mi : e.moveinfo
     e.angles = vec3f [ 0.0, 0.0, 0.0 ]
     # the axis of rotation
@@ -385,17 +396,17 @@ func sp_func_door_rotating [ g: Game, e: Edict ]
     e.movetype = MOVETYPE_PUSH
     e.solid = SOLID_BSP
     g.setmodel[ e, e.model ]
-    e.blocked = Fn.door_blocked
-    e.use = Fn.door_use
+    e.blocked = lambda door_blocked[]
+    e.use = lambda door_use[]
     if [ e.speed == 0.0 ] e.speed = 100.0
     if [ e.accel == 0.0 ] e.accel = e.speed
     if [ e.decel == 0.0 ] e.decel = e.speed
     if [ e.wait == 0.0 ] e.wait = 3.0
     if [ e.dmg == 0 ] e.dmg = 2
     if [ e.sounds != 1 ]
-        mi.sound_start  = 1
-        mi.sound_middle = 2
-        mi.sound_end    = 3
+        mi.sound_start  = g.soundindex[ 'doors/dr1_strt.wav' ]
+        mi.sound_middle = g.soundindex[ 'doors/dr1_mid.wav' ]
+        mi.sound_end    = g.soundindex[ 'doors/dr1_end.wav' ]
     if [ e.spawnflags & DOOR_START_OPEN ]
         e.angles = e.pos2
         e.pos2 = e.pos1
@@ -403,8 +414,9 @@ func sp_func_door_rotating [ g: Game, e: Edict ]
         e.movedir = v_neg[ e.movedir ]
     if [ e.health != 0 ]
         e.takedamage = DAMAGE_YES
+        e.die = lambda door_killed[]
         e.max_health = e.health
-    if [ e.targetname && e.message ] e.touch = Fn.door_touch
+    if [ e.targetname && e.message ] e.touch = lambda door_touch[]
     mi.state = STATE_BOTTOM
     mi.speed = e.speed
     mi.accel = e.accel
@@ -418,6 +430,607 @@ func sp_func_door_rotating [ g: Game, e: Edict ]
     g.world.link[ e ]
     e.nextthink = g.level.time + FRAMETIME
     if [ e.health != 0 || e.targetname ]
-        e.think = Fn.think_calc_move_speed
+        e.think = lambda think_calc_move_speed[]
     el
-        e.think = Fn.think_spawn_door_trigger
+        e.think = lambda think_spawn_door_trigger[]
+
+# ---- plats
+PLAT_LOW_TRIGGER : i32 [ 1 ]
+
+func plat_hit_top [ e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
+    e.moveinfo.state = STATE_TOP
+    e.think = lambda plat_go_down[]
+    e.nextthink = g.level.time + 3.0
+
+func plat_hit_bottom [ e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
+    e.moveinfo.state = STATE_BOTTOM
+
+func plat_go_down [ e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ]
+        e.sound = e.moveinfo.sound_middle
+    e.moveinfo.state = STATE_DOWN
+    move_calc[ e, e.moveinfo.end_origin, lambda plat_hit_bottom[] ]
+
+func plat_go_up [ e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ]
+        e.sound = e.moveinfo.sound_middle
+    e.moveinfo.state = STATE_UP
+    move_calc[ e, e.moveinfo.start_origin, lambda plat_hit_top[] ]
+
+func plat_blocked [ e: Edict, other: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ]
+        # give it a chance to go away on it's own terms (like gibs)
+        t_damage[ other, e, e, zero, other.origin, zero, 100000, 1, 0,
+                  MOD_CRUSH ]
+        # if it's still there, nuke it
+        if [ other.inuse ] become_explosion1[ other ]
+        return
+    t_damage[ other, e, e, zero, other.origin, zero, e.dmg, 1, 0, MOD_CRUSH ]
+    if [ e.moveinfo.state == STATE_UP ]        plat_go_down[ e ]
+    el [ e.moveinfo.state == STATE_DOWN ]      plat_go_up[ e ]
+
+func use_plat [ e: Edict ]
+    if [ e.think ] return
+    plat_go_down[ e ]
+
+func touch_plat_center [ e: Edict, other: Edict ]
+    if [ !other.client ] return
+    if [ other.health <= 0 ] return
+    plat : e.enemy
+    if [ plat.moveinfo.state == STATE_BOTTOM ]
+        plat_go_up[ plat ]
+    el [ plat.moveinfo.state == STATE_TOP ]
+        # the player is still on the plat: going down waits
+        plat.nextthink = g.level.time + 1.0
+
+# the "start moving" trigger inside the plat's travel
+func plat_spawn_inside_trigger [ e: Edict ]
+    trigger : g.spawn[]
+    trigger.touch = lambda touch_plat_center[]
+    trigger.movetype = MOVETYPE_NONE
+    trigger.solid = SOLID_TRIGGER
+    trigger.enemy = e
+    mn_x : f32 [ e.mins.x + 25.0 ]
+    mn_y : f32 [ e.mins.y + 25.0 ]
+    mx_x : f32 [ e.maxs.x - 25.0 ]
+    mx_y : f32 [ e.maxs.y - 25.0 ]
+    mx_z : f32 [ e.maxs.z + 8.0 ]
+    mn_z : f32 [ mx_z - (e.pos1.z - e.pos2.z + f32[ g.st.lip ]) ]
+    if [ e.spawnflags & PLAT_LOW_TRIGGER ] mx_z = mn_z + 8.0
+    if [ mx_x - mn_x <= 0.0 ]
+        mn_x = (e.mins.x + e.maxs.x) * 0.5
+        mx_x = mn_x + 1.0
+    if [ mx_y - mn_y <= 0.0 ]
+        mn_y = (e.mins.y + e.maxs.y) * 0.5
+        mx_y = mn_y + 1.0
+    trigger.mins = vec3f [ mn_x, mn_y, mn_z ]
+    trigger.maxs = vec3f [ mx_x, mx_y, mx_z ]
+    g.world.link[ trigger ]
+
+func sp_func_plat [ e: Edict ]
+    mi : e.moveinfo
+    e.angles = vec3f [ 0.0, 0.0, 0.0 ]
+    e.solid = SOLID_BSP
+    e.movetype = MOVETYPE_PUSH
+    g.setmodel[ e, e.model ]
+    e.blocked = lambda plat_blocked[]
+    if [ e.speed == 0.0 ] e.speed = 20.0
+    el                    e.speed = e.speed * 0.1
+    if [ e.accel == 0.0 ] e.accel = 5.0
+    el                    e.accel = e.accel * 0.1
+    if [ e.decel == 0.0 ] e.decel = 5.0
+    el                    e.decel = e.decel * 0.1
+    if [ e.dmg == 0 ] e.dmg = 2
+    if [ g.st.lip == 0 ] g.st.lip = 8
+    # pos1 is the top position, pos2 the bottom
+    e.pos1 = e.origin
+    drop : f32 [ (g.st.height != 0) ? f32[ g.st.height ]
+        : (e.maxs.z - e.mins.z) - f32[ g.st.lip ] ]
+    e.pos2 = vec3f [ e.origin.x, e.origin.y, e.origin.z - drop ]
+    e.use = lambda use_plat[]
+    plat_spawn_inside_trigger[ e ]
+    if [ e.targetname ]
+        mi.state = STATE_UP
+    el
+        e.origin = e.pos2
+        g.world.link[ e ]
+        mi.state = STATE_BOTTOM
+    mi.speed = e.speed
+    mi.accel = e.accel
+    mi.decel = e.decel
+    mi.wait  = e.wait
+    mi.start_origin = e.pos1
+    mi.start_angles = e.angles
+    mi.end_origin   = e.pos2
+    mi.end_angles   = e.angles
+    mi.sound_start  = g.soundindex[ 'plats/pt1_strt.wav' ]
+    mi.sound_middle = g.soundindex[ 'plats/pt1_mid.wav' ]
+    mi.sound_end    = g.soundindex[ 'plats/pt1_end.wav' ]
+
+# ---- buttons
+EF_ANIM01 : i32 [ 1024 ]
+EF_ANIM23 : i32 [ 2048 ]
+
+func button_done [ e: Edict ]
+    e.moveinfo.state = STATE_BOTTOM
+    e.effects = (e.effects & ~EF_ANIM23) | EF_ANIM01
+
+func button_return [ e: Edict ]
+    e.moveinfo.state = STATE_DOWN
+    move_calc[ e, e.moveinfo.start_origin, lambda button_done[] ]
+    e.frame = 0
+    if [ e.health != 0 ] e.takedamage = DAMAGE_YES
+
+func button_wait [ e: Edict ]
+    e.moveinfo.state = STATE_TOP
+    e.effects = (e.effects & ~EF_ANIM01) | EF_ANIM23
+    g.use_targets[ e, e.activator ]
+    e.frame = 1
+    if [ e.moveinfo.wait >= 0.0 ]
+        e.nextthink = g.level.time + e.moveinfo.wait
+        e.think = lambda button_return[]
+
+func button_fire [ e: Edict ]
+    if [ e.moveinfo.state == STATE_UP || e.moveinfo.state == STATE_TOP ]
+        return
+    e.moveinfo.state = STATE_UP
+    move_calc[ e, e.moveinfo.end_origin, lambda button_wait[] ]
+
+func button_use [ e: Edict, other: Edict, activator: Edict ]
+    e.activator = activator
+    button_fire[ e ]
+
+func button_touch [ e: Edict, other: Edict ]
+    if [ !other.client ] return
+    if [ other.health <= 0 ] return
+    e.activator = other
+    button_fire[ e ]
+
+func button_killed [ e: Edict, attacker: Edict ]
+    e.activator = attacker
+    e.health = e.max_health
+    e.takedamage = DAMAGE_NO
+    button_fire[ e ]
+
+func sp_func_button [ e: Edict ]
+    mi : e.moveinfo
+    g.set_movedir[ e ]
+    e.movetype = MOVETYPE_STOP
+    e.solid = SOLID_BSP
+    g.setmodel[ e, e.model ]
+    if [ e.sounds != 1 ] mi.sound_start = g.soundindex[ 'switches/butn2.wav' ]
+    if [ e.speed == 0.0 ] e.speed = 40.0
+    if [ e.accel == 0.0 ] e.accel = e.speed
+    if [ e.decel == 0.0 ] e.decel = e.speed
+    if [ e.wait == 0.0 ] e.wait = 3.0
+    if [ g.st.lip == 0 ] g.st.lip = 4
+    e.pos1 = e.origin
+    dist : f32 [ fabs[ e.movedir.x ] * e.size.x
+        + fabs[ e.movedir.y ] * e.size.y
+        + fabs[ e.movedir.z ] * e.size.z - f32[ g.st.lip ] ]
+    e.pos2 = v_ma[ e.pos1, dist, e.movedir ]
+    e.use = lambda button_use[]
+    e.effects = e.effects | EF_ANIM01
+    if [ e.health != 0 ]
+        e.max_health = e.health
+        e.die = lambda button_killed[]
+        e.takedamage = DAMAGE_YES
+    el [ !e.targetname ]
+        e.touch = lambda button_touch[]
+    mi.state = STATE_BOTTOM
+    mi.speed = e.speed
+    mi.accel = e.accel
+    mi.decel = e.decel
+    mi.wait  = e.wait
+    mi.start_origin = e.pos1
+    mi.start_angles = e.angles
+    mi.end_origin   = e.pos2
+    mi.end_angles   = e.angles
+    g.world.link[ e ]
+
+# ---- trains
+TRAIN_START_ON    : i32 [ 1 ]
+TRAIN_TOGGLE      : i32 [ 2 ]
+TRAIN_BLOCK_STOPS : i32 [ 4 ]
+EV_OTHER_TELEPORT : i32 [ 7 ]
+
+func train_blocked [ e: Edict, other: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ]
+        t_damage[ other, e, e, zero, other.origin, zero, 100000, 1, 0,
+                  MOD_CRUSH ]
+        if [ other.inuse ] become_explosion1[ other ]
+        return
+    if [ g.level.time < e.touch_debounce_time ] return
+    if [ e.dmg == 0 ] return
+    e.touch_debounce_time = g.level.time + 0.5
+    t_damage[ other, e, e, zero, other.origin, zero, e.dmg, 1, 0, MOD_CRUSH ]
+
+func train_wait [ e: Edict ]
+    if [ e.target_ent.pathtarget ]
+        ent : e.target_ent
+        savetarget : string [ ent.target ]
+        ent.target = ent.pathtarget
+        g.use_targets[ ent, e.activator ]
+        ent.target = savetarget
+        # a killtarget may have taken the train itself
+        if [ !e.inuse ] return
+    if [ e.moveinfo.wait != 0.0 ]
+        if [ e.moveinfo.wait > 0.0 ]
+            e.nextthink = g.level.time + e.moveinfo.wait
+            e.think = lambda train_next[]
+        el [ e.spawnflags & TRAIN_TOGGLE ]
+            train_next[ e ]
+            e.spawnflags = e.spawnflags & ~TRAIN_START_ON
+            e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+            e.nextthink = 0.0
+        if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
+    el
+        train_next[ e ]
+
+func train_next [ e: Edict ]
+    first : bool [ true ]
+    ent : Edict [ null ]
+    while [ true ]
+        if [ !e.target ] return
+        ent = g.pick_target[ e.target ]
+        if [ !ent ]
+            g.dprintf[ 'train_next: bad target {e.target}' ]
+            return
+        e.target = ent.target
+        if [ (ent.spawnflags & 1) == 0 ] break
+        # a teleport path_corner: appear there, take the next
+        if [ !first ]
+            g.dprintf[ 'connected teleport path_corners, see {ent.classname}' ]
+            return
+        first = false
+        e.origin = v_sub[ ent.origin, e.mins ]
+        e.old_origin = e.origin
+        e.event = EV_OTHER_TELEPORT
+        g.world.link[ e ]
+    e.moveinfo.wait = ent.wait
+    e.target_ent = ent
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ]
+        e.sound = e.moveinfo.sound_middle
+    dest : v_sub[ ent.origin, e.mins ]
+    e.moveinfo.state = STATE_TOP
+    e.moveinfo.start_origin = e.origin
+    e.moveinfo.end_origin = dest
+    move_calc[ e, dest, lambda train_wait[] ]
+    e.spawnflags = e.spawnflags | TRAIN_START_ON
+
+func train_resume [ e: Edict ]
+    ent : e.target_ent
+    dest : v_sub[ ent.origin, e.mins ]
+    e.moveinfo.state = STATE_TOP
+    e.moveinfo.start_origin = e.origin
+    e.moveinfo.end_origin = dest
+    move_calc[ e, dest, lambda train_wait[] ]
+    e.spawnflags = e.spawnflags | TRAIN_START_ON
+
+func func_train_find [ e: Edict ]
+    if [ !e.target ]
+        g.dprintf[ 'train_find: no target' ]
+        return
+    ent : g.pick_target[ e.target ]
+    if [ !ent ]
+        g.dprintf[ 'train_find: target {e.target} not found' ]
+        return
+    e.target = ent.target
+    e.origin = v_sub[ ent.origin, e.mins ]
+    g.world.link[ e ]
+    # not triggered: start at once
+    if [ !e.targetname ] e.spawnflags = e.spawnflags | TRAIN_START_ON
+    if [ e.spawnflags & TRAIN_START_ON ]
+        e.nextthink = g.level.time + FRAMETIME
+        e.think = lambda train_next[]
+        e.activator = e
+
+func train_use [ e: Edict, other: Edict, activator: Edict ]
+    e.activator = activator
+    if [ e.spawnflags & TRAIN_START_ON ]
+        if [ (e.spawnflags & TRAIN_TOGGLE) == 0 ] return
+        e.spawnflags = e.spawnflags & ~TRAIN_START_ON
+        e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+        e.nextthink = 0.0
+    el
+        if [ e.target_ent ] train_resume[ e ]
+        el                  train_next[ e ]
+
+func sp_func_train [ e: Edict ]
+    mi : e.moveinfo
+    e.movetype = MOVETYPE_PUSH
+    e.angles = vec3f [ 0.0, 0.0, 0.0 ]
+    e.blocked = lambda train_blocked[]
+    if [ e.spawnflags & TRAIN_BLOCK_STOPS ] e.dmg = 0
+    el [ e.dmg == 0 ]                       e.dmg = 100
+    e.solid = SOLID_BSP
+    g.setmodel[ e, e.model ]
+    if [ g.st.noise ] mi.sound_middle = g.soundindex[ g.st.noise ]
+    if [ e.speed == 0.0 ] e.speed = 100.0
+    mi.speed = e.speed
+    mi.accel = e.speed
+    mi.decel = e.speed
+    e.use = lambda train_use[]
+    g.world.link[ e ]
+    if [ e.target ]
+        # the second frame: its targets have spawned by then
+        e.nextthink = g.level.time + FRAMETIME
+        e.think = lambda func_train_find[]
+    el
+        g.dprintf[ 'func_train without a target' ]
+
+# ---- doors shot open
+func door_killed [ e: Edict, attacker: Edict ]
+    ent : e.teammaster
+    while [ ent ]
+        ent.health = ent.max_health
+        ent.takedamage = DAMAGE_NO
+        ent = ent.teamchain
+    door_use[ e.teammaster, attacker, attacker ]
+
+# ---- rotating
+EF_ANIM_ALL     : i32 [ 4096 ]
+EF_ANIM_ALLFAST : i32 [ 8192 ]
+
+func rotating_blocked [ e: Edict, other: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    t_damage[ other, e, e, zero, other.origin, zero, e.dmg, 1, 0, MOD_CRUSH ]
+
+func rotating_touch [ e: Edict, other: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ !v_zero[ e.avelocity ] ]
+        t_damage[ other, e, e, zero, other.origin, zero, e.dmg, 1, 0,
+                  MOD_CRUSH ]
+
+func rotating_use [ e: Edict, other: Edict, activator: Edict ]
+    if [ !v_zero[ e.avelocity ] ]
+        e.sound = 0
+        e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
+        e.touch = null
+    el
+        e.sound = e.moveinfo.sound_middle
+        e.avelocity = v_scale[ e.movedir, e.speed ]
+        if [ e.spawnflags & 16 ] e.touch = lambda rotating_touch[]
+
+func sp_func_rotating [ e: Edict ]
+    e.solid = SOLID_BSP
+    e.movetype = (e.spawnflags & 32) ? MOVETYPE_STOP : MOVETYPE_PUSH
+    # the axis of rotation
+    if [ e.spawnflags & 4 ]      e.movedir = vec3f [ 0.0, 0.0, 1.0 ]
+    el [ e.spawnflags & 8 ]      e.movedir = vec3f [ 1.0, 0.0, 0.0 ]
+    el                           e.movedir = vec3f [ 0.0, 1.0, 0.0 ]
+    if [ e.spawnflags & 2 ] e.movedir = v_neg[ e.movedir ]
+    if [ e.speed == 0.0 ] e.speed = 100.0
+    if [ e.dmg == 0 ] e.dmg = 2
+    e.use = lambda rotating_use[]
+    if [ e.dmg != 0 ] e.blocked = lambda rotating_blocked[]
+    if [ e.spawnflags & 1 ] rotating_use[ e, null, null ]
+    if [ e.spawnflags & 64 ]  e.effects = e.effects | EF_ANIM_ALL
+    if [ e.spawnflags & 128 ] e.effects = e.effects | EF_ANIM_ALLFAST
+    g.setmodel[ e, e.model ]
+    g.world.link[ e ]
+
+# ---- water: a door that is a water brush
+func sp_func_water [ e: Edict ]
+    mi : e.moveinfo
+    g.set_movedir[ e ]
+    e.movetype = MOVETYPE_PUSH
+    e.solid = SOLID_BSP
+    g.setmodel[ e, e.model ]
+    if [ e.sounds == 1 || e.sounds == 2 ]
+        mi.sound_start = g.soundindex[ 'world/mov_watr.wav' ]
+        mi.sound_end   = g.soundindex[ 'world/stp_watr.wav' ]
+    e.pos1 = e.origin
+    mi.distance = fabs[ e.movedir.x ] * e.size.x
+        + fabs[ e.movedir.y ] * e.size.y
+        + fabs[ e.movedir.z ] * e.size.z - f32[ g.st.lip ]
+    e.pos2 = v_ma[ e.pos1, mi.distance, e.movedir ]
+    if [ e.spawnflags & DOOR_START_OPEN ]
+        e.origin = e.pos2
+        e.pos2 = e.pos1
+        e.pos1 = e.origin
+    mi.start_origin = e.pos1
+    mi.start_angles = e.angles
+    mi.end_origin   = e.pos2
+    mi.end_angles   = e.angles
+    mi.state = STATE_BOTTOM
+    if [ e.speed == 0.0 ] e.speed = 25.0
+    mi.speed = e.speed
+    mi.accel = e.speed
+    mi.decel = e.speed
+    if [ e.wait == 0.0 ] e.wait = -1.0
+    mi.wait = e.wait
+    e.use = lambda door_use[]
+    if [ e.wait == -1.0 ] e.spawnflags = e.spawnflags | DOOR_TOGGLE
+    e.classname = 'func_door'
+    g.world.link[ e ]
+
+# ---- trigger_elevator: a train sent to a corner on use
+func trigger_elevator_use [ e: Edict, other: Edict,
+                            activator: Edict ]
+    if [ e.movetarget.nextthink != 0.0 ] return
+    if [ !other.pathtarget ]
+        g.dprintf[ 'elevator used with no pathtarget' ]
+        return
+    target : g.pick_target[ other.pathtarget ]
+    if [ !target ]
+        g.dprintf[ 'elevator used with bad pathtarget: {other.pathtarget}' ]
+        return
+    e.movetarget.target_ent = target
+    train_resume[ e.movetarget ]
+
+func trigger_elevator_init [ e: Edict ]
+    if [ !e.target ]
+        g.dprintf[ 'trigger_elevator has no target' ]
+        return
+    e.movetarget = g.pick_target[ e.target ]
+    if [ !e.movetarget ]
+        g.dprintf[ 'trigger_elevator unable to find target {e.target}' ]
+        return
+    if [ e.movetarget.classname != 'func_train' ]
+        g.dprintf[ 'trigger_elevator target {e.target} is not a train' ]
+        return
+    e.use = lambda trigger_elevator_use[]
+    e.svflags = SVF_NOCLIENT
+
+func sp_trigger_elevator [ e: Edict ]
+    e.think = lambda trigger_elevator_init[]
+    e.nextthink = g.level.time + FRAMETIME
+
+# ---- timer
+func func_timer_think [ e: Edict ]
+    g.use_targets[ e, e.activator ]
+    e.nextthink = g.level.time + e.wait + crandom[] * e.random
+
+func func_timer_use [ e: Edict, other: Edict,
+                      activator: Edict ]
+    e.activator = activator
+    # on: turn it off
+    if [ e.nextthink != 0.0 ]
+        e.nextthink = 0.0
+        return
+    if [ e.delay != 0.0 ] e.nextthink = g.level.time + e.delay
+    el                    func_timer_think[ e ]
+
+func sp_func_timer [ e: Edict ]
+    if [ e.wait == 0.0 ] e.wait = 1.0
+    e.use = lambda func_timer_use[]
+    e.think = lambda func_timer_think[]
+    if [ e.random >= e.wait ]
+        e.random = e.wait - FRAMETIME
+        g.dprintf[ 'func_timer has random >= wait' ]
+    if [ e.spawnflags & 1 ]
+        e.nextthink = g.level.time + 1.0 + g.st.pausetime + e.delay
+            + e.wait + crandom[] * e.random
+        e.activator = e
+    e.svflags = SVF_NOCLIENT
+
+# ---- conveyor: its current content moves what stands on it
+func func_conveyor_use [ e: Edict, other: Edict,
+                         activator: Edict ]
+    if [ e.spawnflags & 1 ]
+        e.speed = 0.0
+        e.spawnflags = e.spawnflags & ~1
+    el
+        e.speed = f32[ e.count ]
+        e.spawnflags = e.spawnflags | 1
+    if [ (e.spawnflags & 2) == 0 ] e.count = 0
+
+func sp_func_conveyor [ e: Edict ]
+    if [ e.speed == 0.0 ] e.speed = 100.0
+    if [ (e.spawnflags & 1) == 0 ]
+        e.count = i32[ e.speed ]
+        e.speed = 0.0
+    e.use = lambda func_conveyor_use[]
+    g.setmodel[ e, e.model ]
+    e.solid = SOLID_BSP
+    g.world.link[ e ]
+
+# ---- secret door: back, then to the side, then home
+SECRET_ALWAYS_SHOOT : i32 [ 1 ]
+SECRET_1ST_LEFT     : i32 [ 2 ]
+SECRET_1ST_DOWN     : i32 [ 4 ]
+
+func door_secret_use [ e: Edict, other: Edict,
+                       activator: Edict ]
+    # already moving
+    if [ !v_zero[ e.origin ] ] return
+    move_calc[ e, e.pos1, lambda door_secret_move1[] ]
+    door_use_areaportals[ e, true ]
+
+func door_secret_move1 [ e: Edict ]
+    e.nextthink = g.level.time + 1.0
+    e.think = lambda door_secret_move2[]
+
+func door_secret_move2 [ e: Edict ]
+    move_calc[ e, e.pos2, lambda door_secret_move3[] ]
+
+func door_secret_move3 [ e: Edict ]
+    if [ e.wait == -1.0 ] return
+    e.nextthink = g.level.time + e.wait
+    e.think = lambda door_secret_move4[]
+
+func door_secret_move4 [ e: Edict ]
+    move_calc[ e, e.pos1, lambda door_secret_move5[] ]
+
+func door_secret_move5 [ e: Edict ]
+    e.nextthink = g.level.time + 1.0
+    e.think = lambda door_secret_move6[]
+
+func door_secret_move6 [ e: Edict ]
+    move_calc[ e, vec3f [ 0.0, 0.0, 0.0 ], lambda door_secret_done[] ]
+
+func door_secret_done [ e: Edict ]
+    if [ !e.targetname || (e.spawnflags & SECRET_ALWAYS_SHOOT) != 0 ]
+        e.health = 0
+        e.takedamage = DAMAGE_YES
+    door_use_areaportals[ e, false ]
+
+func door_secret_blocked [ e: Edict, other: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ]
+        t_damage[ other, e, e, zero, other.origin, zero, 100000, 1, 0,
+                  MOD_CRUSH ]
+        if [ other.inuse ] become_explosion1[ other ]
+        return
+    if [ g.level.time < e.touch_debounce_time ] return
+    e.touch_debounce_time = g.level.time + 0.5
+    t_damage[ other, e, e, zero, other.origin, zero, e.dmg, 1, 0, MOD_CRUSH ]
+
+func door_secret_die [ e: Edict, attacker: Edict ]
+    e.takedamage = DAMAGE_NO
+    door_secret_use[ e, attacker, attacker ]
+
+func sp_func_door_secret [ e: Edict ]
+    mi : e.moveinfo
+    mi.sound_start  = g.soundindex[ 'doors/dr1_strt.wav' ]
+    mi.sound_middle = g.soundindex[ 'doors/dr1_mid.wav' ]
+    mi.sound_end    = g.soundindex[ 'doors/dr1_end.wav' ]
+    e.movetype = MOVETYPE_PUSH
+    e.solid = SOLID_BSP
+    g.setmodel[ e, e.model ]
+    e.blocked = lambda door_secret_blocked[]
+    e.use = lambda door_secret_use[]
+    if [ !e.targetname || (e.spawnflags & SECRET_ALWAYS_SHOOT) != 0 ]
+        e.health = 0
+        e.takedamage = DAMAGE_YES
+        e.die = lambda door_secret_die[]
+    if [ e.dmg == 0 ] e.dmg = 2
+    if [ e.wait == 0.0 ] e.wait = 5.0
+    mi.accel = 50.0
+    mi.decel = 50.0
+    mi.speed = 50.0
+    # the two positions from the arrow: sideways, then back
+    ax : angle_vectors[ e.angles ]
+    e.angles = vec3f [ 0.0, 0.0, 0.0 ]
+    side : f32 [ 1.0 - f32[ e.spawnflags & SECRET_1ST_LEFT ] ]
+    width : f32 [ (e.spawnflags & SECRET_1ST_DOWN)
+        ? fabs[ v_dot[ ax.up, e.size ] ]
+        : fabs[ v_dot[ ax.right, e.size ] ] ]
+    length : f32 [ fabs[ v_dot[ ax.forward, e.size ] ] ]
+    if [ e.spawnflags & SECRET_1ST_DOWN ]
+        e.pos1 = v_ma[ e.origin, 0.0 - width, ax.up ]
+    el
+        e.pos1 = v_ma[ e.origin, side * width, ax.right ]
+    e.pos2 = v_ma[ e.pos1, length, ax.forward ]
+    if [ e.health != 0 ]
+        e.takedamage = DAMAGE_YES
+        e.die = lambda door_killed[]
+        e.max_health = e.health
+    el [ e.targetname && e.message ]
+        e.touch = lambda door_touch[]
+    e.classname = 'func_door'
+    g.world.link[ e ]
+
+# ---- killbox
+func use_killbox [ e: Edict, other: Edict, activator: Edict ]
+    g.kill_box[ e ]
+
+func sp_func_killbox [ e: Edict ]
+    g.setmodel[ e, e.model ]
+    e.use = lambda use_killbox[]
+    e.svflags = SVF_NOCLIENT

@@ -5,18 +5,58 @@ import vec
 import img
 import gltf
 import trinity
+import spectra
 
 import <stdio.h>
 import <stdlib.h>
 import <string.h>
 import <strings.h>
 import <math.h>
+import <time.h>
 
 import Pak
 import Bsp
 import Game
+import Items
+import Combat
 import Func
 import World
+import Misc
+import Trigger
+import Target
+import Weapon
+import Client
+import Monster
+import Soldier
+import Infantry
+import Gunner
+import Berserk
+import Gladiator
+import Flipper
+import Flyer
+import Hover
+import Medic
+import Mutant
+import Parasite
+import Tank
+import Chick
+import Brain
+import Insane
+import Floater
+import Supertank
+import Actor
+import Boss2
+import Makron
+import Jorg
+import Boss3
+import Turret
+import Md2
+import Effects
+import Sound
+import Hud
+import Cin
+import Menu
+import Save
 
 # the shader's samplers, by name
 enum BspSurface
@@ -25,6 +65,17 @@ enum BspSurface
 
 # world faces: a wal from the atlas, tiled, times its lightmap
 ModelViewProject BspLit
+    # four dynamic lights: place and reach, then colour
+    mutable dl0 : vec4f
+    mutable dl1 : vec4f
+    mutable dl2 : vec4f
+    mutable dl3 : vec4f
+    mutable dc0 : vec4f
+    mutable dc1 : vec4f
+    mutable dc2 : vec4f
+    mutable dc3 : vec4f
+    # x: the game's seconds, for water that warps and flows
+    mutable clock : vec4f
     attrib color : LayoutBinding [ type:typeid[ BspSurface ],
                                    id:BspSurface.color, count:1,
                                    format: typeid[ rgba8 ] ]
@@ -40,6 +91,7 @@ ModelViewProject BspLit
     attrib v_uv   : VertexOutput [ type:typeid[ vec2f ] ]
     attrib v_lm   : VertexOutput [ type:typeid[ vec2f ] ]
     attrib v_rect : VertexOutput [ type:typeid[ vec4f ] ]
+    attrib v_wpos : VertexOutput [ type:typeid[ vec3f ] ]
     attrib fragColor : FragmentOutput [ type:typeid[ vec4f ] ]
 
     func init [ ]
@@ -51,15 +103,67 @@ ModelViewProject BspLit
         v_uv        = a_uv;
         v_lm        = a_lm;
         v_rect      = a_rect;
-        gl_Position = ubo.proj * ubo.view * ubo.model * vec4(a_pos, 1.0);
+        vec4 wp     = ubo.model * vec4(a_pos, 1.0);
+        v_wpos      = wp.xyz;
+        gl_Position = ubo.proj * ubo.view * wp;
     }
 
     func fragment [] -> GLSL none {
-        vec2 uv  = v_rect.xy + fract(v_uv) * v_rect.zw;
+        // an unlit face: minus its alpha, then warp 1, flow 2, both 3
+        float unlit = step(v_lm.x, -0.001);
+        float kind  = v_lm.y * unlit;
+        float flow  = step(1.5, kind);
+        float warp  = step(0.5, kind) - flow + step(2.5, kind);
+        float t     = ubo.clock.x;
+        // EmitWaterPolys: each axis swung 8 texels by the other's sine
+        vec2 size  = v_rect.zw * vec2(textureSize(color, 0));
+        vec2 tx    = v_uv * size;
+        float su   = tx.x + 8.0 * sin(tx.y * 0.125 + t);
+        float sv   = tx.y + 8.0 * sin(tx.x * 0.125 + t);
+        vec2 swung = vec2(su / 64.0 - fract(t * 0.5) * flow, sv / 64.0);
+        // DrawGLFlowingPoly: the texture slides 64 widths in 40 s
+        float sl   = 64.0 * fract(t / 40.0) * flow;
+        vec2 slid  = vec2(v_uv.x - sl, v_uv.y);
+        vec2 st    = mix(slid, swung, warp);
+        vec2 uv  = v_rect.xy + fract(st) * v_rect.zw;
         vec4 c   = texture(color, uv);
-        vec3 l   = vec3(1.0);
-        if (v_lm.x >= 0.0) l = texture(lm, v_lm).rgb * 2.0;
-        fragColor = vec4(c.rgb * l, 1.0);
+        vec3 l   = texture(lm, v_lm).rgb;
+        // R_AddDynamicLights: a light's reach on the face, less the
+        // distance along it, past a cutoff of 64; the edge eased
+        // over a lightmap texel's 16 units, as its filtering did
+        vec3 n   = normalize(cross(dFdx(v_wpos), dFdy(v_wpos)));
+        vec3 d0  = ubo.dl0.xyz - v_wpos;
+        float p0 = abs(dot(d0, n));
+        float r0 = ubo.dl0.w - p0;
+        float q0 = sqrt(max(dot(d0, d0) - p0 * p0, 0.0));
+        float e0 = clamp((r0 - 64.0 - q0) / 16.0, 0.0, 1.0);
+        float k0 = (r0 >= 64.0) ? (r0 - q0) * e0 : 0.0;
+        l += ubo.dc0.rgb * (k0 / 255.0);
+        vec3 d1  = ubo.dl1.xyz - v_wpos;
+        float p1 = abs(dot(d1, n));
+        float r1 = ubo.dl1.w - p1;
+        float q1 = sqrt(max(dot(d1, d1) - p1 * p1, 0.0));
+        float e1 = clamp((r1 - 64.0 - q1) / 16.0, 0.0, 1.0);
+        float k1 = (r1 >= 64.0) ? (r1 - q1) * e1 : 0.0;
+        l += ubo.dc1.rgb * (k1 / 255.0);
+        vec3 d2  = ubo.dl2.xyz - v_wpos;
+        float p2 = abs(dot(d2, n));
+        float r2 = ubo.dl2.w - p2;
+        float q2 = sqrt(max(dot(d2, d2) - p2 * p2, 0.0));
+        float e2 = clamp((r2 - 64.0 - q2) / 16.0, 0.0, 1.0);
+        float k2 = (r2 >= 64.0) ? (r2 - q2) * e2 : 0.0;
+        l += ubo.dc2.rgb * (k2 / 255.0);
+        vec3 d3  = ubo.dl3.xyz - v_wpos;
+        float p3 = abs(dot(d3, n));
+        float r3 = ubo.dl3.w - p3;
+        float q3 = sqrt(max(dot(d3, d3) - p3 * p3, 0.0));
+        float e3 = clamp((r3 - 64.0 - q3) / 16.0, 0.0, 1.0);
+        float k3 = (r3 >= 64.0) ? (r3 - q3) * e3 : 0.0;
+        l += ubo.dc3.rgb * (k3 / 255.0);
+        // an unlit face is full bright; a lit one clamps, then x 2
+        vec3 lit = min(l, vec3(1.0)) * 2.0;
+        lit       = mix(lit, vec3(1.0), unlit);
+        fragColor = vec4(c.rgb * lit, mix(1.0, -v_lm.x, unlit));
     }
 
 enum SkySurface
@@ -68,6 +172,8 @@ enum SkySurface
 # sky faces show the sky box in the view direction, as gl_warp did
 ModelViewProject BspSky
     mutable eye : vec4f
+    # skyaxis (a unit vector, quake axes) and the turn in radians
+    mutable spin : vec4f
     attrib sky : LayoutBinding [ type:typeid[ SkySurface ],
                                  id:SkySurface.sky, count:1,
                                  format: typeid[ rgba8 ] ]
@@ -90,6 +196,11 @@ ModelViewProject BspSky
         vec3 d  = normalize(v_wpos - ubo.eye.xyz);
         // trinity axes back to quake's: x forward, y left, z up
         vec3 q  = vec3(d.x, -d.z, d.y);
+        // R_DrawSkyBox turns the box: the look turns back round the axis
+        vec3 k  = ubo.spin.xyz;
+        float ca = cos(-ubo.spin.w);
+        float sa = sin(-ubo.spin.w);
+        q = q * ca + cross(k, q) * sa + k * dot(k, q) * (1.0 - ca);
         vec3 av = abs(q);
         int axis = (av.x > av.y && av.x > av.z) ? ((q.x < 0.0) ? 1 : 0)
                  : (av.y > av.z && av.y > av.x) ? ((q.y < 0.0) ? 3 : 2)
@@ -122,12 +233,27 @@ element MapView
     mutable model    : Model
     mutable target   : Render
     mutable failed   : bool
+    # the map being played: map_name at first, then the game's
+    mutable level_name : string
+    # the level ended: the next frame loads level_name
+    mutable reload   : bool
+    # a level change: the start to use in the map coming
+    mutable changing    : bool
+    mutable next_spawn  : string
+    # the player as the level was entered: what a death restores
+    mutable entry       : ClientPersistant
+    mutable entry_spawn : string
+    mutable entry_flags : i32
     mutable sky_sh   : BspSky
     mutable sky_gltf : GltfModel
     mutable sky_model : Model
     mutable idx_live : @u32
+    mutable idx_store : PakData
     mutable cluster  : i32 [ -2 ]
     mutable vis_n    : i32
+    # the eye's area, and the frustum: four planes, normal and dist
+    mutable eye_area : i32
+    mutable frustum  : vec f32
     public  vis_tris : i32
     # eye, trinity axes (y up); yaw and pitch in radians
     mutable ex       : f32
@@ -145,6 +271,16 @@ element MapView
     mutable on_ground : bool
     mutable ground_nz : f32
     mutable ground_ent : Edict
+    # the ground brush's contents: its currents carry the player
+    mutable ground_contents : i32
+    # PM_CatagorizePosition's water: 0 none, 1 feet, 2 waist, 3 head
+    mutable water_level : i32
+    mutable water_type  : i32
+    mutable ladder      : bool
+    # seconds left of a jump out of water: no control, but it falls
+    mutable waterjump   : f32
+    # pm.touchents: what the move ran into this frame
+    mutable touched  : vec Edict
     mutable game     : Game
     mutable pl       : Edict
     mutable game_acc : f32
@@ -153,6 +289,37 @@ element MapView
     # one shader and model per inline model: its matrix moves it
     mutable inline_sh : vec BspLit
     mutable inline_models : vec Model
+    # the alpha surfaces: a node a model, drawn last, no depth write
+    mutable clear_gltf : GltfModel
+    mutable clear_sh   : vec BspLit
+    # every md2 entity, refilled each frame into one mesh
+    mutable md2       : Md2Set
+    mutable md2_sh    : Md2Lit
+    mutable md2_model : Model
+    mutable md2_tx    : Texture
+    # the same mesh again for what is seen through: no depth write
+    mutable md2c_sh    : Md2Lit
+    mutable md2c_model : Model
+    mutable visuals    : Effects
+    mutable status     : Hud
+    # each edict this frame: origin, angles, old frame, drawn
+    mutable ent_now    : vec f32
+    # each edict a game frame ago: origin, angles, frame, model
+    mutable ent_prev  : vec f32
+    mutable ent_prev_n : i32
+    # the view weapon a game frame ago
+    mutable gun_frame  : i32
+    mutable gun_angles : vec3f
+    mutable gun_offset : vec3f
+    # the eye and its angles this frame, quake axes and degrees
+    mutable view_org    : vec3f
+    mutable view_ang    : vec3f
+    # the player's view a game frame ago: offset, kick, angles
+    mutable view_offset : vec3f
+    mutable view_kick   : vec3f
+    mutable view_angles : vec3f
+    # the mixer and the clips: one for the app, reset each map
+    mutable snd        : SoundSet
     mutable jump_held : bool
     mutable land_time : f32
     mutable collide_mask : i32
@@ -163,68 +330,196 @@ element MapView
     mutable k_left   : bool
     mutable k_right  : bool
     mutable k_up     : bool
+    mutable k_down   : bool
+    mutable menu     : Menu
+    # the unit's levels as they were left, and a save being loaded
+    mutable hub      : vec SaveOut
+    mutable loading  : SaveIn
+    mutable con      : GameConsole
+    # a film or a still between levels, and the clock it runs on
+    mutable film       : Cinematic
+    mutable film_us    : i64
+    # nextserver: what follows the film
+    mutable pending_map : string
+    # the skill a new game starts at
+    mutable skill      : i32 [ 1 ]
+    # the lightmap atlas on the gpu, and the game frame it shows
+    mutable lm_tx      : Texture
+    mutable style_tick : i32 [ -1 ]
     mutable dragging : bool
+    mutable attack   : bool
+    # keys 0 .. 9 pick these, as the default binds
+    mutable weapon_keys : vec string [] [ 'BFG10K', 'Blaster', 'Shotgun',
+        'Super Shotgun', 'Machinegun', 'Chaingun', 'Grenade Launcher',
+        'Rocket Launcher', 'HyperBlaster', 'Railgun' ]
     mutable lastx    : f32
     mutable lasty    : f32
     mutable last_us  : i64
 
     public func on_press [ ev: Event ]
+        if [ film && !film.done ]
+            film.stop[]
+            film_end[]
+            return
+        if [ menu && (menu.active || con.active) ] return
+        # a click takes the mouse for looking; esc gives it back
+        if [ !ux.locked ] ux.mouse_lock[ a ]
         dragging = true
         lastx = ev.mouse.pos.x
         lasty = ev.mouse.pos.y
+        if [ ev.mouse.button == 0 ] attack = true
 
     public func on_release [ ev: Event ]
         dragging = false
+        attack = false
 
     public func on_move [ ev: Event ]
-        if [ !dragging ] return
+        if [ menu && (menu.active || con.active) ] return
+        if [ !dragging && !ux.locked ] return
         dx : f32 [ ev.mouse.pos.x - lastx ]
         dy : f32 [ ev.mouse.pos.y - lasty ]
         lastx = ev.mouse.pos.x
         lasty = ev.mouse.pos.y
-        yaw   = yaw - dx * 0.004
-        pitch = pitch - dy * 0.004
+        if [ ux.locked ]
+            dx = ev.mouse.delta.x
+            dy = ev.mouse.delta.y
+        # the menu's mouse speed (3 is the default) and invert
+        turn : f32 [ (menu) ? 0.004 * menu.sensitivity / 3.0 : 0.004 ]
+        if [ menu && menu.invert ] dy = 0.0 - dy
+        yaw   = yaw - dx * turn
+        pitch = pitch - dy * turn
         if [ pitch >  1.5 ] pitch =  1.5
         if [ pitch < -1.5 ] pitch = -1.5
 
     public func on_key [ ev: Event ]
         s : bool [ ev.key.state ]
+        if [ film && !film.done ]
+            # any key skips the film
+            if [ s ] film.stop[]
+            if [ s ] film_end[]
+            return
+        code : i32 [ ev.key.unicode ]
+        if [ con && con.key[ code, s ] ] return
+        if [ menu && menu.key[ code, s ] ]
+            k_fwd = false
+            k_back = false
+            k_left = false
+            k_right = false
+            k_up = false
+            k_down = false
+            attack = false
+            return
         if [ ev.key.unicode == 87  ] k_fwd   = s
         if [ ev.key.unicode == 83  ] k_back  = s
         if [ ev.key.unicode == 65  ] k_left  = s
         if [ ev.key.unicode == 68  ] k_right = s
         if [ ev.key.unicode == 32  ] k_up    = s
+        # c or left ctrl crouches
+        if [ ev.key.unicode == 67 || ev.key.unicode == 341 ] k_down = s
+        # 1 .. 9, 0: the weapons, as the default binds
+        u : i32 [ ev.key.unicode ]
+        if [ s && u >= 48 && u <= 57 && pl ]
+            client_command[ pl, 'use', weapon_keys[ (u + 1) % 10 ] ]
+        # f1 help, tab inventory, [ ] pick, enter use, backspace drop
+        if [ s && pl ]
+            if [ u == 290 ]      client_command[ pl, 'help', '' ]
+            el [ u == 258 ]      client_command[ pl, 'inven', '' ]
+            el [ u == 91 ]       client_command[ pl, 'invprev', '' ]
+            el [ u == 93 ]       client_command[ pl, 'invnext', '' ]
+            el [ u == 257 ]      client_command[ pl, 'invuse', '' ]
+            el [ u == 259 ]      client_command[ pl, 'invdrop', '' ]
         if [ !s ] log 'quake2: at {ox} {oy} {oz} ground {on_ground}'
 
     func load []
         pak = Pak [ ]
         pak.open[ path [ game_dir ] ]
         bsp = BspMap [ ]
-        if [ !bsp.load[ pak, map_name ] ]
+        if [ !level_name ] level_name = map_name
+        if [ !bsp.load[ pak, level_name ] ]
             failed = true
             return
         world = bsp.build[]
         world.compute_worlds[]
         inline_gltf = bsp.build_models[]
         if [ inline_gltf ] inline_gltf.compute_worlds[]
+        clear_gltf = bsp.build_clear[]
+        if [ clear_gltf ] clear_gltf.compute_worlds[]
         sky_gltf = bsp.build_sky[]
         if [ sky_gltf ] sky_gltf.compute_worlds[]
-        live : new u32 [ bsp.idx_n ]
-        idx_live = live
+        idx_store = pak_data[ bsp.idx_n * 4 ]
+        idx_live = cast @u32 [ idx_store.data ]
         # the game: entities spawned from the map
+        before : Game [ game ]
         game = Game [ ]
+        game.skill = skill
+        if [ before && changing ]
+            # SpawnEntities begins with SaveClientData
+            save_client_data[]
+            game.carry = clone_pers[ before.player[].client.pers ]
+            game.spawnpoint = next_spawn
+            game.serverflags = before.serverflags
+            game.helpmessage1 = before.helpmessage1
+            game.helpmessage2 = before.helpmessage2
+            game.helpchanged = before.helpchanged
+        el [ before && entry ]
+            # dead: the level again, the player as he came in
+            game.carry = clone_pers[ entry ]
+            game.spawnpoint = entry_spawn
+            game.serverflags = entry_flags
+        came : bool [ changing ]
+        changing = false
+        entry = (game.carry) ? clone_pers[ game.carry ] : null
+        entry_spawn = game.spawnpoint
+        entry_flags = game.serverflags
+        touched = vec Edict []
         game.setup[ bsp ]
         pl = game.player[]
+        if [ loading ]
+            # SV_Loadgame_f: the game, the level, the hub's levels
+            read_game[ loading ]
+            skill = game.skill
+            now : loading.take[]
+            reader : SaveIn [ words: now.out ]
+            read_level[ reader, false ]
+            hub = vec SaveOut []
+            kept_n : i32 [ loading.get_i[] ]
+            for [ i: i32 0, i < kept_n, i += 1 ]
+                title : loading.get_s[]
+                lv : loading.take[]
+                lv.name = title
+                hub.push[ lv ]
+            loading = null
+            pl = game.player[]
+        el [ came && hub ]
+            # back in a level of this unit: as it was left
+            for [ lv: SaveOut ] in hub
+                if [ lv.name == level_name ]
+                    reader : SaveIn [ words: lv.out ]
+                    read_level[ reader, true ]
+        # the models the spawns named, so their skins are in the atlas
+        md2 = Md2Set [ pak: pak, palette: bsp.palette ]
+        named : i32 [ game.models.count ]
+        for [ i: i32 bsp.model_head.count, i < named, i += 1 ]
+            md2.get[ i, game.models ]
+        ent_prev_n = 0
+        visuals = Effects [ md2: md2, bsp: bsp ]
+        status = Hud [ md2: md2 ]
+        if [ !snd ] snd = SoundSet [ pak: pak ]
+        el
+            snd.pak = pak
+            snd.reset[]
         # the player box and the start; the eye is viewheight 22 up
         mins = vec3f [ -16.0, -16.0, -24.0 ]
         maxs = vec3f [ 16.0, 16.0, 32.0 ]
         collide_mask = MASK_PLAYERSOLID
-        ox = bsp.start_x
-        oy = bsp.start_y
-        oz = bsp.start_z
-        yaw = radians[ bsp.start_yaw ]
+        # where PutClientInServer stood the player, by its spawn point
+        ox = pl.origin.x
+        oy = pl.origin.y
+        oz = pl.origin.z
+        yaw = radians[ pl.client.v_angle.y ]
+        pitch = 0.0
         # a camera given as quake 'x y z yaw pitch' overrides the start
-        if [ spawn ]
+        if [ spawn && level_name == map_name ]
             sx : f32 [ 0.0 ]
             sy : f32 [ 0.0 ]
             sz : f32 [ 0.0 ]
@@ -252,16 +547,33 @@ element MapView
         ox = pl.origin.x
         oy = pl.origin.y
         oz = pl.origin.z
-        if [ dt > 0.0 ] pmove[ dt ]
+        vx = pl.velocity.x
+        vy = pl.velocity.y
+        vz = pl.velocity.z
+        # a teleport or a respawn turned the player
+        ps : pl.client.ps
+        if [ ps.pm_flags & PMF_TIME_TELEPORT ]
+            yaw = radians[ ps.viewangles.y ]
+            pitch = 0.0 - radians[ ps.viewangles.x ]
+            ps.pm_flags = ps.pm_flags & ~PMF_TIME_TELEPORT
+        # frozen at a unit's end: no move until the level exits
+        frozen : bool [ game.level.intermissiontime != 0.0 ]
+        if [ dt > 0.0 && pl.deadflag == 0 && !frozen ] pmove[ dt ]
         pl.origin = vec3f [ ox, oy, oz ]
         pl.velocity = vec3f [ vx, vy, vz ]
+        if [ pl.deadflag == 0 && !frozen ] pl.maxs = maxs
         pl.groundentity = (on_ground) ? ground_ent : null
+        pl.waterlevel = water_level
+        pl.watertype = water_type
         if [ pl.groundentity ]
             pl.groundentity_linkcount = pl.groundentity.linkcount
-        game.world.link[ pl ]
-        game.touch_triggers[ pl ]
+        # ClientThink: the link, the touches, the buttons, the weapon
+        buttons : i32 [ (attack) ? BUTTON_ATTACK : 0 ]
+        angles : vec3f [ 0.0 - degrees[ pitch ], degrees[ yaw ], 0.0 ]
+        client_think[ pl, buttons, (k_up) ? 1 : 0, angles, touched ]
+        touched = vec Edict []
         ex = ox
-        ey = oz + 22.0
+        ey = oz + f32[ pl.viewheight ]
         ez = 0.0 - oy
 
     # PM_trace: the world and every solid entity, the player passed
@@ -270,19 +582,51 @@ element MapView
         return game.world.trace[ vec3f [ sx, sy, sz ], mins, maxs,
                                  vec3f [ tx, ty, tz ], pl, collide_mask ]
 
-    # Pmove, the walking path: ground, jump, friction, air move
+    # Pmove: ground and water, ladders, jump, friction, the move
     func pmove [ dt: f32 ]
         if [ land_time > 0.0 ]
             land_time = land_time - dt
             if [ land_time < 0.0 ] land_time = 0.0
+        check_duck[]
         categorize[]
-        check_jump[]
-        friction[ dt ]
-        air_move[ dt ]
+        special_movement[]
+        if [ waterjump > 0.0 ]
+            # waterjump has no control, but falls
+            waterjump = waterjump - dt
+            vz = vz - 800.0 * pl.gravity * dt
+            # cancel as soon as we are falling down again
+            if [ vz < 0.0 ] waterjump = 0.0
+            step_slide_move[ dt ]
+        el
+            check_jump[]
+            friction[ dt ]
+            if [ water_level >= 2 ] water_move[ dt ]
+            el                      air_move[ dt ]
         categorize[]
 
-    # PM_CatagorizePosition: standing on something a quarter unit down
+    # PM_CheckDuck: the box and the eye, crouched or standing
+    func check_duck []
+        ps : pl.client.ps
+        ducked : bool [ (ps.pm_flags & PMF_DUCKED) != 0 ]
+        if [ k_down && on_ground ]
+            ducked = true
+        el [ ducked ]
+            # try to stand up
+            maxs = vec3f [ 16.0, 16.0, 32.0 ]
+            t : trace_pl[ ox, oy, oz, ox, oy, oz ]
+            if [ !t.allsolid ] ducked = false
+        if [ ducked ]
+            ps.pm_flags = ps.pm_flags | PMF_DUCKED
+            maxs = vec3f [ 16.0, 16.0, 4.0 ]
+            pl.viewheight = -2
+        el
+            ps.pm_flags = ps.pm_flags & ~PMF_DUCKED
+            maxs = vec3f [ 16.0, 16.0, 32.0 ]
+            pl.viewheight = 22
+
+    # PM_CatagorizePosition: the ground a quarter unit down, the water
     func categorize []
+        water[]
         if [ vz > 180.0 ]
             on_ground = false
             return
@@ -294,25 +638,78 @@ element MapView
             ground_ent = null
             return
         ground_ent = t.ent
+        ground_contents = t.contents
+        # hitting solid ground will end a waterjump
+        waterjump = 0.0
         if [ !on_ground ]
             on_ground = true
             # a hard landing holds the next jump off a moment
             if [ vz < -200.0 ] land_time = (vz < -400.0) ? 0.2 : 0.144
 
-    # PM_CheckJump: 270 up off the ground, once per press
+    # the water level: at the feet, half way up, at the eye
+    func water []
+        water_level = 0
+        water_type = 0
+        # the eye's height above the feet, and half of it
+        sample2 : f32 [ f32[ pl.viewheight ] - mins.z ]
+        feet : vec3f [ ox, oy, oz + mins.z + 1.0 ]
+        cont : i32 [ game.world.point_contents[ feet ] ]
+        if [ (cont & MASK_WATER) == 0 ] return
+        water_type = cont
+        water_level = 1
+        waist : vec3f [ ox, oy, oz + mins.z + sample2 / 2.0 ]
+        cont = game.world.point_contents[ waist ]
+        if [ (cont & MASK_WATER) == 0 ] return
+        water_level = 2
+        head : vec3f [ ox, oy, oz + mins.z + sample2 ]
+        cont = game.world.point_contents[ head ]
+        if [ cont & MASK_WATER ] water_level = 3
+
+    # PM_CheckSpecialMovement: a ladder ahead; a jump out of water
+    func special_movement []
+        if [ waterjump > 0.0 ] return
+        ladder = false
+        ahead_x : f32 [ cos[ yaw ] ]
+        ahead_y : f32 [ sin[ yaw ] ]
+        t : trace_pl[ ox, oy, oz, ox + ahead_x, oy + ahead_y, oz ]
+        if [ t.fraction < 1.0 && (t.contents & CONTENTS_LADDER) != 0 ]
+            ladder = true
+        if [ water_level != 2 ] return
+        # solid 30 ahead and 4 up, open 16 above that: climb out
+        spot : vec3f [ ox + ahead_x * 30.0, oy + ahead_y * 30.0,
+                       oz + 4.0 ]
+        cont : i32 [ game.world.point_contents[ spot ] ]
+        if [ (cont & CONTENTS_SOLID) == 0 ] return
+        spot = vec3f [ spot.x, spot.y, spot.z + 16.0 ]
+        if [ game.world.point_contents[ spot ] != 0 ] return
+        vx = ahead_x * 50.0
+        vy = ahead_y * 50.0
+        vz = 350.0
+        # pm_time 255, in units of 8 ms
+        waterjump = 2.04
+
+    # PM_CheckJump: swim up, or 270 up off the ground once a press
     func check_jump []
         if [ land_time > 0.0 ] return
         if [ !k_up ]
             jump_held = false
             return
         if [ jump_held ] return
+        if [ water_level >= 2 ]
+            # swimming, not jumping
+            on_ground = false
+            if [ vz <= -300.0 ] return
+            if [ water_type == CONTENTS_WATER ]      vz = 100.0
+            el [ water_type == CONTENTS_SLIME ]      vz = 80.0
+            el                                       vz = 50.0
+            return
         if [ !on_ground ] return
         jump_held = true
         on_ground = false
         vz = vz + 270.0
         if [ vz < 270.0 ] vz = 270.0
 
-    # PM_Friction: ground friction 6, stop speed 100
+    # PM_Friction: the ground's 6 (stop speed 100), the water's 1
     func friction [ dt: f32 ]
         speed : f32 [ sqrt[ vx * vx + vy * vy + vz * vz ] ]
         if [ speed < 1.0 ]
@@ -320,9 +717,11 @@ element MapView
             vy = 0.0
             return
         drop : f32 [ 0.0 ]
-        if [ on_ground ]
+        if [ on_ground || ladder ]
             control : f32 [ (speed < 100.0) ? 100.0 : speed ]
             drop = drop + control * 6.0 * dt
+        if [ water_level > 0 && !ladder ]
+            drop = drop + speed * f32[ water_level ] * dt
         newspeed : f32 [ speed - drop ]
         if [ newspeed < 0.0 ] newspeed = 0.0
         newspeed = newspeed / speed
@@ -336,41 +735,111 @@ element MapView
         current : f32 [ vx * wx + vy * wy + vz * wz ]
         add : f32 [ wishspeed - current ]
         if [ add <= 0.0 ] return
-        acc : f32 [ accel * dt * wishspeed ]
-        if [ acc > add ] acc = add
-        vx = vx + acc * wx
-        vy = vy + acc * wy
-        vz = vz + acc * wz
+        speed : f32 [ accel * dt * wishspeed ]
+        if [ speed > add ] speed = add
+        vx = vx + speed * wx
+        vy = vy + speed * wy
+        vz = vz + speed * wz
 
-    # PM_AirMove: the wish from the keys, run speed 400, max 300
-    func air_move [ dt: f32 ]
-        cp : f32 [ cos[ pitch ] ]
-        fx : f32 [ cp * cos[ yaw ] ]
-        fy : f32 [ cp * sin[ yaw ] ]
-        rx : f32 [ sin[ yaw ] ]
-        ry : f32 [ 0.0 - cos[ yaw ] ]
+    # the push of a brush's CONTENTS_CURRENT bits, a unit a side
+    func current_of [ contents: i32 ] -> vec3f
+        x : f32 [ 0.0 ]
+        y : f32 [ 0.0 ]
+        z : f32 [ 0.0 ]
+        if [ contents & CONTENTS_CURRENT_0 ]    x = x + 1.0
+        if [ contents & CONTENTS_CURRENT_90 ]   y = y + 1.0
+        if [ contents & CONTENTS_CURRENT_180 ]  x = x - 1.0
+        if [ contents & CONTENTS_CURRENT_270 ]  y = y - 1.0
+        if [ contents & CONTENTS_CURRENT_UP ]   z = z + 1.0
+        if [ contents & CONTENTS_CURRENT_DOWN ] z = z - 1.0
+        return vec3f [ x, y, z ]
+
+    # PM_AddCurrents: ladders, water currents, conveying ground
+    func add_currents [ wish_in: vec3f, fmove: f32 ] -> vec3f
+        wish : vec3f [ wish_in ]
+        if [ ladder && fabs[ vz ] <= 200.0 ]
+            look : f32 [ 0.0 - degrees[ pitch ] ]
+            climb : f32 [ 0.0 ]
+            if [ look <= -15.0 && fmove > 0.0 ]     climb = 200.0
+            el [ look >= 15.0 && fmove > 0.0 ]      climb = -200.0
+            el [ k_up ]                             climb = 200.0
+            wish = vec3f [ clamp[ wish.x, -25.0, 25.0 ],
+                           clamp[ wish.y, -25.0, 25.0 ], climb ]
+        if [ water_type & MASK_CURRENT ]
+            # pm_waterspeed 400, half when wading on the ground
+            push : f32 [ (water_level == 1 && on_ground) ? 200.0
+                         : 400.0 ]
+            wish = v_ma[ wish, push, current_of[ water_type ] ]
+        if [ on_ground ]
+            wish = v_ma[ wish, 100.0, current_of[ ground_contents ] ]
+        return wish
+
+    # the keys as forward and side moves, 400 a key
+    func wish_keys [ ax: Axes ] -> vec3f
         fmove : f32 [ 0.0 ]
         smove : f32 [ 0.0 ]
         if [ k_fwd ]   fmove = fmove + 400.0
         if [ k_back ]  fmove = fmove - 400.0
         if [ k_right ] smove = smove + 400.0
         if [ k_left ]  smove = smove - 400.0
-        wx : f32 [ fx * fmove + rx * smove ]
-        wy : f32 [ fy * fmove + ry * smove ]
-        wishspeed : f32 [ sqrt[ wx * wx + wy * wy ] ]
-        if [ wishspeed > 0.0 ]
-            wx = wx / wishspeed
-            wy = wy / wishspeed
+        return v_add[ v_scale[ ax.forward, fmove ],
+                      v_scale[ ax.right, smove ] ]
+
+    # PM_WaterMove: swim where the view points; sink when idle
+    func water_move [ dt: f32 ]
+        look : vec3f [ 0.0 - degrees[ pitch ], degrees[ yaw ], 0.0 ]
+        wish : vec3f [ wish_keys[ angle_vectors[ look ] ] ]
+        moving : bool [ k_fwd || k_back || k_left || k_right ]
+        idle : bool [ !moving && !k_up && !k_down ]
+        # drift towards bottom; jump swims up, crouch down (200)
+        if [ idle ]     wish = vec3f [ wish.x, wish.y, wish.z - 60.0 ]
+        el [ k_up ]     wish = vec3f [ wish.x, wish.y, wish.z + 200.0 ]
+        el [ k_down ]   wish = vec3f [ wish.x, wish.y, wish.z - 200.0 ]
+        fmove : f32 [ (k_fwd) ? 400.0 : 0.0 ]
+        wish = add_currents[ wish, fmove ]
+        wishspeed : f32 [ v_len[ wish ] ]
+        dir : vec3f [ v_norm[ wish ] ]
         if [ wishspeed > 300.0 ] wishspeed = 300.0
-        if [ on_ground ]
+        # half speed in water; pm_wateraccelerate 10
+        accelerate[ dir.x, dir.y, dir.z, wishspeed * 0.5, 10.0, dt ]
+        step_slide_move[ dt ]
+
+    # PM_AirMove: on a ladder, on the ground, or in the air
+    func air_move [ dt: f32 ]
+        # the walking axes turn with a third of the pitch
+        third : f32 [ 0.0 - degrees[ pitch ] / 3.0 ]
+        look : vec3f [ third, degrees[ yaw ], 0.0 ]
+        wish : vec3f [ wish_keys[ angle_vectors[ look ] ] ]
+        wish = vec3f [ wish.x, wish.y, 0.0 ]
+        fmove : f32 [ (k_fwd) ? 400.0 : 0.0 ]
+        wish = add_currents[ wish, fmove ]
+        wishspeed : f32 [ v_len[ wish ] ]
+        dir : vec3f [ v_norm[ wish ] ]
+        # pm_duckspeed 100, pm_maxspeed 300
+        ducked : bool [ (pl.client.ps.pm_flags & PMF_DUCKED) != 0 ]
+        most : f32 [ (ducked) ? 100.0 : 300.0 ]
+        if [ wishspeed > most ] wishspeed = most
+        gravity : f32 [ 800.0 * pl.gravity * dt ]
+        if [ ladder ]
+            accelerate[ dir.x, dir.y, dir.z, wishspeed, 10.0, dt ]
+            # not climbing: the fall or rise dies away
+            if [ wish.z == 0.0 ]
+                if [ vz > 0.0 ]
+                    vz = vz - gravity
+                    if [ vz < 0.0 ] vz = 0.0
+                el
+                    vz = vz + gravity
+                    if [ vz > 0.0 ] vz = 0.0
+            step_slide_move[ dt ]
+        el [ on_ground ]
             vz = 0.0
-            accelerate[ wx, wy, 0.0, wishspeed, 10.0, dt ]
+            accelerate[ dir.x, dir.y, dir.z, wishspeed, 10.0, dt ]
             vz = 0.0
             if [ vx == 0.0 && vy == 0.0 ] return
             step_slide_move[ dt ]
         el
-            accelerate[ wx, wy, 0.0, wishspeed, 1.0, dt ]
-            vz = vz - 800.0 * dt
+            accelerate[ dir.x, dir.y, dir.z, wishspeed, 1.0, dt ]
+            vz = vz - gravity
             step_slide_move[ dt ]
 
     # PM_StepSlideMove: the plain slide, then again from a step up
@@ -417,17 +886,373 @@ element MapView
 
     # each inline model's matrix follows its entity's origin and angles
     func place_models []
-        if [ !inline_sh ] return
-        n : i32 [ inline_sh.count ]
+        sh.clock = vec4f [ game.level.time + game_acc, 0.0, 0.0, 0.0 ]
+        if [ inline_sh ]
+            for [ i: i32 0, i < inline_sh.count, i += 1 ]
+                place_model[ inline_sh[ i ], bsp.node_model[ i ] ]
+        if [ clear_sh ]
+            for [ i: i32 0, i < clear_sh.count, i += 1 ]
+                place_model[ clear_sh[ i ], bsp.clear_model[ i ] ]
+
+    # one model's shader: the view, the clock, its entity's place
+    func place_model [ s2: BspLit, m: i32 ]
+        s2.view  = sh.view
+        s2.proj  = sh.proj
+        s2.clock = sh.clock
+        e : game.model_ent[ m ]
+        s2.model = mat4f.identity[]
+        if [ m > 0 && e ] s2.model = entity_matrix[ e.origin, e.angles ]
+
+    # each edict as the game frame begins: what the lerp starts from
+    func snapshot []
+        n : i32 [ game.num_edicts ]
+        if [ !ent_prev || ent_prev.count < n * 8 ]
+            ent_prev = vec f32 [ n * 8 + 2048 ]
         for [ i: i32 0, i < n, i += 1 ]
-            e : game.model_ent[ bsp.node_model[ i ] ]
-            s2 : inline_sh[ i ]
-            s2.view = sh.view
-            s2.proj = sh.proj
-            if [ !e ]
-                s2.model = mat4f.identity[]
+            e : game.edicts[ i ]
+            o : i32 [ i * 8 ]
+            ent_prev[ o ]     = e.origin.x
+            ent_prev[ o + 1 ] = e.origin.y
+            ent_prev[ o + 2 ] = e.origin.z
+            ent_prev[ o + 3 ] = e.angles.x
+            ent_prev[ o + 4 ] = e.angles.y
+            ent_prev[ o + 5 ] = e.angles.z
+            ent_prev[ o + 6 ] = e.frame
+            ent_prev[ o + 7 ] = (e.inuse) ? e.modelindex : 0
+        ent_prev_n = n
+        ps : pl.client.ps
+        gun_frame  = ps.gunframe
+        gun_angles = ps.gunangles
+        gun_offset = ps.gunoffset
+        view_offset = ps.viewoffset
+        view_kick   = ps.kick_angles
+        view_angles = ps.viewangles
+
+    # CL_CalcViewValues: the eye and its angles this frame
+    func calc_view [ frac: f32 ]
+        ps : pl.client.ps
+        back : f32 [ 1.0 - frac ]
+        off : vec3f [ v_add[ ps.viewoffset,
+            v_scale[ v_sub[ view_offset, ps.viewoffset ], back ] ] ]
+        # before the first game frame there is only the view height
+        if [ v_zero[ ps.viewoffset ] ]
+            off = vec3f [ 0.0, 0.0, pl.viewheight ]
+        view_org = vec3f [ ox + off.x, oy + off.y, oz + off.z ]
+        angles : vec3f [ 0.0 - degrees[ pitch ], degrees[ yaw ], 0.0 ]
+        # dead or frozen: the game points the view, not the mouse
+        if [ ps.pm_type >= PM_DEAD ]
+            angles = vec3f [
+                lerp_angle[ view_angles.x, ps.viewangles.x, frac ],
+                lerp_angle[ view_angles.y, ps.viewangles.y, frac ],
+                lerp_angle[ view_angles.z, ps.viewangles.z, frac ] ]
+        view_ang = vec3f [
+            angles.x + lerp_angle[ view_kick.x, ps.kick_angles.x, frac ],
+            angles.y + lerp_angle[ view_kick.y, ps.kick_angles.y, frac ],
+            angles.z + lerp_angle[ view_kick.z, ps.kick_angles.z, frac ] ]
+        ex = view_org.x
+        ey = view_org.z
+        ez = 0.0 - view_org.y
+
+    # LerpAngle: from one angle to the next the short way round
+    func lerp_angle [ from: f32, to: f32, frac: f32 ] -> f32
+        turn : f32 [ to - from ]
+        if [ turn > 180.0 ]  turn = turn - 360.0
+        if [ turn < -180.0 ] turn = turn + 360.0
+        return from + frac * turn
+
+    # is any corner of the entity's box in a cluster the eye sees
+    func ent_seen [ e: Edict ] -> bool
+        if [ cluster < 0 ] return true
+        # SV_BuildClientFrame: not through a shut area portal
+        mid : vec3f [ v_scale[ v_add[ e.absmin, e.absmax ], 0.5 ] ]
+        its : i32 [ bsp.area_at[ mid.x, mid.y, mid.z ] ]
+        if [ its > 0 && !bsp.areas_connected[ eye_area, its ] ]
+            return false
+        for [ i: i32 0, i < 8, i += 1 ]
+            x : f32 [ (i & 1) ? e.absmax.x : e.absmin.x ]
+            y : f32 [ (i & 2) ? e.absmax.y : e.absmin.y ]
+            z : f32 [ (i & 4) ? e.absmax.z : e.absmin.z ]
+            c : i32 [ bsp.cluster_at[ x, y, z ] ]
+            if [ c < 0 ] continue
+            if [ i32[ bsp.vis_row[ c >> 3 ] ] & (1 << (c & 7)) ]
+                return true
+        return false
+
+    # CL_EntityEvent, and the teleporter pads: once a game frame
+    func entity_events []
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        for [ i: i32 1, i < game.num_edicts, i += 1 ]
+            e : game.edicts[ i ]
+            if [ !e.inuse ] continue
+            if [ e.effects & EF_TELEPORTER ]
+                visuals.teleporter_particles[ e.origin ]
+            ev : i32 [ e.event ]
+            if [ ev == 0 ] continue
+            # the server clears an event once it is sent
+            e.event = 0
+            if [ ev == EV_ITEM_RESPAWN ]
+                snd.start_named[ 'items/respawn1.wav', false, zero, i,
+                                 CHAN_WEAPON, 1.0, ATTN_IDLE, 0.0 ]
+                visuals.item_respawn_particles[ e.origin ]
+            el [ ev == EV_PLAYER_TELEPORT ]
+                snd.start_named[ 'misc/tele1.wav', false, zero, i,
+                                 CHAN_WEAPON, 1.0, ATTN_IDLE, 0.0 ]
+                visuals.teleport_particles[ e.origin ]
+            el [ ev == EV_FOOTSTEP ]
+                foot : i32 [ 1 + (rand[] & 3) ]
+                snd.start_named[ 'player/step{foot}.wav', false, zero,
+                                 i, CHAN_BODY, 1.0, ATTN_NORM, 0.0 ]
+            el [ ev == EV_FALLSHORT ]
+                snd.start_named[ 'player/land1.wav', false, zero, i,
+                                 CHAN_AUTO, 1.0, ATTN_NORM, 0.0 ]
+            el [ ev == EV_FALL || ev == EV_FALLFAR ]
+                name : string [ (ev == EV_FALL) ? '*fall2.wav'
+                                : '*fall1.wav' ]
+                snd.start_named[ name, false, zero, i, CHAN_AUTO, 1.0,
+                                 ATTN_NORM, 0.0 ]
+
+    # R_DrawAliasModel's light: the floor's, the dynamic ones, flags
+    func entity_light [ origin: vec3f, render: i32, now: f32 ] -> vec3f
+        if [ render & RF_FULLBRIGHT ] return vec3f [ 1.0, 1.0, 1.0 ]
+        light : vec3f [ v_add[ bsp.light_point[ origin ],
+                               visuals.light_at[ origin ] ] ]
+        if [ (render & RF_MINLIGHT) != 0 && light.x <= 0.1 &&
+             light.y <= 0.1 && light.z <= 0.1 ]
+            light = vec3f [ 0.1, 0.1, 0.1 ]
+        # bonus items pulse with time
+        if [ render & RF_GLOW ]
+            pulse : f32 [ 0.1 * sin[ now * 7.0 ] ]
+            light = vec3f [ glow[ light.x, pulse ],
+                            glow[ light.y, pulse ],
+                            glow[ light.z, pulse ] ]
+        return light
+
+    # CL_AddPacketEntities: lights and trails first, then the models
+    func draw_entities [ frac: f32 ]
+        md2_sh.model  = mat4f.identity[]
+        md2_sh.view   = sh.view
+        md2_sh.proj   = sh.proj
+        md2c_sh.model = md2_sh.model
+        md2c_sh.view  = sh.view
+        md2c_sh.proj  = sh.proj
+        if [ !md2_model.pipelines || md2_model.pipelines.count == 0 ]
+            return
+        if [ !md2c_model.pipelines || md2c_model.pipelines.count == 0 ]
+            return
+        view : angle_vectors[ view_ang ]
+        eye : vec3f [ view_org ]
+        md2.begin[ md2_model.pipelines[ 0 ].vbo,
+                   md2c_model.pipelines[ 0 ].vbo, eye, view.forward,
+                   view.right, view.up ]
+        visuals.begin[ last_dt ]
+        n : i32 [ game.num_edicts ]
+        if [ !ent_now || ent_now.count < n * 8 ]
+            ent_now = vec f32 [ n * 8 + 2048 ]
+        inline_n : i32 [ bsp.model_head.count ]
+        now : f32 [ game.level.time + game_acc ]
+        for [ i: i32 1, i < n, i += 1 ]
+            e : game.edicts[ i ]
+            o : i32 [ i * 8 ]
+            ent_now[ o + 7 ] = 0.0
+            if [ !e.inuse || e == pl ] continue
+            if [ e.svflags & SVF_NOCLIENT ] continue
+            beam : bool [ (e.renderfx & RF_BEAM) != 0 ]
+            if [ !beam && e.modelindex < inline_n ] continue
+            if [ !ent_seen[ e ] ] continue
+            origin : vec3f [ e.origin ]
+            angles : vec3f [ e.angles ]
+            old_frame : i32 [ e.frame ]
+            # CL_DeltaEntity: a new model or a jump of 512 is no lerp
+            was : i32 [ (i < ent_prev_n) ? ent_prev[ o + 7 ] : 0 ]
+            fresh : bool [ true ]
+            if [ was == e.modelindex && !beam &&
+                 fabs[ ent_prev[ o ] - origin.x ] <= 512.0 &&
+                 fabs[ ent_prev[ o + 1 ] - origin.y ] <= 512.0 &&
+                 fabs[ ent_prev[ o + 2 ] - origin.z ] <= 512.0 ]
+                fresh = false
+                back : f32 [ 1.0 - frac ]
+                origin = vec3f [
+                    origin.x + back * (ent_prev[ o ] - origin.x),
+                    origin.y + back * (ent_prev[ o + 1 ] - origin.y),
+                    origin.z + back * (ent_prev[ o + 2 ] - origin.z) ]
+                angles = vec3f [
+                    lerp_angle[ ent_prev[ o + 3 ], angles.x, frac ],
+                    lerp_angle[ ent_prev[ o + 4 ], angles.y, frac ],
+                    lerp_angle[ ent_prev[ o + 5 ], angles.z, frac ] ]
+                old_frame = ent_prev[ o + 6 ]
+            ent_now[ o ]     = origin.x
+            ent_now[ o + 1 ] = origin.y
+            ent_now[ o + 2 ] = origin.z
+            ent_now[ o + 3 ] = angles.x
+            ent_now[ o + 4 ] = angles.y
+            ent_now[ o + 5 ] = angles.z
+            ent_now[ o + 6 ] = old_frame
+            ent_now[ o + 7 ] = 1.0
+            if [ !beam && (e.effects & ~EF_ROTATE) != 0 ]
+                visuals.entity[ e, i, origin, fresh ]
+        # every light is known now: the models can be lit
+        for [ i: i32 1, i < n, i += 1 ]
+            o : i32 [ i * 8 ]
+            if [ ent_now[ o + 7 ] == 0.0 ] continue
+            e : game.edicts[ i ]
+            if [ e.renderfx & RF_BEAM ]
+                # the four beam colours ride in skinnum's four bytes
+                color : i32 [ (e.skinnum >> ((rand[] % 4) * 8)) & 255 ]
+                md2.beam[ e.origin, e.old_origin, f32[ e.frame ], color,
+                          0.3 ]
                 continue
-            s2.model = entity_matrix[ e.origin, e.angles ]
+            origin : vec3f [ ent_now[ o ], ent_now[ o + 1 ],
+                             ent_now[ o + 2 ] ]
+            angles : vec3f [ ent_now[ o + 3 ], ent_now[ o + 4 ],
+                             ent_now[ o + 5 ] ]
+            old_frame : i32 [ ent_now[ o + 6 ] ]
+            draw_entity[ e, origin, angles, old_frame, 1.0 - frac, now ]
+        view_weapon[ frac ]
+        visuals.draw[]
+        world_lights[ eye ]
+        md2.finish[ md2_tx ]
+
+    # one entity's models: itself, a shell, what rides on it
+    func draw_entity [ e: Edict, origin: vec3f, turned: vec3f,
+                       old_frame: i32, back: f32, now: f32 ]
+        effects : i32 [ e.effects ]
+        renderfx : i32 [ e.renderfx ]
+        # the animating effects run the frame off the clock
+        frame : i32 [ e.frame ]
+        autoanim : i32 [ now * 2.0 ]
+        if [ effects & EF_ANIM01 ]         frame = autoanim & 1
+        el [ effects & EF_ANIM23 ]         frame = 2 + (autoanim & 1)
+        el [ effects & EF_ANIM_ALL ]       frame = autoanim
+        el [ effects & EF_ANIM_ALLFAST ]   frame = now * 10.0
+        # invulnerability and quad show as red and blue shells
+        if [ effects & EF_PENT ]
+            effects = effects | EF_COLOR_SHELL
+            renderfx = renderfx | RF_SHELL_RED
+        if [ effects & EF_QUAD ]
+            effects = effects | EF_COLOR_SHELL
+            renderfx = renderfx | RF_SHELL_BLUE
+        # the render flags go on the shell when there is one
+        render : i32 [ (effects & EF_COLOR_SHELL) ? 0 : renderfx ]
+        alpha : f32 [ 1.0 ]
+        if [ renderfx == RF_TRANSLUCENT ] alpha = 0.7
+        if [ effects & EF_BFG ] alpha = 0.3
+        angles : vec3f [ turned ]
+        # items turn in place: a tenth of a degree a millisecond
+        if [ effects & EF_ROTATE ]
+            angles = vec3f [ 0.0, anglemod[ now * 100.0 ], 0.0 ]
+        light : vec3f [ entity_light[ origin, render, now ] ]
+        m : md2.get[ e.modelindex, game.models ]
+        # R_CullAliasModel: wholly outside the view, nothing is drawn
+        reach : f32 [ md2.radius[ m, frame ] ]
+        for [ k: i32 0, k < 4, k += 1 ]
+            ahead : f32 [ origin.x * frustum[ k * 4 ]
+                          + origin.y * frustum[ k * 4 + 1 ]
+                          + origin.z * frustum[ k * 4 + 2 ]
+                          - frustum[ k * 4 + 3 ] ]
+            if [ ahead < 0.0 - reach ] return
+        md2.add[ m, e.skinnum, frame, old_frame, back, origin, angles,
+                 light, alpha, false ]
+        shell : vec3f [ (renderfx & RF_SHELL_RED) ? 1.0 : 0.0,
+                        (renderfx & RF_SHELL_GREEN) ? 1.0 : 0.0,
+                        (renderfx & RF_SHELL_BLUE) ? 1.0 : 0.0 ]
+        if [ effects & EF_COLOR_SHELL ]
+            md2.add[ m, 0, frame, old_frame, back, origin, angles,
+                     shell, 0.3, true ]
+        # linked models ride the same frame, on their first skin
+        plain : vec3f [ entity_light[ origin, 0, now ] ]
+        inline_n : i32 [ bsp.model_head.count ]
+        second : i32 [ e.modelindex2 ]
+        if [ second >= inline_n && second < game.models.count ]
+            rider : md2.get[ second, game.models ]
+            md2.add[ rider, 0, frame, old_frame, back, origin, angles,
+                     plain, 1.0, false ]
+        third : i32 [ e.modelindex3 ]
+        if [ third >= inline_n && third < game.models.count ]
+            extra : md2.get[ third, game.models ]
+            md2.add[ extra, 0, frame, old_frame, back, origin, angles,
+                     plain, 1.0, false ]
+        if [ effects & EF_POWERSCREEN ]
+            screen : md2.named[ 'models/items/armor/effect/tris.md2' ]
+            green : vec3f [ 0.0, 1.0, 0.0 ]
+            md2.add[ screen, 0, 0, 0, back, origin, angles, green, 0.3,
+                     true ]
+
+    # the four lights that matter most at the eye, to the world
+    func world_lights [ eye: vec3f ]
+        picked : vec i32 [] [ -1, -1, -1, -1 ]
+        for [ slot: i32 0, slot < 4, slot += 1 ]
+            best : f32 [ -100000.0 ]
+            for [ i: i32 0, i < visuals.light_n, i += 1 ]
+                if [ i == picked[ 0 ] || i == picked[ 1 ] ||
+                     i == picked[ 2 ] ] continue
+                o : i32 [ i * 7 ]
+                ls : visuals.lights
+                at : vec3f [ ls[ o ], ls[ o + 1 ], ls[ o + 2 ] ]
+                score : f32 [ ls[ o + 3 ] - v_len[ v_sub[ at, eye ] ] ]
+                if [ score > best ]
+                    best = score
+                    picked[ slot ] = i
+        world_light[ sh, picked ]
+        if [ inline_sh ]
+            for [ s2: BspLit ] in inline_sh
+                world_light[ s2, picked ]
+        if [ clear_sh ]
+            for [ s2: BspLit ] in clear_sh
+                world_light[ s2, picked ]
+
+    # the picked lights into one shader, trinity axes; none is zero
+    func world_light [ s: BspLit, picked: vec i32 ]
+        zero : vec4f [ 0.0, 0.0, 0.0, 0.0 ]
+        s.dl0 = zero
+        s.dl1 = zero
+        s.dl2 = zero
+        s.dl3 = zero
+        for [ slot: i32 0, slot < 4, slot += 1 ]
+            i : i32 [ picked[ slot ] ]
+            if [ i < 0 ] continue
+            o : i32 [ i * 7 ]
+            ls : visuals.lights
+            place : vec4f [ ls[ o ], ls[ o + 2 ], 0.0 - ls[ o + 1 ],
+                            ls[ o + 3 ] ]
+            tint : vec4f [ ls[ o + 4 ], ls[ o + 5 ], ls[ o + 6 ], 1.0 ]
+            if [ slot == 0 ]
+                s.dl0 = place
+                s.dc0 = tint
+            el [ slot == 1 ]
+                s.dl1 = place
+                s.dc1 = tint
+            el [ slot == 2 ]
+                s.dl2 = place
+                s.dc2 = tint
+            el
+                s.dl3 = place
+                s.dc3 = tint
+
+    # CL_AddViewWeapon: the gun at the eye, turned with the view
+    func view_weapon [ frac: f32 ]
+        ps : pl.client.ps
+        if [ ps.gunindex < bsp.model_head.count ] return
+        if [ ps.gunindex >= game.models.count ] return
+        back : f32 [ 1.0 - frac ]
+        off : vec3f [ v_add[ ps.gunoffset,
+            v_scale[ v_sub[ gun_offset, ps.gunoffset ], back ] ] ]
+        origin : vec3f [ v_add[ view_org, off ] ]
+        angles : vec3f [
+            view_ang.x + lerp_angle[ gun_angles.x, ps.gunangles.x, frac ],
+            view_ang.y + lerp_angle[ gun_angles.y, ps.gunangles.y, frac ],
+            view_ang.z + lerp_angle[ gun_angles.z, ps.gunangles.z, frac ] ]
+        # just changed weapons: don't lerp from the old one's frame
+        old_frame : i32 [ (ps.gunframe == 0) ? 0 : gun_frame ]
+        light : vec3f [ entity_light[ origin, RF_MINLIGHT, 0.0 ] ]
+        m : md2.get[ ps.gunindex, game.models ]
+        # alpha 2 is RF_DEPTHHACK: depth into the nearest three tenths
+        md2.add[ m, 0, ps.gunframe, old_frame, back, origin, angles,
+                 light, 2.0, false ]
+
+    # RF_GLOW: the pulse added, never under four fifths of the light
+    func glow [ l: f32, pulse: f32 ] -> f32
+        least : f32 [ l * 0.8 ]
+        return (l + pulse < least) ? least : l + pulse
 
     # quake origin and angles as a trinity matrix (x, z, -y axes)
     func entity_matrix [ origin: vec3f, angles: vec3f ] -> mat4f
@@ -483,6 +1308,7 @@ element MapView
                 oz = t.ez
                 nplanes = 0
             if [ t.fraction == 1.0 ] break
+            if [ t.ent && touched.count < 32 ] touched.push[ t.ent ]
             left = left - left * t.fraction
             if [ nplanes >= 5 ]
                 vx = 0.0
@@ -528,20 +1354,178 @@ element MapView
                 vz = 0.0
                 break
 
+    # SV_Map: 'film.cin+map$start'; a '*' begins a new unit
+    func go [ asked: string ]
+        place : string [ asked ]
+        pending_map = ''
+        # past a +, the rest is what follows
+        plus : cstr [ strchr[ place.chars, 43 ] ]
+        if [ plus ]
+            cut : i32 [ place.count - strlen[ plus ] ]
+            pending_map = place.mid[ cut + 1, place.count - cut - 1 ]
+            place = place.mid[ 0, cut ]
+        # past a $, the start to arrive at
+        next_spawn = ''
+        dollar : cstr [ strchr[ place.chars, 36 ] ]
+        if [ dollar ]
+            at : i32 [ place.count - strlen[ dollar ] ]
+            next_spawn = place.mid[ at + 1, place.count - at - 1 ]
+            place = place.mid[ 0, at ]
+        # skip the end-of-unit flag
+        if [ place[ 0 ] == 42 ]
+            # a new unit: the kept levels go
+            hub = vec SaveOut []
+            place = place.mid[ 1, place.count - 1 ]
+        n : i32 [ place.count ]
+        ending : string [ (n > 4) ? place.mid[ n - 4, 4 ] : '' ]
+        if [ ending == '.cin' || ending == '.pcx' ]
+            show[ place ]
+            return
+        log 'quake2: loading {place}'
+        level_name = place
+        reload = true
+
+    # SCR_PlayCinematic: the game's sounds stop, the film starts
+    func show [ which: string ]
+        if [ !pak ]
+            pak = Pak [ ]
+            pak.open[ path [ game_dir ] ]
+        if [ !snd ] snd = SoundSet [ pak: pak ]
+        snd.reset[]
+        if [ !film ] film = Cinematic [ pak: pak ]
+        film.pak = pak
+        film.mixer = (snd.on) ? snd.mixer : null
+        film_us = 0
+        film.open[ which ]
+        if [ film.done ] film_end[]
+
+    # SCR_FinishCinematic: on to what follows the film
+    func film_end []
+        film_us = 0
+        last_us = 0
+        if [ pending_map && pending_map.count > 0 ]
+            # a copy: go clears pending_map while it reads its name
+            after : pending_map.mid[ 0, pending_map.count ]
+            go[ after ]
+            return
+        # the end of the game: the menu over a new first level
+        menu.open[ 0 ]
+        fresh[ 'base1' ]
+
+    # what the menu chose and the console's lines
+    func act []
+        if [ menu.quit ]
+            menu.quit = false
+            Au.quit_request[]
+        if [ menu.new_skill >= 0 ]
+            skill = menu.new_skill
+            menu.new_skill = -1
+            fresh[ '*ntro.cin+base1' ]
+        if [ snd ] snd.master = menu.volume
+        if [ menu.save_slot >= 0 ]
+            if [ game && pl && pl.deadflag == 0 ]
+                save_slot[ menu.save_slot ]
+            menu.save_slot = -1
+            menu.slot_names = slot_comments[]
+        if [ menu.load_slot >= 0 ]
+            load_slot[ menu.load_slot ]
+            menu.load_slot = -1
+        for [ entered: string ] in con.commands
+            words : entered.split[ ' ' ]
+            verb : words[ 0 ]
+            rest : ''
+            for [ i: i32 1, i < words.count, i += 1 ]
+                word : words[ i ]
+                rest = (i == 1) ? word : '{rest} {word}'
+            if [ verb == 'map' && rest.count > 0 ]   fresh[ rest ]
+            el [ verb == 'skill' && rest.count > 0 ] skill = atoi[ rest.chars ]
+            el [ verb == 'quit' ]   Au.quit_request[]
+            el [ pl ]                client_command[ pl, verb, rest ]
+        if [ con.commands.count > 0 ] con.commands = vec string []
+
+    # each slot's comment: the level's name when it was saved
+    func slot_comments [] -> vec string
+        titles : vec string []
+        for [ i: i32 0, i < 15, i += 1 ]
+            lines : save_read[ save_file[ i ], 2 ]
+            blank : '<EMPTY>'
+            # a copy: the list frees what it holds
+            comment : blank.mid[ 0, blank.count ]
+            if [ lines && lines.words.count >= 2 ]
+                skipped : lines.get_s[]
+                said : lines.get_s[]
+                if [ said ] comment = said
+            titles.push[ comment ]
+        return titles
+
+    # SV_Savegame_f: the game, this level, the hub's kept levels
+    func save_slot [ n: i32 ]
+        s : SaveOut [ ]
+        s.put_s[ level_name ]
+        s.put_s[ game.level.level_name ]
+        write_game[ s ]
+        now : write_level[ false ]
+        s.append[ now ]
+        kept_n : i32 [ (hub) ? hub.count : 0 ]
+        s.put_i[ kept_n ]
+        for [ i: i32 0, i < kept_n, i += 1 ]
+            lv : hub[ i ]
+            s.put_s[ lv.name ]
+            s.append[ lv ]
+        if [ save_write[ save_file[ n ], s ] ] con.say[ 'game saved' ]
+        el con.say[ 'could not write the save' ]
+
+    # SV_Loadgame_f: the level named, then load reads the rest
+    func load_slot [ n: i32 ]
+        got : save_read[ save_file[ n ], 0 ]
+        if [ !got || got.words.count < 8 ]
+            con.say[ 'no game saved there' ]
+            return
+        place : got.get_s[]
+        said : got.get_s[]
+        loading = got
+        changing = false
+        entry = null
+        game = null
+        level_name = place
+        reload = true
+
+    # a new game: nothing carried, the level named
+    func fresh [ asked: string ]
+        changing = false
+        entry = null
+        game = null
+        go[ asked ]
+
     public func draw [ w: Window ]
         if [ w.draw_stage != CanvasType.screen ] return
         ux.will_animate = true
         cv : Canvas [ w.screen ]
         if [ failed ] return
-        if [ !target ]
+        if [ !menu ]
+            menu = Menu [ ]
+            menu.slot_names = slot_comments[]
+            con = GameConsole [ ]
+        act[]
+        if [ film && !film.done ]
+            now : i64 [ epoch_micros[] ]
+            if [ film_us == 0 ] film_us = now
+            film.frame[ f32[ now - film_us ] / 1000000.0 ]
+            film_us = now
+            film.draw[ cv, w, bounds.w, bounds.h ]
+            if [ film.done ] film_end[]
+            return
+        if [ !target || reload ]
+            reload = false
             load[]
             if [ failed ] return
             sh = BspLit [ vk: cv.vk, name: 'bsp' ]
             tx_c : Texture [ vk: cv.vk, w: w, sampler: bsp.tex_atlas,
                              mip_levels: 1, linear: true ]
-            tx_l : Texture [ vk: cv.vk, w: w, sampler: bsp.lm_atlas,
-                             mip_levels: 1, linear: true ]
-            samplers : map Au [string] [ 'color': tx_c, 'lm': tx_l ]
+            lm_tx = Texture [ vk: cv.vk, w: w, sampler: bsp.lm_atlas,
+                              mip_levels: 1, linear: true ]
+            style_tick = -1
+            samplers : map Au [string] [ 'color': tx_c, 'lm': lm_tx ]
             model = Model [ vk: cv.vk, w: w, s: sh, samplers: samplers,
                             cull_none: true ]
             model.id = world
@@ -572,27 +1556,93 @@ element MapView
                                     cull_none: true ]
                 sky_model.id = sky_gltf
                 ms.push[ sky_model ]
+            md2_tx = Texture [ vk: cv.vk, w: w, sampler: md2.atlas,
+                               mip_levels: 1, linear: true ]
+            # the texture took the atlas whole: nothing is waiting
+            md2.pending = vec BspTex []
+            md2_sh = Md2Lit [ vk: cv.vk, name: 'md2' ]
+            skins : map Au [string] [ 'skin': md2_tx ]
+            md2_model = Model [ vk: cv.vk, w: w, s: md2_sh,
+                                samplers: skins, cull_none: true ]
+            md2_model.id = md2.mesh[]
+            ms.push[ md2_model ]
+            md2c_sh = Md2Lit [ vk: cv.vk, name: 'md2',
+                               transparent: true ]
+            md2c_model = Model [ vk: cv.vk, w: w, s: md2c_sh,
+                                 samplers: skins, cull_none: true ]
+            md2c_model.id = md2.mesh[]
+            ms.push[ md2c_model ]
+            # R_DrawAlphaSurfaces: after the entities and particles
+            clear_sh = vec BspLit []
+            if [ clear_gltf ]
+                for [ i: i32 0, i < bsp.clear_model.count, i += 1 ]
+                    nd : clear_gltf.nodes[ i ]
+                    s3 : BspLit [ vk: cv.vk, name: 'bsp',
+                                  transparent: true ]
+                    s3.groups = vec string [] [ nd.name ]
+                    mdl : Model [ vk: cv.vk, w: w, s: s3,
+                                  samplers: samplers, cull_none: true ]
+                    mdl.id = clear_gltf
+                    ms.push[ mdl ]
+                    clear_sh.push[ s3 ]
             gw : i32 [ i32[ bounds.w * 2.0 ] ]
             gh : i32 [ i32[ bounds.h * 2.0 ] ]
-            target = Render [ vk: cv.vk, w: w, width: gw, height: gh,
-                use_depth: true,
-                clear_color: vec4f [ 0.05, 0.07, 0.10, 1.0 ],
-                models: ms ]
-            target.owner = a
-            w.element_targets[ 'q2_{id}' ] = target
-            target.wscale = 0.0
+            if [ target ]
+                # a new map: the same target takes the new models
+                target.sync_fence[]
+                target.models = ms
+                for [ m: Model ] in ms
+                    m.finish[ target, 0 ]
+            el
+                target = Render [ vk: cv.vk, w: w, width: gw,
+                    height: gh, use_depth: true,
+                    clear_color: vec4f [ 0.05, 0.07, 0.10, 1.0 ],
+                    models: ms ]
+                target.owner = a
+                w.element_targets[ 'q2_{id}' ] = target
+                target.wscale = 0.0
             log 'quake2: {bsp.name} drawn, {bsp.tri_count} triangles'
-        step[]
+        # the menu or the console holds the game still
+        if [ menu.active || con.active ]
+            last_us = 0
+            last_dt = 0.0
+        el
+            step[]
         # the game runs ten frames a second behind the player's move
         game_acc = game_acc + last_dt
         while [ game_acc >= 0.1 ]
+            snapshot[]
             game.run_frame[]
             game_acc = game_acc - 0.1
-        cp : f32 [ cos[ pitch ] ]
+            entity_events[]
+        light_styles[]
+        ear : vec3f [ ox, oy, oz + f32[ pl.viewheight ] ]
+        visuals.events[]
+        ears : angle_vectors[ view_ang ]
+        snd.frame[ ear, ears.right, last_dt ]
+        # the level ends: the next map, or this one again
+        if [ game.restart || game.next_map ]
+            if [ game.next_map ]
+                # SV_GameMap_f: the level left is kept for the hub
+                if [ game.next_map[ 0 ] != 42 ]
+                    left : write_level[ true ]
+                    left.name = level_name
+                    if [ !hub ] hub = vec SaveOut []
+                    for [ i: i32 hub.count - 1, i >= 0, i = i - 1 ]
+                        if [ hub[ i ].name == level_name ] hub.remove[ i ]
+                    hub.push[ left ]
+                changing = true
+                go[ game.next_map ]
+            el
+                log 'quake2: restarting {level_name}'
+                reload = true
+            return
+        calc_view[ game_acc / 0.1 ]
+        vax : angle_vectors[ view_ang ]
         eye : vec3f [ ex, ey, ez ]
-        tgt : vec3f [ ex + cp * cos[ yaw ], ey + sin[ pitch ],
-                      ez - cp * sin[ yaw ] ]
-        up  : vec3f [ 0.0, 1.0, 0.0 ]
+        tgt : vec3f [ ex + vax.forward.x, ey + vax.forward.z,
+                      ez - vax.forward.y ]
+        up  : vec3f [ vax.up.x, vax.up.z, 0.0 - vax.up.y ]
         asp : f32 [ bounds.w / bounds.h ]
         fov : f32 [ 2.0 * atan[ tan[ 0.7854 ] / asp ] ]
         prj : mat4f [ mat4f.perspective[ fov, asp, 4.0, 8192.0 ] ]
@@ -606,18 +1656,102 @@ element MapView
             sky_sh.view  = sh.view
             sky_sh.proj  = sh.proj
             sky_sh.eye   = vec4f [ ex, ey, ez, 1.0 ]
+            # no axis, no turn: gl's rotate about nothing did nothing
+            around : vec3f [ v_norm[ bsp.sky_axis ] ]
+            turned : f32 [ (v_zero[ around ]) ? 0.0
+                           : radians[ sh.clock.x * bsp.sky_rotate ] ]
+            sky_sh.spin = vec4f [ around.x, around.y, around.z, turned ]
         # the pvs: only faces seen from the eye's cluster are drawn
         c : i32 [ bsp.cluster_at[ ex, 0.0 - ez, ey ] ]
         if [ !model.pipelines || model.pipelines.count == 0 ] return
         wp : model.pipelines[ 0 ]
-        if [ c != cluster || wp.vbo.index_count != vis_n ]
-            cluster  = c
-            vis_n    = bsp.visible_indices[ c, idx_live ]
-            vis_tris = vis_n / 3
-            wp.vbo.upload_index[ idx_live, vis_n ]
+        # R_SetFrustum: the side planes half a field of view round
+        if [ !frustum ] frustum = vec f32 [ 16 ]
+        half_x : f32 [ 0.7854 ]
+        half_y : f32 [ fov * 0.5 ]
+        for [ k: i32 0, k < 4, k += 1 ]
+            half : f32 [ (k < 2) ? half_x : half_y ]
+            side : vec3f [ (k < 2) ? vax.right : vax.up ]
+            turn : f32 [ (k % 2 == 0) ? cos[ half ] : 0.0 - cos[ half ] ]
+            normal : vec3f [ v_ma[ v_scale[ vax.forward, sin[ half ] ],
+                                   turn, side ] ]
+            frustum[ k * 4 ]     = normal.x
+            frustum[ k * 4 + 1 ] = normal.y
+            frustum[ k * 4 + 2 ] = normal.z
+            frustum[ k * 4 + 3 ] = v_dot[ normal, view_org ]
+        eye_area = bsp.area_at[ ex, 0.0 - ez, ey ]
+        # every frame: the frustum turns with the view
+        cluster  = c
+        vis_n    = bsp.visible_indices[ c, eye_area, frustum, idx_live ]
+        vis_tris = vis_n / 3
+        wp.vbo.upload_index[ idx_live, vis_n ]
+        draw_entities[ game_acc / 0.1 ]
         target.update[]
         cv.draw_image[ target.color,
                        rect [ x: 0.0, y: 0.0, w: bounds.w, h: bounds.h ] ]
+        # ps.blend: damage, pickups, powerups, the liquid at the eye
+        tint : vec4f [ pl.client.ps.blend ]
+        if [ tint.w > 0.0 ]
+            cv.fill_rgba[ tint.x, tint.y, tint.z, tint.w ]
+            cv.rounded_rect[ 0.0, 0.0, bounds.w, bounds.h, 0.0, 0.0,
+                             0.0, 0.0 ]
+            cv.paint[]
+        hud[ cv, w ]
+        menu.draw[ cv, w, status, bounds.w, bounds.h, 1.0 / 60.0 ]
+        con.draw[ cv, w, status, bounds.w, bounds.h ]
+
+    # CL_RunLightStyles: each style's letter this game frame
+    func light_styles []
+        tick : i32 [ game.level.framenum ]
+        if [ tick == style_tick ] return
+        style_tick = tick
+        # g_spawn.c's styles 0 .. 11: m is normal, a dark, z double
+        patterns : vec string [] [ 'm', 'mmnmmommommnonmmonqnmmo',
+            'abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba',
+            'mmmmmaaaaammmmmaaaaaabcdefgabcdefg', 'mamamamamama',
+            'jklmnopqrstuvwxyzyxwvutsrqponmlkj', 'nmonqnmomnmomomno',
+            'mmmaaaabcdefgmmmmaaaammmaamm',
+            'mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa',
+            'aaaaaaaazzzzzzzz', 'mmamammmmammamamaaamammma',
+            'abcdefghijklmnopqrrqponmlkjihgfedcba' ]
+        values : vec f32 [ 256 ]
+        for [ i: i32 0, i < 256, i += 1 ]
+            letter : i32 [ 109 ]
+            if [ i < 64 && game.lightstyles[ i ] != 0 ]
+                # a switched light: the game set its letter
+                letter = game.lightstyles[ i ]
+            el [ i < patterns.count ]
+                pattern : patterns[ i ]
+                letter = pattern[ tick % pattern.count ]
+            el [ i == 63 ]
+                letter = 97
+            values[ i ] = f32[ letter - 97 ] / 12.0
+        if [ !bsp.relight[ values ] ] return
+        ld : @u8 [ bsp.lm_atlas.vdata[] ]
+        rows : i32 [ bsp.dirty_end - bsp.dirty_first ]
+        lm_tx.upload_region[ 0, bsp.dirty_first, bsp.lm_w, rows,
+                             @ld[ bsp.dirty_first * bsp.lm_w * 4 ],
+                             rows * bsp.lm_w * 4 ]
+
+    # the status bar, the layouts, the center print
+    func hud [ cv: Canvas, w: Window ]
+        # the low numbers flash: (serverframe >> 2) & 1
+        flash : bool [ ((game.level.framenum >> 2) & 1) != 0 ]
+        st : pl.client.ps.stats
+        status.draw[ cv, w, bounds.w, bounds.h, st, flash ]
+        cp : string [ pl.client.centerprint ]
+        if [ cp && pl.client.centerprint_time > game.level.time ]
+            status.center[ cv, w, cp ]
+        if [ pl.deadflag != 0 ]
+            status.chars[ cv, w, 'fire to restart',
+                          status.wide / 2.0 - 60.0, status.high * 0.6,
+                          false ]
+        if [ st[ STAT_LAYOUTS ] & 1 ] status.help[ cv, w ]
+        if [ st[ STAT_LAYOUTS ] & 2 ]
+            status.inventory[ cv, w, pl.client.pers.inventory,
+                              st[ STAT_SELECTED_ITEM ], weapon_keys,
+                              (game.level.framenum & 1) != 0 ]
+        cv.paint[]
 
 element quake2 : trinity
     public width      : i32    [ 1280 ]
