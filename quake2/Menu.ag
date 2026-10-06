@@ -1,0 +1,242 @@
+# menu.c and console.c: the single player menus and a console
+extend quake2
+
+class Menu
+    public active  : bool
+    # 0 main, 1 game, 2 load, 3 save, 4 options, 5 quit
+    public screen  : i32
+    public cursor  : i32
+    public clock   : f32
+    # each save slot's comment; the parent fills it
+    public slot_names : vec string
+    # what was chosen; the parent acts, then clears
+    public new_skill : i32 [ -1 ]
+    public load_slot : i32 [ -1 ]
+    public save_slot : i32 [ -1 ]
+    public quit      : bool
+    public volume      : f32 [ 1.0 ]
+    public sensitivity : f32 [ 3.0 ]
+    public invert      : bool
+
+    func rows [] -> i32
+        if [ screen == 0 ] return 3
+        if [ screen == 1 ] return 5
+        if [ screen == 2 || screen == 3 ] return 15
+        if [ screen == 4 ] return 3
+        return 1
+
+    public func open [ which: i32 ]
+        active = true
+        screen = which
+        cursor = 0
+
+    # the row under the cursor is taken
+    func choose []
+        if [ screen == 0 ]
+            if [ cursor == 0 ]      open[ 1 ]
+            el [ cursor == 1 ]      open[ 4 ]
+            el                      open[ 5 ]
+        el [ screen == 1 ]
+            if [ cursor < 3 ]
+                new_skill = cursor
+                active = false
+            el [ cursor == 3 ]      open[ 2 ]
+            el                      open[ 3 ]
+        el [ screen == 2 ]
+            load_slot = cursor
+            active = false
+        el [ screen == 3 ]
+            save_slot = cursor
+            active = false
+        el [ screen == 4 ]
+            if [ cursor == 2 ] invert = !invert
+        el
+            quit = true
+
+    # left and right move a slider
+    func slide [ way: f32 ]
+        if [ screen != 4 ] return
+        if [ cursor == 0 ]
+            volume = volume + way * 0.1
+            if [ volume < 0.0 ] volume = 0.0
+            if [ volume > 1.0 ] volume = 1.0
+        el [ cursor == 1 ]
+            sensitivity = sensitivity + way * 0.5
+            if [ sensitivity < 1.0 ] sensitivity = 1.0
+            if [ sensitivity > 11.0 ] sensitivity = 11.0
+        el
+            invert = !invert
+
+    # true when the menu took the key
+    public func key [ code: i32, down: bool ] -> bool
+        if [ !active ]
+            if [ down && code == 256 ]
+                open[ 0 ]
+                return true
+            return false
+        if [ !down ] return true
+        n : i32 [ rows[] ]
+        if [ code == 256 ]
+            if [ screen == 0 ]                  active = false
+            el [ screen == 2 || screen == 3 ]   open[ 1 ]
+            el                                  open[ 0 ]
+        el [ code == 265 ]      cursor = (cursor + n - 1) % n
+        el [ code == 264 ]      cursor = (cursor + 1) % n
+        el [ code == 263 ]      slide[ -1.0 ]
+        el [ code == 262 ]      slide[ 1.0 ]
+        el [ code == 257 || code == 335 ] choose[]
+        el [ screen == 5 && code == 89 ]  quit = true
+        el [ screen == 5 && code == 78 ]  open[ 0 ]
+        return true
+
+    # a pic's width or height, layout pixels
+    func size_of [ cv: Canvas, w: Window, hud: Hud, pic: string,
+                   tall: bool ] -> f32
+        i : i32 [ hud.find[ cv, w, pic ] ]
+        if [ i < 0 ] return 0.0
+        return hud.sizes[ i * 2 + ((tall) ? 1 : 0) ]
+
+    # qmenu.c Slider_Draw: ends, ten cells, the knob
+    func slider [ cv: Canvas, w: Window, hud: Hud, px: f32, py: f32,
+                  part: f32 ]
+        hud.glyph[ cv, w, 128, px, py ]
+        for [ i: i32 0, i < 10, i += 1 ]
+            hud.glyph[ cv, w, 129, px + 8.0 + 8.0 * f32[ i ], py ]
+        hud.glyph[ cv, w, 130, px + 88.0, py ]
+        hud.glyph[ cv, w, 131, px + 8.0 + 72.0 * part, py ]
+
+    public func draw [ cv: Canvas, w: Window, hud: Hud, width: f32,
+                       height: f32, dt: f32 ]
+        if [ !active ] return
+        clock = clock + dt
+        cv.fill_rgba[ 0.0, 0.0, 0.0, 0.6 ]
+        cv.rounded_rect[ 0.0, 0.0, width, height, 0.0, 0.0, 0.0, 0.0 ]
+        cv.paint[]
+        middle : f32 [ hud.wide / 2.0 ]
+        top : f32 [ hud.high / 2.0 - 110.0 ]
+        if [ screen == 0 ]
+            # M_Main_Draw
+            names : vec string [] [ 'm_main_game', 'm_main_options',
+                                    'm_main_quit' ]
+            widest : f32 [ 0.0 ]
+            for [ i: i32 0, i < names.count, i += 1 ]
+                wide : f32 [ size_of[ cv, w, hud, names[ i ], false ] ]
+                if [ wide > widest ] widest = wide
+            left : f32 [ (hud.wide - widest + 70.0) / 2.0 ]
+            for [ i: i32 0, i < names.count, i += 1 ]
+                shown : names[ i ]
+                if [ i == cursor ] shown = '{shown}_sel'
+                hud.pic[ cv, w, shown, left, top + 40.0 * f32[ i ] + 13.0 ]
+            spin : i32 [ i32[ clock * 10.0 ] % 15 ]
+            hud.pic[ cv, w, 'm_cursor{spin}', left - 25.0,
+                     top + 40.0 * f32[ cursor ] + 11.0 ]
+            pw : f32 [ size_of[ cv, w, hud, 'm_main_plaque', false ] ]
+            ph : f32 [ size_of[ cv, w, hud, 'm_main_plaque', true ] ]
+            hud.pic[ cv, w, 'm_main_plaque', left - 30.0 - pw, top ]
+            hud.pic[ cv, w, 'm_main_logo', left - 30.0 - pw,
+                     top + ph + 5.0 ]
+            return
+        if [ screen == 5 ]
+            qw : f32 [ size_of[ cv, w, hud, 'quit', false ] ]
+            qh : f32 [ size_of[ cv, w, hud, 'quit', true ] ]
+            hud.pic[ cv, w, 'quit', (hud.wide - qw) / 2.0,
+                     (hud.high - qh) / 2.0 ]
+            return
+        banner : 'm_banner_game'
+        if [ screen == 2 ]      banner = 'm_banner_load_game'
+        el [ screen == 3 ]      banner = 'm_banner_save_game'
+        el [ screen == 4 ]      banner = 'm_banner_options'
+        bw : f32 [ size_of[ cv, w, hud, banner, false ] ]
+        hud.pic[ cv, w, banner, middle - bw / 2.0, top ]
+        lines : vec string []
+        if [ screen == 1 ]
+            lines = vec string [] [ 'easy', 'medium', 'hard',
+                                    'load game', 'save game' ]
+        el [ screen == 4 ]
+            turned : string [ (invert) ? 'yes' : 'no' ]
+            lines = vec string [] [ 'effects volume', 'mouse speed',
+                                    'invert mouse   {turned}' ]
+        el
+            for [ i: i32 0, i < 15, i += 1 ]
+                held : bool [ slot_names && i < slot_names.count ]
+                shown : string [ (held) ? slot_names[ i ] : '<EMPTY>' ]
+                lines.push[ shown ]
+        for [ i: i32 0, i < lines.count, i += 1 ]
+            py : f32 [ top + 40.0 + 10.0 * f32[ i ] ]
+            hud.chars[ cv, w, lines[ i ], middle - 80.0, py,
+                       i != cursor ]
+            if [ i == cursor && (i32[ clock * 4.0 ] & 1) != 0 ]
+                hud.glyph[ cv, w, 13, middle - 96.0, py ]
+        if [ screen == 4 ]
+            slider[ cv, w, hud, middle + 48.0, top + 40.0, volume ]
+            slider[ cv, w, hud, middle + 48.0, top + 50.0,
+                    (sensitivity - 1.0) / 10.0 ]
+
+class GameConsole
+    public active   : bool
+    public shift    : bool
+    public typing   : string [ '' ]
+    public lines    : vec string
+    # entered lines the parent runs, then clears
+    public commands : vec string
+
+    func init []
+        lines = vec string []
+        commands = vec string []
+
+    public func say [ s: string ]
+        lines.push[ s ]
+        if [ lines.count > 16 ] lines.remove[ 0 ]
+
+    # a key's letter, lower case; shift gives _ * + $
+    func letter [ code: i32 ] -> i32
+        if [ code >= 65 && code <= 90 ] return code + 32
+        if [ shift && code == 45 ] return 95
+        if [ shift && code == 56 ] return 42
+        if [ shift && code == 61 ] return 43
+        if [ shift && code == 52 ] return 36
+        if [ code == 32 || (code >= 44 && code <= 57) || code == 61 ]
+            return code
+        return 0
+
+    # true when the console took the key
+    public func key [ code: i32, down: bool ] -> bool
+        if [ code == 340 || code == 344 ] shift = down
+        if [ down && code == 96 ]
+            active = !active
+            return true
+        if [ !active ] return false
+        if [ !down ] return true
+        if [ code == 256 ]
+            active = false
+        el [ code == 257 ]
+            say[ ']{typing}' ]
+            if [ typing.count > 0 ] commands.push[ typing ]
+            typing = ''
+        el [ code == 259 ]
+            if [ typing.count > 0 ]
+                typing = typing.mid[ 0, typing.count - 1 ]
+        el
+            c : i32 [ letter[ code ] ]
+            if [ c != 0 && typing.count < 60 ]
+                buf : local i8 [ 2 ]
+                buf[ 0 ] = c
+                buf[ 1 ] = 0
+                typed : string [ cast cstr [ buf ] ]
+                typing = '{typing}{typed}'
+        return true
+
+    # the top half: the scroll back, then the line being typed
+    public func draw [ cv: Canvas, w: Window, hud: Hud, width: f32,
+                       height: f32 ]
+        if [ !active ] return
+        cv.fill_rgba[ 0.0, 0.0, 0.0, 0.8 ]
+        cv.rounded_rect[ 0.0, 0.0, width, height * 0.5, 0.0, 0.0, 0.0,
+                         0.0 ]
+        cv.paint[]
+        py : f32 [ hud.high * 0.5 - 12.0 ]
+        hud.chars[ cv, w, ']{typing}_', 8.0, py, false ]
+        for [ i: i32 lines.count - 1, i >= 0, i = i - 1 ]
+            py = py - 8.0
+            if [ py < 0.0 ] break
+            hud.chars[ cv, w, lines[ i ], 8.0, py, false ]

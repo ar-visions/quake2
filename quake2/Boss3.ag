@@ -1,0 +1,29 @@
+# m_boss3.c: the makron standing on show until used, then gone
+extend quake2
+
+func use_boss3 [ e: Edict, other: Edict, activator: Edict ]
+    g.temp_entity_at[ TE_BOSSTPORT, e.origin ]
+    g.free_edict[ e ]
+
+func think_boss3_stand [ e: Edict ]
+    # stand201 414 .. stand260 473 of m_boss32.h
+    if [ e.frame == 473 ] e.frame = 414
+    el                    e.frame += 1
+    e.nextthink = g.level.time + FRAMETIME
+
+func sp_monster_boss3_stand [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.model = 'models/monsters/boss3/rider/tris.md2'
+    e.modelindex = g.modelindex[ e.model ]
+    e.frame = 414
+    g.soundindex[ 'misc/bigtele.wav' ]
+    e.mins = vec3f [ -32.0, -32.0, 0.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 90.0 ]
+    e.use = lambda use_boss3[]
+    e.think = lambda think_boss3_stand[]
+    e.nextthink = g.level.time + FRAMETIME
+    g.world.link[ e ]

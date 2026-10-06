@@ -1,0 +1,512 @@
+# m_tank.c: tank and tank commander (blaster, rockets, a
+# chaingun sweep, a strike on a downed player)
+extend quake2
+
+tank_sound_thud : i32
+tank_sound_pain : i32
+tank_sound_idle : i32
+tank_sound_die : i32
+tank_sound_step : i32
+tank_sound_sight : i32
+tank_sound_windup : i32
+tank_sound_strike : i32
+tank_move_stand : MMove
+tank_move_start_walk : MMove
+tank_move_walk : MMove
+tank_move_stop_walk : MMove
+tank_move_start_run : MMove
+tank_move_run : MMove
+tank_move_stop_run : MMove
+tank_move_pain1 : MMove
+tank_move_pain2 : MMove
+tank_move_pain3 : MMove
+tank_move_attack_blast : MMove
+tank_move_reattack_blast : MMove
+tank_move_attack_post_blast : MMove
+tank_move_attack_strike : MMove
+tank_move_attack_pre_rocket : MMove
+tank_move_attack_fire_rocket : MMove
+tank_move_attack_post_rocket : MMove
+tank_move_attack_chain : MMove
+tank_move_death : MMove
+
+func tank_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, tank_sound_sight, 1.0, ATTN_NORM ]
+
+func tank_footstep [ e: Edict ]
+    g.sound[ e, CHAN_BODY, tank_sound_step, 1.0, ATTN_NORM ]
+
+func tank_thud [ e: Edict ]
+    g.sound[ e, CHAN_BODY, tank_sound_thud, 1.0, ATTN_NORM ]
+
+func tank_windup [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, tank_sound_windup, 1.0, ATTN_NORM ]
+
+func tank_idle [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, tank_sound_idle, 1.0, ATTN_IDLE ]
+
+func tank_stand [ e: Edict ]
+    e.monsterinfo.currentmove = tank_move_stand
+
+func tank_walk [ e: Edict ]
+    e.monsterinfo.currentmove = tank_move_walk
+
+func tank_run [ e: Edict ]
+    mi : e.monsterinfo
+    if [ e.enemy && e.enemy.client ]
+        mi.aiflags = mi.aiflags | AI_BRUTAL
+    el
+        mi.aiflags = mi.aiflags & ~AI_BRUTAL
+    if [ mi.aiflags & AI_STAND_GROUND ]
+        mi.currentmove = tank_move_stand
+        return
+    if [ mi.currentmove == tank_move_walk ||
+         mi.currentmove == tank_move_start_run ]
+        mi.currentmove = tank_move_run
+    el
+        mi.currentmove = tank_move_start_run
+
+func tank_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = e.skinnum | 1
+    if [ damage <= 10 ] return
+    if [ g.level.time < e.pain_debounce_time ] return
+    if [ damage <= 30 ]
+        if [ frand[] > 0.2 ] return
+    # if hard or nightmare, don't go into pain while attacking
+    # attak301 115 .. attak330 144, attak101 55 .. attak116 70
+    if [ g.skill >= 2 ]
+        if [ e.frame >= 115 && e.frame <= 144 ] return
+        if [ e.frame >= 55 && e.frame <= 70 ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    g.sound[ e, CHAN_VOICE, tank_sound_pain, 1.0, ATTN_NORM ]
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    mi : e.monsterinfo
+    if [ damage <= 30 ]      mi.currentmove = tank_move_pain1
+    el [ damage <= 60 ]      mi.currentmove = tank_move_pain2
+    el                       mi.currentmove = tank_move_pain3
+
+func tank_blaster [ e: Edict ]
+    # attak110 64, attak113 67
+    flash_number : i32 [ MZ2_TANK_BLASTER_3 ]
+    if [ e.frame == 64 ]      flash_number = MZ2_TANK_BLASTER_1
+    el [ e.frame == 67 ]      flash_number = MZ2_TANK_BLASTER_2
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    end : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_sub[ end, start ]
+    monster_fire_blaster[ e, start, dir, 30, 800, flash_number,
+                          EF_BLASTER ]
+
+func tank_strike [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, tank_sound_strike, 1.0, ATTN_NORM ]
+
+func tank_rocket [ e: Edict ]
+    # attak324 138, attak327 141
+    flash_number : i32 [ MZ2_TANK_ROCKET_3 ]
+    if [ e.frame == 138 ]      flash_number = MZ2_TANK_ROCKET_1
+    el [ e.frame == 141 ]      flash_number = MZ2_TANK_ROCKET_2
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_norm[ v_sub[ aim, start ] ]
+    monster_fire_rocket[ e, start, dir, 50, 550, flash_number ]
+
+func tank_machinegun [ e: Edict ]
+    # attak406 173, attak411 178, attak415 182, attak419 186
+    flash_number : i32 [ MZ2_TANK_MACHINEGUN_1 + (e.frame - 173) ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    pitch : f32 [ 0.0 ]
+    if [ e.enemy ]
+        aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                      e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+        pitch = vectoangles[ v_sub[ aim, start ] ].x
+    yaw : f32 [ 0.0 ]
+    if [ e.frame <= 182 ]
+        yaw = e.angles.y - 8.0 * f32[ e.frame - 178 ]
+    el
+        yaw = e.angles.y + 8.0 * f32[ e.frame - 186 ]
+    dir : vec3f [ pitch, yaw, 0.0 ]
+    bx : angle_vectors[ dir ]
+    monster_fire_bullet[ e, start, bx.forward, 20, 4,
+                         DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                         flash_number ]
+
+func tank_reattack_blaster [ e: Edict ]
+    if [ g.skill >= 2 && visible[ e, e.enemy ] && e.enemy.health > 0 &&
+         frand[] <= 0.6 ]
+        e.monsterinfo.currentmove = tank_move_reattack_blast
+        return
+    e.monsterinfo.currentmove = tank_move_attack_post_blast
+
+func tank_poststrike [ e: Edict ]
+    e.enemy = null
+    tank_run[ e ]
+
+func tank_refire_rocket [ e: Edict ]
+    # only on hard or nightmare
+    if [ g.skill >= 2 && e.enemy.health > 0 && visible[ e, e.enemy ] &&
+         frand[] <= 0.4 ]
+        e.monsterinfo.currentmove = tank_move_attack_fire_rocket
+        return
+    e.monsterinfo.currentmove = tank_move_attack_post_rocket
+
+func tank_doattack_rocket [ e: Edict ]
+    e.monsterinfo.currentmove = tank_move_attack_fire_rocket
+
+func tank_attack [ e: Edict ]
+    mi : e.monsterinfo
+    if [ e.enemy.health < 0 ]
+        mi.currentmove = tank_move_attack_strike
+        mi.aiflags = mi.aiflags & ~AI_BRUTAL
+        return
+    range : f32 [ v_len[ v_sub[ e.enemy.origin, e.origin ] ] ]
+    r : f32 [ frand[] ]
+    if [ range <= 125.0 ]
+        if [ r < 0.4 ] mi.currentmove = tank_move_attack_chain
+        el             mi.currentmove = tank_move_attack_blast
+    el [ range <= 250.0 ]
+        if [ r < 0.5 ] mi.currentmove = tank_move_attack_chain
+        el             mi.currentmove = tank_move_attack_blast
+    el
+        if [ r < 0.33 ]
+            mi.currentmove = tank_move_attack_chain
+        el [ r < 0.66 ]
+            mi.currentmove = tank_move_attack_pre_rocket
+            # no pain for a while
+            e.pain_debounce_time = g.level.time + 5.0
+        el
+            mi.currentmove = tank_move_attack_blast
+
+func tank_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -16.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 0.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func tank_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                   GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_metal/tris.md2',
+                       damage, GIB_METALLIC ]
+        throw_gib[ e, 'models/objects/gibs/chest/tris.md2', damage,
+                   GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/gear/tris.md2', damage,
+                    GIB_METALLIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, tank_sound_die, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = tank_move_death
+
+func sp_monster_tank [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    tank_moves[]
+    e.modelindex = g.modelindex[ 'models/monsters/tank/tris.md2' ]
+    e.mins = vec3f [ -32.0, -32.0, -16.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 72.0 ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    tank_sound_pain   = g.soundindex[ 'tank/tnkpain2.wav' ]
+    tank_sound_thud   = g.soundindex[ 'tank/tnkdeth2.wav' ]
+    tank_sound_idle   = g.soundindex[ 'tank/tnkidle1.wav' ]
+    tank_sound_die    = g.soundindex[ 'tank/death.wav' ]
+    tank_sound_step   = g.soundindex[ 'tank/step.wav' ]
+    tank_sound_windup = g.soundindex[ 'tank/tnkatck4.wav' ]
+    tank_sound_strike = g.soundindex[ 'tank/tnkatck5.wav' ]
+    tank_sound_sight  = g.soundindex[ 'tank/sight1.wav' ]
+    g.soundindex[ 'tank/tnkatck1.wav' ]
+    g.soundindex[ 'tank/tnkatk2a.wav' ]
+    g.soundindex[ 'tank/tnkatk2b.wav' ]
+    g.soundindex[ 'tank/tnkatk2c.wav' ]
+    g.soundindex[ 'tank/tnkatk2d.wav' ]
+    g.soundindex[ 'tank/tnkatk2e.wav' ]
+    g.soundindex[ 'tank/tnkatck3.wav' ]
+    commander : bool [ e.classname == 'monster_tank_commander' ]
+    if [ commander ]
+        e.health = 1000
+        e.gib_health = -225
+    el
+        e.health = 750
+        e.gib_health = -200
+    e.mass = 500
+    e.pain = lambda tank_pain[]
+    e.die  = lambda tank_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda tank_stand[]
+    mi.walk   = lambda tank_walk[]
+    mi.run    = lambda tank_run[]
+    mi.dodge  = null
+    mi.attack = lambda tank_attack[]
+    mi.melee  = null
+    mi.sight  = lambda tank_sight[]
+    mi.idle   = lambda tank_idle[]
+    g.world.link[ e ]
+    mi.currentmove = tank_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+    if [ commander ] e.skinnum = 2
+
+# the moves, built once: frame numbers from m_tank.h
+func tank_moves []
+    if [ tank_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 30, lambda ai_stand[], 0.0, null ]
+    # stand01 .. stand30
+    tank_move_stand = MMove [
+        firstframe: 0, lastframe: 29, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 2, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 11.0, lambda tank_footstep[] ]
+    # walk01 .. walk04
+    tank_move_start_walk = MMove [
+        firstframe: 30, lastframe: 33, frames: v,
+        endfunc: lambda tank_walk[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 2, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, lambda tank_footstep[] ]
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 2, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, lambda tank_footstep[] ]
+    # walk05 .. walk20
+    tank_move_walk = MMove [
+        firstframe: 34, lastframe: 49, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_walk[], 3.0, null ]
+    mf[ v, 2, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, lambda tank_footstep[] ]
+    # walk21 .. walk25
+    tank_move_stop_walk = MMove [
+        firstframe: 50, lastframe: 54, frames: v,
+        endfunc: lambda tank_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 0.0, null ]
+    mf[ v, 2, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 11.0, lambda tank_footstep[] ]
+    # walk01 .. walk04
+    tank_move_start_run = MMove [
+        firstframe: 30, lastframe: 33, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 4.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, null ]
+    mf[ v, 1, lambda ai_run[], 3.0, null ]
+    mf[ v, 1, lambda ai_run[], 2.0, null ]
+    mf[ v, 2, lambda ai_run[], 5.0, null ]
+    mf[ v, 1, lambda ai_run[], 4.0, null ]
+    mf[ v, 1, lambda ai_run[], 4.0, lambda tank_footstep[] ]
+    mf[ v, 1, lambda ai_run[], 3.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, null ]
+    mf[ v, 1, lambda ai_run[], 4.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, null ]
+    mf[ v, 2, lambda ai_run[], 7.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, lambda tank_footstep[] ]
+    # walk05 .. walk20
+    tank_move_run = MMove [
+        firstframe: 34, lastframe: 49, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_run[], 3.0, null ]
+    mf[ v, 2, lambda ai_run[], 2.0, null ]
+    mf[ v, 1, lambda ai_run[], 4.0, lambda tank_footstep[] ]
+    # walk21 .. walk25
+    tank_move_stop_run = MMove [
+        firstframe: 50, lastframe: 54, frames: v,
+        endfunc: lambda tank_walk[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain104
+    tank_move_pain1 = MMove [
+        firstframe: 197, lastframe: 200, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain205
+    tank_move_pain2 = MMove [
+        firstframe: 201, lastframe: 205, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda tank_footstep[] ]
+    # pain301 .. pain316
+    tank_move_pain3 = MMove [
+        firstframe: 206, lastframe: 221, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    mf[ v, 2, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_blaster[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_blaster[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_blaster[] ]
+    # attak101 .. attak116
+    tank_move_attack_blast = MMove [
+        firstframe: 55, lastframe: 70, frames: v,
+        endfunc: lambda tank_reattack_blaster[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_blaster[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_blaster[] ]
+    # attak111 .. attak116
+    tank_move_reattack_blast = MMove [
+        firstframe: 65, lastframe: 70, frames: v,
+        endfunc: lambda tank_reattack_blaster[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, lambda tank_footstep[] ]
+    # attak117 .. attak122
+    tank_move_attack_post_blast = MMove [
+        firstframe: 71, lastframe: 76, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 2, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    mf[ v, 1, lambda ai_move[], 9.0, lambda tank_footstep[] ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, lambda tank_footstep[] ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda tank_windup[] ]
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda tank_strike[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 5, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 2, lambda ai_move[], -10.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, lambda tank_footstep[] ]
+    # attak201 .. attak238
+    tank_move_attack_strike = MMove [
+        firstframe: 77, lastframe: 114, frames: v,
+        endfunc: lambda tank_poststrike[] ]
+    v = vec MFrame []
+    mf[ v, 11, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 2, lambda ai_charge[], 7.0, null ]
+    mf[ v, 1, lambda ai_charge[], 7.0, lambda tank_footstep[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    # attak301 .. attak321
+    tank_move_attack_pre_rocket = MMove [
+        firstframe: 115, lastframe: 135, frames: v,
+        endfunc: lambda tank_doattack_rocket[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_rocket[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda tank_rocket[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, lambda tank_rocket[] ]
+    # attak322 .. attak330
+    tank_move_attack_fire_rocket = MMove [
+        firstframe: 136, lastframe: 144, frames: v,
+        endfunc: lambda tank_refire_rocket[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 2, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -9.0, null ]
+    mf[ v, 1, lambda ai_charge[], -8.0, null ]
+    mf[ v, 1, lambda ai_charge[], -7.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, lambda tank_footstep[] ]
+    mf[ v, 7, lambda ai_charge[], 0.0, null ]
+    # attak331 .. attak353
+    tank_move_attack_post_rocket = MMove [
+        firstframe: 145, lastframe: 167, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_charge[], 0.0, null ]
+    mf[ v, 19, null, 0.0, lambda tank_machinegun[] ]
+    mf[ v, 5, lambda ai_charge[], 0.0, null ]
+    # attak401 .. attak429
+    tank_move_attack_chain = MMove [
+        firstframe: 168, lastframe: 196, frames: v,
+        endfunc: lambda tank_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 2, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], -15.0, lambda tank_thud[] ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    # death101 .. death132
+    tank_move_death = MMove [
+        firstframe: 222, lastframe: 253, frames: v,
+        endfunc: lambda tank_dead[] ]
+

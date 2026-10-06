@@ -1,0 +1,380 @@
+# m_mutant.c: the mutant (claws up close, a leaping charge)
+extend quake2
+
+mutant_sound_swing : i32
+mutant_sound_hit : i32
+mutant_sound_hit2 : i32
+mutant_sound_death : i32
+mutant_sound_idle : i32
+mutant_sound_pain1 : i32
+mutant_sound_pain2 : i32
+mutant_sound_sight : i32
+mutant_sound_search : i32
+mutant_sound_step1 : i32
+mutant_sound_step2 : i32
+mutant_sound_step3 : i32
+mutant_sound_thud : i32
+mutant_move_stand : MMove
+mutant_move_idle : MMove
+mutant_move_walk : MMove
+mutant_move_start_walk : MMove
+mutant_move_run : MMove
+mutant_move_attack : MMove
+mutant_move_jump : MMove
+mutant_move_pain1 : MMove
+mutant_move_pain2 : MMove
+mutant_move_pain3 : MMove
+mutant_move_death1 : MMove
+mutant_move_death2 : MMove
+
+func mutant_step [ e: Edict ]
+    n : i32 [ (rand[] + 1) % 3 ]
+    if [ n == 0 ]
+        g.sound[ e, CHAN_VOICE, mutant_sound_step1, 1.0, ATTN_NORM ]
+    el [ n == 1 ]
+        g.sound[ e, CHAN_VOICE, mutant_sound_step2, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, mutant_sound_step3, 1.0, ATTN_NORM ]
+
+func mutant_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, mutant_sound_sight, 1.0, ATTN_NORM ]
+
+func mutant_search [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, mutant_sound_search, 1.0, ATTN_NORM ]
+
+func mutant_swing [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, mutant_sound_swing, 1.0, ATTN_NORM ]
+
+func mutant_stand [ e: Edict ]
+    e.monsterinfo.currentmove = mutant_move_stand
+
+func mutant_idle_loop [ e: Edict ]
+    # stand155 is 116
+    if [ frand[] < 0.75 ] e.monsterinfo.nextframe = 116
+
+func mutant_idle [ e: Edict ]
+    e.monsterinfo.currentmove = mutant_move_idle
+    g.sound[ e, CHAN_VOICE, mutant_sound_idle, 1.0, ATTN_IDLE ]
+
+func mutant_walk_loop [ e: Edict ]
+    e.monsterinfo.currentmove = mutant_move_walk
+
+func mutant_walk [ e: Edict ]
+    e.monsterinfo.currentmove = mutant_move_start_walk
+
+func mutant_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = mutant_move_stand
+    el
+        e.monsterinfo.currentmove = mutant_move_run
+
+func mutant_hit_left [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.mins.x, 8.0 ]
+    if [ fire_hit[ e, aim, 10 + (rand[] % 5), 100 ] ]
+        g.sound[ e, CHAN_WEAPON, mutant_sound_hit, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_WEAPON, mutant_sound_swing, 1.0, ATTN_NORM ]
+
+func mutant_hit_right [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.maxs.x, 8.0 ]
+    if [ fire_hit[ e, aim, 10 + (rand[] % 5), 100 ] ]
+        g.sound[ e, CHAN_WEAPON, mutant_sound_hit2, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_WEAPON, mutant_sound_swing, 1.0, ATTN_NORM ]
+
+func mutant_check_refire [ e: Edict ]
+    if [ !e.enemy || !e.enemy.inuse || e.enemy.health <= 0 ] return
+    # attack09 is 8
+    if [ (g.skill == 3 && frand[] < 0.5) ||
+         ai_range[ e, e.enemy ] == RANGE_MELEE ]
+        e.monsterinfo.nextframe = 8
+
+func mutant_melee [ e: Edict ]
+    e.monsterinfo.currentmove = mutant_move_attack
+
+func mutant_jump_touch [ e: Edict, other: Edict ]
+    if [ e.health <= 0 ]
+        e.touch = null
+        return
+    if [ other.takedamage != DAMAGE_NO ]
+        if [ v_len[ e.velocity ] > 400.0 ]
+            normal : v_norm[ e.velocity ]
+            point : v_ma[ e.origin, e.maxs.x, normal ]
+            damage : i32 [ 40 + i32[ 10.0 * frand[] ] ]
+            t_damage[ other, e, e, e.velocity, point, normal, damage,
+                      damage, 0, MOD_UNKNOWN ]
+    if [ !m_check_bottom[ e ] ]
+        if [ e.groundentity ]
+            # attack02 is 1
+            e.monsterinfo.nextframe = 1
+            e.touch = null
+        return
+    e.touch = null
+
+func mutant_jump_takeoff [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, mutant_sound_sight, 1.0, ATTN_NORM ]
+    ax : angle_vectors[ e.angles ]
+    e.origin = vec3f [ e.origin.x, e.origin.y, e.origin.z + 1.0 ]
+    e.velocity = v_scale[ ax.forward, 600.0 ]
+    e.velocity = vec3f [ e.velocity.x, e.velocity.y, 250.0 ]
+    e.groundentity = null
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags | AI_DUCKED
+    e.monsterinfo.attack_finished = g.level.time + 3.0
+    e.touch = lambda mutant_jump_touch[]
+
+func mutant_check_landing [ e: Edict ]
+    mi : e.monsterinfo
+    if [ e.groundentity ]
+        g.sound[ e, CHAN_WEAPON, mutant_sound_thud, 1.0, ATTN_NORM ]
+        mi.attack_finished = 0.0
+        mi.aiflags = mi.aiflags & ~AI_DUCKED
+        return
+    # attack02 1, attack05 4
+    if [ g.level.time > mi.attack_finished ] mi.nextframe = 1
+    el                                       mi.nextframe = 4
+
+func mutant_jump [ e: Edict ]
+    e.monsterinfo.currentmove = mutant_move_jump
+
+func mutant_check_melee [ e: Edict ] -> bool
+    return ai_range[ e, e.enemy ] == RANGE_MELEE
+
+func mutant_check_jump [ e: Edict ] -> bool
+    if [ e.absmin.z > (e.enemy.absmin.z + 0.75 * e.enemy.size.z) ]
+        return false
+    if [ e.absmax.z < (e.enemy.absmin.z + 0.25 * e.enemy.size.z) ]
+        return false
+    v : vec3f [ e.origin.x - e.enemy.origin.x,
+                e.origin.y - e.enemy.origin.y, 0.0 ]
+    distance : f32 [ v_len[ v ] ]
+    if [ distance < 100.0 ] return false
+    if [ distance > 100.0 ]
+        if [ frand[] < 0.9 ] return false
+    return true
+
+func mutant_checkattack [ e: Edict ] -> bool
+    if [ !e.enemy || e.enemy.health <= 0 ] return false
+    if [ mutant_check_melee[ e ] ]
+        e.monsterinfo.attack_state = AS_MELEE
+        return true
+    if [ mutant_check_jump[ e ] ]
+        e.monsterinfo.attack_state = AS_MISSILE
+        return true
+    return false
+
+func mutant_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    r : f32 [ frand[] ]
+    if [ r < 0.33 ]
+        g.sound[ e, CHAN_VOICE, mutant_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = mutant_move_pain1
+    el [ r < 0.66 ]
+        g.sound[ e, CHAN_VOICE, mutant_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = mutant_move_pain2
+    el
+        g.sound[ e, CHAN_VOICE, mutant_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = mutant_move_pain3
+
+func mutant_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    g.world.link[ e ]
+    m_fly_check[ e ]
+
+func mutant_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                  damage: i32, point: vec3f ]
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    g.sound[ e, CHAN_VOICE, mutant_sound_death, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.skinnum = 1
+    if [ frand[] < 0.5 ] e.monsterinfo.currentmove = mutant_move_death1
+    el                   e.monsterinfo.currentmove = mutant_move_death2
+
+func sp_monster_mutant [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    mutant_moves[]
+    mutant_sound_swing  = g.soundindex[ 'mutant/mutatck1.wav' ]
+    mutant_sound_hit    = g.soundindex[ 'mutant/mutatck2.wav' ]
+    mutant_sound_hit2   = g.soundindex[ 'mutant/mutatck3.wav' ]
+    mutant_sound_death  = g.soundindex[ 'mutant/mutdeth1.wav' ]
+    mutant_sound_idle   = g.soundindex[ 'mutant/mutidle1.wav' ]
+    mutant_sound_pain1  = g.soundindex[ 'mutant/mutpain1.wav' ]
+    mutant_sound_pain2  = g.soundindex[ 'mutant/mutpain2.wav' ]
+    mutant_sound_sight  = g.soundindex[ 'mutant/mutsght1.wav' ]
+    mutant_sound_search = g.soundindex[ 'mutant/mutsrch1.wav' ]
+    mutant_sound_step1  = g.soundindex[ 'mutant/step1.wav' ]
+    mutant_sound_step2  = g.soundindex[ 'mutant/step2.wav' ]
+    mutant_sound_step3  = g.soundindex[ 'mutant/step3.wav' ]
+    mutant_sound_thud   = g.soundindex[ 'mutant/thud1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/mutant/tris.md2' ]
+    e.mins = vec3f [ -32.0, -32.0, -24.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 48.0 ]
+    e.health = 300
+    e.gib_health = -120
+    e.mass = 300
+    e.pain = lambda mutant_pain[]
+    e.die  = lambda mutant_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda mutant_stand[]
+    mi.walk   = lambda mutant_walk[]
+    mi.run    = lambda mutant_run[]
+    mi.dodge  = null
+    mi.attack = lambda mutant_jump[]
+    mi.melee  = lambda mutant_melee[]
+    mi.sight  = lambda mutant_sight[]
+    mi.search = lambda mutant_search[]
+    mi.idle   = lambda mutant_idle[]
+    mi.checkattack = lambda mutant_checkattack[]
+    g.world.link[ e ]
+    mi.currentmove = mutant_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_mutant.h
+func mutant_moves []
+    if [ mutant_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 51, lambda ai_stand[], 0.0, null ]
+    # stand101 .. stand151
+    mutant_move_stand = MMove [
+        firstframe: 62, lastframe: 112, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda mutant_idle_loop[] ]
+    mf[ v, 6, lambda ai_stand[], 0.0, null ]
+    # stand152 .. stand164
+    mutant_move_idle = MMove [
+        firstframe: 113, lastframe: 125, frames: v,
+        endfunc: lambda mutant_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 1, lambda ai_walk[], 13.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 16.0, null ]
+    mf[ v, 1, lambda ai_walk[], 15.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    # walk05 .. walk16
+    mutant_move_walk = MMove [
+        firstframe: 130, lastframe: 141, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], -2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.0, null ]
+    # walk01 .. walk04
+    mutant_move_start_walk = MMove [
+        firstframe: 126, lastframe: 129, frames: v,
+        endfunc: lambda mutant_walk_loop[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 40.0, null ]
+    mf[ v, 1, lambda ai_run[], 40.0, lambda mutant_step[] ]
+    mf[ v, 1, lambda ai_run[], 24.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, lambda mutant_step[] ]
+    mf[ v, 1, lambda ai_run[], 17.0, null ]
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    # run03 .. run08
+    mutant_move_run = MMove [
+        firstframe: 56, lastframe: 61, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda mutant_hit_left[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda mutant_hit_right[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda mutant_check_refire[] ]
+    # attack09 .. attack15
+    mutant_move_attack = MMove [
+        firstframe: 8, lastframe: 14, frames: v,
+        endfunc: lambda mutant_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 17.0, null ]
+    mf[ v, 1, lambda ai_charge[], 15.0, lambda mutant_jump_takeoff[] ]
+    mf[ v, 1, lambda ai_charge[], 15.0, null ]
+    mf[ v, 1, lambda ai_charge[], 15.0, lambda mutant_check_landing[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    # attack01 .. attack08
+    mutant_move_jump = MMove [
+        firstframe: 0, lastframe: 7, frames: v,
+        endfunc: lambda mutant_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -8.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    # pain101 .. pain105
+    mutant_move_pain1 = MMove [
+        firstframe: 34, lastframe: 38, frames: v,
+        endfunc: lambda mutant_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -24.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    # pain201 .. pain206
+    mutant_move_pain2 = MMove [
+        firstframe: 39, lastframe: 44, frames: v,
+        endfunc: lambda mutant_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -22.0, null ]
+    mf[ v, 2, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    # pain301 .. pain311
+    mutant_move_pain3 = MMove [
+        firstframe: 45, lastframe: 55, frames: v,
+        endfunc: lambda mutant_run[] ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # death101 .. death109
+    mutant_move_death1 = MMove [
+        firstframe: 15, lastframe: 23, frames: v,
+        endfunc: lambda mutant_dead[] ]
+    v = vec MFrame []
+    mf[ v, 10, lambda ai_move[], 0.0, null ]
+    # death201 .. death210
+    mutant_move_death2 = MMove [
+        firstframe: 24, lastframe: 33, frames: v,
+        endfunc: lambda mutant_dead[] ]
+

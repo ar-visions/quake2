@@ -1,0 +1,316 @@
+# m_supertank.c: the supertank (chaingun and rockets); also
+# boss_explode, the bosses' death in eight bursts
+extend quake2
+
+supertank_sound_pain1 : i32
+supertank_sound_pain2 : i32
+supertank_sound_pain3 : i32
+supertank_sound_death : i32
+supertank_sound_search1 : i32
+supertank_sound_search2 : i32
+supertank_tread_sound : i32
+supertank_move_stand : MMove
+supertank_move_run : MMove
+supertank_move_forward : MMove
+supertank_move_turn_right : MMove
+supertank_move_turn_left : MMove
+supertank_move_pain3 : MMove
+supertank_move_pain2 : MMove
+supertank_move_pain1 : MMove
+supertank_move_death : MMove
+supertank_move_backward : MMove
+supertank_move_attack4 : MMove
+supertank_move_attack3 : MMove
+supertank_move_attack2 : MMove
+supertank_move_attack1 : MMove
+supertank_move_end_attack1 : MMove
+
+func supertank_tread [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, supertank_tread_sound, 1.0, ATTN_NORM ]
+
+func supertank_search [ e: Edict ]
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, supertank_sound_search1, 1.0,
+                 ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, supertank_sound_search2, 1.0,
+                 ATTN_NORM ]
+
+func supertank_stand [ e: Edict ]
+    e.monsterinfo.currentmove = supertank_move_stand
+
+func supertank_forward [ e: Edict ]
+    e.monsterinfo.currentmove = supertank_move_forward
+
+func supertank_walk [ e: Edict ]
+    e.monsterinfo.currentmove = supertank_move_forward
+
+func supertank_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = supertank_move_stand
+    el
+        e.monsterinfo.currentmove = supertank_move_run
+
+func supertank_reattack1 [ e: Edict ]
+    if [ visible[ e, e.enemy ] && frand[] < 0.9 ]
+        e.monsterinfo.currentmove = supertank_move_attack1
+    el
+        e.monsterinfo.currentmove = supertank_move_end_attack1
+
+func supertank_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    # lessen the chance of him going into his pain frames
+    if [ damage <= 25 ]
+        if [ frand[] < 0.2 ] return
+    # don't go into pain if he's firing his rockets
+    # attak2_1 20 .. attak2_14 33
+    if [ g.skill >= 2 ]
+        if [ e.frame >= 20 && e.frame <= 33 ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ damage <= 10 ]
+        g.sound[ e, CHAN_VOICE, supertank_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = supertank_move_pain1
+    el [ damage <= 25 ]
+        g.sound[ e, CHAN_VOICE, supertank_sound_pain3, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = supertank_move_pain2
+    el
+        g.sound[ e, CHAN_VOICE, supertank_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = supertank_move_pain3
+
+func supertank_rocket [ e: Edict ]
+    # attak2_8 27, attak2_11 30
+    flash_number : i32 [ MZ2_SUPERTANK_ROCKET_3 ]
+    if [ e.frame == 27 ]
+        flash_number = MZ2_SUPERTANK_ROCKET_1
+    el [ e.frame == 30 ]
+        flash_number = MZ2_SUPERTANK_ROCKET_2
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_norm[ v_sub[ aim, start ] ]
+    monster_fire_rocket[ e, start, dir, 50, 500, flash_number ]
+
+func supertank_machinegun [ e: Edict ]
+    # attak1_1 is 0
+    flash_number : i32 [ MZ2_SUPERTANK_MACHINEGUN_1 +
+                         (e.frame - 0) ]
+    dir : vec3f [ 0.0, e.angles.y, 0.0 ]
+    ax : angle_vectors[ dir ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    forward : vec3f [ ax.forward ]
+    if [ e.enemy ]
+        aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                      e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+        forward = v_norm[ v_sub[ aim, start ] ]
+    monster_fire_bullet[ e, start, forward, 6, 4,
+                         DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                         flash_number ]
+
+func supertank_attack [ e: Edict ]
+    range : f32 [ v_len[ v_sub[ e.enemy.origin, e.origin ] ] ]
+    # attack 1 the chaingun, attack 2 the rockets
+    if [ range <= 160.0 ]
+        e.monsterinfo.currentmove = supertank_move_attack1
+    el
+        # fire rockets more often at distance
+        if [ frand[] < 0.3 ]
+            e.monsterinfo.currentmove = supertank_move_attack1
+        el
+            e.monsterinfo.currentmove = supertank_move_attack2
+
+func supertank_dead [ e: Edict ]
+    e.mins = vec3f [ -60.0, -60.0, 0.0 ]
+    e.maxs = vec3f [ 60.0, 60.0, 72.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+# BossExplode: eight bursts round the body, then the gibs
+func boss_explode [ e: Edict ]
+    e.think = lambda boss_explode[]
+    org : vec3f [ e.origin.x, e.origin.y,
+                  e.origin.z + 24.0 + f32[ rand[] & 15 ] ]
+    n : i32 [ e.count ]
+    e.count += 1
+    if [ n == 0 ]      org = vec3f [ org.x - 24.0, org.y - 24.0, org.z ]
+    el [ n == 1 ]      org = vec3f [ org.x + 24.0, org.y + 24.0, org.z ]
+    el [ n == 2 ]      org = vec3f [ org.x + 24.0, org.y - 24.0, org.z ]
+    el [ n == 3 ]      org = vec3f [ org.x - 24.0, org.y + 24.0, org.z ]
+    el [ n == 4 ]      org = vec3f [ org.x - 48.0, org.y - 48.0, org.z ]
+    el [ n == 5 ]      org = vec3f [ org.x + 48.0, org.y + 48.0, org.z ]
+    el [ n == 6 ]      org = vec3f [ org.x - 48.0, org.y + 48.0, org.z ]
+    el [ n == 7 ]      org = vec3f [ org.x + 48.0, org.y - 48.0, org.z ]
+    el
+        e.sound = 0
+        for [ i: i32 0, i < 4, i += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2', 500,
+                       GIB_ORGANIC ]
+        for [ i: i32 0, i < 8, i += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_metal/tris.md2', 500,
+                       GIB_METALLIC ]
+        throw_gib[ e, 'models/objects/gibs/chest/tris.md2', 500,
+                   GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/gear/tris.md2', 500,
+                    GIB_METALLIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    g.temp_entity_at[ TE_EXPLOSION1, org ]
+    e.nextthink = g.level.time + 0.1
+
+func supertank_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                     damage: i32, point: vec3f ]
+    g.sound[ e, CHAN_VOICE, supertank_sound_death, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_NO
+    e.count = 0
+    e.monsterinfo.currentmove = supertank_move_death
+
+func sp_monster_supertank [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    supertank_moves[]
+    supertank_sound_pain1   = g.soundindex[ 'bosstank/btkpain1.wav' ]
+    supertank_sound_pain2   = g.soundindex[ 'bosstank/btkpain2.wav' ]
+    supertank_sound_pain3   = g.soundindex[ 'bosstank/btkpain3.wav' ]
+    supertank_sound_death   = g.soundindex[ 'bosstank/btkdeth1.wav' ]
+    supertank_sound_search1 = g.soundindex[ 'bosstank/btkunqv1.wav' ]
+    supertank_sound_search2 = g.soundindex[ 'bosstank/btkunqv2.wav' ]
+    supertank_tread_sound   = g.soundindex[ 'bosstank/btkengn1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/boss1/tris.md2' ]
+    e.mins = vec3f [ -64.0, -64.0, 0.0 ]
+    e.maxs = vec3f [ 64.0, 64.0, 112.0 ]
+    e.health = 1500
+    e.gib_health = -500
+    e.mass = 800
+    e.pain = lambda supertank_pain[]
+    e.die  = lambda supertank_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda supertank_stand[]
+    mi.walk   = lambda supertank_walk[]
+    mi.run    = lambda supertank_run[]
+    mi.dodge  = null
+    mi.attack = lambda supertank_attack[]
+    mi.search = lambda supertank_search[]
+    mi.melee  = null
+    mi.sight  = null
+    g.world.link[ e ]
+    mi.currentmove = supertank_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_supertank.h
+func supertank_moves []
+    if [ supertank_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 60, lambda ai_stand[], 0.0, null ]
+    # stand_1 .. stand_60
+    supertank_move_stand = MMove [
+        firstframe: 194, lastframe: 253, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 12.0, lambda supertank_tread[] ]
+    mf[ v, 17, lambda ai_run[], 12.0, null ]
+    # forwrd_1 .. forwrd_18
+    supertank_move_run = MMove [
+        firstframe: 128, lastframe: 145, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 4.0, lambda supertank_tread[] ]
+    mf[ v, 17, lambda ai_walk[], 4.0, null ]
+    # forwrd_1 .. forwrd_18
+    supertank_move_forward = MMove [
+        firstframe: 128, lastframe: 145, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, lambda supertank_tread[] ]
+    mf[ v, 17, lambda ai_move[], 0.0, null ]
+    # right_1 .. right_18
+    supertank_move_turn_right = MMove [
+        firstframe: 176, lastframe: 193, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, lambda supertank_tread[] ]
+    mf[ v, 17, lambda ai_move[], 0.0, null ]
+    # left_1 .. left_18
+    supertank_move_turn_left = MMove [
+        firstframe: 146, lastframe: 163, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain3_9 .. pain3_12
+    supertank_move_pain3 = MMove [
+        firstframe: 172, lastframe: 175, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain2_5 .. pain2_8
+    supertank_move_pain2 = MMove [
+        firstframe: 168, lastframe: 171, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain1_1 .. pain1_4
+    supertank_move_pain1 = MMove [
+        firstframe: 164, lastframe: 167, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 23, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda boss_explode[] ]
+    # death_1 .. death_24
+    supertank_move_death = MMove [
+        firstframe: 98, lastframe: 121, frames: v,
+        endfunc: lambda supertank_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda supertank_tread[] ]
+    mf[ v, 17, lambda ai_walk[], 0.0, null ]
+    # backwd_1 .. backwd_18
+    supertank_move_backward = MMove [
+        firstframe: 80, lastframe: 97, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    # attak4_1 .. attak4_6
+    supertank_move_attack4 = MMove [
+        firstframe: 74, lastframe: 79, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 27, lambda ai_move[], 0.0, null ]
+    # attak3_1 .. attak3_27
+    supertank_move_attack3 = MMove [
+        firstframe: 47, lastframe: 73, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda supertank_rocket[] ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda supertank_rocket[] ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda supertank_rocket[] ]
+    mf[ v, 13, lambda ai_move[], 0.0, null ]
+    # attak2_1 .. attak2_27
+    supertank_move_attack2 = MMove [
+        firstframe: 20, lastframe: 46, frames: v,
+        endfunc: lambda supertank_run[] ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_charge[], 0.0, lambda supertank_machinegun[] ]
+    # attak1_1 .. attak1_6
+    supertank_move_attack1 = MMove [
+        firstframe: 0, lastframe: 5, frames: v,
+        endfunc: lambda supertank_reattack1[] ]
+    v = vec MFrame []
+    mf[ v, 14, lambda ai_move[], 0.0, null ]
+    # attak1_7 .. attak1_20
+    supertank_move_end_attack1 = MMove [
+        firstframe: 6, lastframe: 19, frames: v,
+        endfunc: lambda supertank_run[] ]
+

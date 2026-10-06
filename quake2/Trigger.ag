@@ -1,0 +1,264 @@
+# g_trigger.c: the triggers that are not multiple, once or relay
+extend quake2
+
+FL_FLY          : i32 [ 1 ]
+FL_SWIM         : i32 [ 2 ]
+FL_IMMUNE_LASER : i32 [ 4 ]
+SVF_DEADMONSTER : i32 [ 2 ]
+PUSH_ONCE       : i32 [ 1 ]
+
+
+# a think that uses the targets after a delay, then goes away
+func think_delay [ e: Edict ]
+    g.use_targets[ e, e.activator ]
+    g.free_edict[ e ]
+
+# G_FreeEdict as a think
+func remove_edict [ e: Edict ]
+    g.free_edict[ e ]
+
+func trigger_relay_use [ e: Edict, other: Edict, activator: Edict ]
+    g.use_targets[ e, activator ]
+
+func init_trigger [ e: Edict ]
+    if [ !v_zero[ e.angles ] ] g.set_movedir[ e ]
+    e.solid = SOLID_TRIGGER
+    e.movetype = MOVETYPE_NONE
+    g.setmodel[ e, e.model ]
+    e.svflags = SVF_NOCLIENT
+
+func multi_wait [ e: Edict ]
+    e.nextthink = 0.0
+
+func multi_trigger [ e: Edict ]
+    if [ e.nextthink != 0.0 ] return
+    g.use_targets[ e, e.activator ]
+    if [ e.wait > 0.0 ]
+        e.think = lambda multi_wait[]
+        e.nextthink = g.level.time + e.wait
+    el
+        e.touch = null
+        e.nextthink = g.level.time + FRAMETIME
+        e.think = lambda remove_edict[]
+
+func use_multi [ e: Edict, other: Edict, activator: Edict ]
+    e.activator = activator
+    multi_trigger[ e ]
+
+func touch_multi [ e: Edict, other: Edict ]
+    if [ other.client ]
+        if [ e.spawnflags & 2 ] return
+    el
+        if [ other.svflags & SVF_MONSTER ]
+            if [ (e.spawnflags & 1) == 0 ] return
+        el
+            return
+    if [ !v_zero[ e.movedir ] ]
+        ax : angle_vectors[ other.angles ]
+        if [ v_dot[ ax.forward, e.movedir ] < 0.0 ] return
+    e.activator = other
+    multi_trigger[ e ]
+
+func trigger_enable [ e: Edict ]
+    e.solid = SOLID_TRIGGER
+    e.use = lambda use_multi[]
+    g.world.link[ e ]
+
+func sp_trigger_multiple [ e: Edict ]
+    if [ e.wait == 0.0 ] e.wait = 0.2
+    e.touch = lambda touch_multi[]
+    e.movetype = MOVETYPE_NONE
+    e.svflags = e.svflags | SVF_NOCLIENT
+    if [ e.spawnflags & 4 ]
+        e.solid = SOLID_NOT
+        e.use = lambda trigger_enable[]
+    el
+        e.solid = SOLID_TRIGGER
+        e.use = lambda use_multi[]
+    if [ !v_zero[ e.angles ] ] g.set_movedir[ e ]
+    g.setmodel[ e, e.model ]
+    g.world.link[ e ]
+
+func sp_trigger_once [ e: Edict ]
+    # old maps: triggered was bit 1, it belongs on bit 4
+    if [ e.spawnflags & 1 ]
+        e.spawnflags = (e.spawnflags & ~1) | 4
+    e.wait = -1.0
+    sp_trigger_multiple[ e ]
+
+func sp_trigger_relay [ e: Edict ]
+    e.use = lambda trigger_relay_use[]
+
+# func_areaportal: count toggles, the portal follows
+func sp_func_areaportal [ e: Edict ]
+    e.use = lambda use_areaportal[]
+    e.count = 0
+
+func use_areaportal [ e: Edict ]
+    e.count = e.count ^ 1
+    g.set_areaportal[ e.style, e.count != 0 ]
+
+
+# ---- trigger_key: a relay that needs a key in the inventory
+func trigger_key_use [ e: Edict, other: Edict, activator: Edict ]
+    if [ !e.item ] return
+    if [ !activator.client ] return
+    index : i32 [ e.item.index ]
+    if [ inv_get[ activator, index ] == 0 ]
+        if [ g.level.time < e.touch_debounce_time ] return
+        e.touch_debounce_time = g.level.time + 5.0
+        g.centerprintf[ activator, 'You need the {e.item.pickup_name}' ]
+        g.sound[ activator, CHAN_AUTO, g.soundindex[ 'misc/keytry.wav' ], 1.0,
+                 ATTN_NORM ]
+        return
+    g.sound[ activator, CHAN_AUTO, g.soundindex[ 'misc/keyuse.wav' ], 1.0,
+             ATTN_NORM ]
+    if [ g.coop ]
+        if [ e.item.classname == 'key_power_cube' ]
+            cube : i32 [ 0 ]
+            while [ cube < 8 ]
+                if [ activator.client.pers.power_cubes & (1 << cube) ] break
+                cube += 1
+            for [ player: i32 1, player <= g.maxclients, player += 1 ]
+                ent : g.edicts[ player ]
+                if [ !ent.inuse ] continue
+                if [ !ent.client ] continue
+                if [ ent.client.pers.power_cubes & (1 << cube) ]
+                    inv_add[ ent, index, -1 ]
+                    ent.client.pers.power_cubes =
+                        ent.client.pers.power_cubes & ~(1 << cube)
+        el
+            for [ player: i32 1, player <= g.maxclients, player += 1 ]
+                ent : g.edicts[ player ]
+                if [ !ent.inuse ] continue
+                if [ !ent.client ] continue
+                inv_set[ ent, index, 0 ]
+    el
+        inv_add[ activator, index, -1 ]
+    g.use_targets[ e, activator ]
+    e.use = null
+
+func sp_trigger_key [ e: Edict ]
+    if [ !g.st.item ]
+        g.dprintf[ 'no key item for trigger_key' ]
+        return
+    e.item = find_item_by_classname[ g.st.item ]
+    if [ !e.item ]
+        g.dprintf[ 'item {g.st.item} not found for trigger_key' ]
+        return
+    if [ !e.target ]
+        g.dprintf[ '{e.classname} has no target' ]
+        return
+    e.use = lambda trigger_key_use[]
+
+# ---- trigger_counter: fires after count uses
+func trigger_counter_use [ e: Edict, other: Edict,
+                           activator: Edict ]
+    if [ e.count == 0 ] return
+    e.count -= 1
+    if [ e.count != 0 ]
+        if [ (e.spawnflags & 1) == 0 ]
+            g.centerprintf[ activator, '{e.count} more to go...' ]
+            g.sound[ activator, CHAN_AUTO, g.soundindex[ 'misc/talk1.wav' ],
+                     1.0, ATTN_NORM ]
+        return
+    if [ (e.spawnflags & 1) == 0 ]
+        g.centerprintf[ activator, 'Sequence completed!' ]
+        g.sound[ activator, CHAN_AUTO, g.soundindex[ 'misc/talk1.wav' ], 1.0,
+                 ATTN_NORM ]
+    e.activator = activator
+    multi_trigger[ e ]
+
+func sp_trigger_counter [ e: Edict ]
+    e.wait = -1.0
+    if [ e.count == 0 ] e.count = 2
+    e.use = lambda trigger_counter_use[]
+
+# ---- trigger_always: fired by the world
+func sp_trigger_always [ e: Edict ]
+    # some delay, so its targets are present
+    if [ e.delay < 0.2 ] e.delay = 0.2
+    g.use_targets[ e, e ]
+
+# ---- trigger_push
+func trigger_push_touch [ e: Edict, other: Edict ]
+    if [ other.classname == 'grenade' ]
+        other.velocity = v_scale[ e.movedir, e.speed * 10.0 ]
+    el [ other.health > 0 ]
+        other.velocity = v_scale[ e.movedir, e.speed * 10.0 ]
+        if [ other.client ]
+            # don't take falling damage immediately from this
+            other.client.oldvelocity = other.velocity
+            if [ other.fly_sound_debounce_time < g.level.time ]
+                other.fly_sound_debounce_time = g.level.time + 1.5
+                g.sound[ other, CHAN_AUTO, g.soundindex[ 'misc/windfly.wav' ],
+                         1.0, ATTN_NORM ]
+    if [ e.spawnflags & PUSH_ONCE ] g.free_edict[ e ]
+
+func sp_trigger_push [ e: Edict ]
+    init_trigger[ e ]
+    e.touch = lambda trigger_push_touch[]
+    if [ e.speed == 0.0 ] e.speed = 1000.0
+    g.world.link[ e ]
+
+# ---- trigger_hurt
+func hurt_use [ e: Edict, other: Edict, activator: Edict ]
+    e.solid = (e.solid == SOLID_NOT) ? SOLID_TRIGGER : SOLID_NOT
+    g.world.link[ e ]
+    if [ (e.spawnflags & 2) == 0 ] e.use = null
+
+func hurt_touch [ e: Edict, other: Edict ]
+    if [ other.takedamage == DAMAGE_NO ] return
+    if [ e.timestamp > g.level.time ] return
+    e.timestamp = g.level.time + ((e.spawnflags & 16) ? 1.0 : FRAMETIME)
+    if [ (e.spawnflags & 4) == 0 ]
+        if [ (g.level.framenum % 10) == 0 ]
+            g.sound[ other, CHAN_AUTO, e.noise_index, 1.0, ATTN_NORM ]
+    dflags : i32 [ (e.spawnflags & 8) ? DAMAGE_NO_PROTECTION : 0 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    t_damage[ other, e, e, zero, other.origin, zero, e.dmg, e.dmg, dflags,
+              MOD_TRIGGER_HURT ]
+
+func sp_trigger_hurt [ e: Edict ]
+    init_trigger[ e ]
+    e.noise_index = g.soundindex[ 'world/electro.wav' ]
+    e.touch = lambda hurt_touch[]
+    if [ e.dmg == 0 ] e.dmg = 5
+    e.solid = (e.spawnflags & 1) ? SOLID_NOT : SOLID_TRIGGER
+    if [ e.spawnflags & 2 ] e.use = lambda hurt_use[]
+    g.world.link[ e ]
+
+# ---- trigger_gravity
+func trigger_gravity_touch [ e: Edict, other: Edict ]
+    other.gravity = e.gravity
+
+func sp_trigger_gravity [ e: Edict ]
+    if [ !g.st.gravity ]
+        g.dprintf[ 'trigger_gravity without gravity set' ]
+        g.free_edict[ e ]
+        return
+    init_trigger[ e ]
+    e.gravity = f32[ atoi[ g.st.gravity.chars ] ]
+    e.touch = lambda trigger_gravity_touch[]
+
+# ---- trigger_monsterjump
+func trigger_monsterjump_touch [ e: Edict, other: Edict ]
+    if [ other.flags & (FL_FLY | FL_SWIM) ] return
+    if [ other.svflags & SVF_DEADMONSTER ] return
+    if [ (other.svflags & SVF_MONSTER) == 0 ] return
+    # xy even off the ground, so the jump clears lips
+    other.velocity = vec3f [ e.movedir.x * e.speed,
+                             e.movedir.y * e.speed, other.velocity.z ]
+    if [ !other.groundentity ] return
+    other.groundentity = null
+    other.velocity = vec3f [ other.velocity.x, other.velocity.y,
+                             e.movedir.z ]
+
+func sp_trigger_monsterjump [ e: Edict ]
+    if [ e.speed == 0.0 ] e.speed = 200.0
+    if [ g.st.height == 0 ] g.st.height = 200
+    if [ e.angles.y == 0.0 ]
+        e.angles = vec3f [ e.angles.x, 360.0, e.angles.z ]
+    init_trigger[ e ]
+    e.touch = lambda trigger_monsterjump_touch[]
+    e.movedir = vec3f [ e.movedir.x, e.movedir.y, f32[ g.st.height ] ]

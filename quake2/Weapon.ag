@@ -1,0 +1,1262 @@
+# g_weapon.c and p_weapon.c: projectiles and the player's weapons
+extend quake2
+
+MZ_BLASTER : i32 [ 0 ]
+MZ_MACHINEGUN : i32 [ 1 ]
+MZ_SHOTGUN : i32 [ 2 ]
+MZ_CHAINGUN1 : i32 [ 3 ]
+MZ_RAILGUN : i32 [ 6 ]
+MZ_ROCKET : i32 [ 7 ]
+MZ_GRENADE : i32 [ 8 ]
+MZ_LOGIN : i32 [ 9 ]
+MZ_BFG : i32 [ 12 ]
+MZ_SSHOTGUN : i32 [ 13 ]
+MZ_HYPERBLASTER : i32 [ 14 ]
+MZ_SILENCED : i32 [ 128 ]
+DEFAULT_BULLET_HSPREAD : i32 [ 300 ]
+DEFAULT_BULLET_VSPREAD : i32 [ 500 ]
+DEFAULT_SHOTGUN_HSPREAD : i32 [ 1000 ]
+DEFAULT_SHOTGUN_VSPREAD : i32 [ 500 ]
+DEFAULT_SHOTGUN_COUNT : i32 [ 12 ]
+DEFAULT_SSHOTGUN_COUNT : i32 [ 20 ]
+GRENADE_TIMER : f32 [ 3.0 ]
+GRENADE_MINSPEED : f32 [ 400.0 ]
+GRENADE_MAXSPEED : f32 [ 800.0 ]
+# the player model's frames (m_player.h)
+FRAME_stand01 : i32 [ 0 ]
+FRAME_stand40 : i32 [ 39 ]
+FRAME_run1 : i32 [ 40 ]
+FRAME_run6 : i32 [ 45 ]
+FRAME_attack1 : i32 [ 46 ]
+FRAME_attack8 : i32 [ 53 ]
+FRAME_pain101 : i32 [ 54 ]
+FRAME_pain104 : i32 [ 57 ]
+FRAME_pain201 : i32 [ 58 ]
+FRAME_pain204 : i32 [ 61 ]
+FRAME_pain301 : i32 [ 62 ]
+FRAME_pain304 : i32 [ 65 ]
+FRAME_jump1 : i32 [ 66 ]
+FRAME_jump2 : i32 [ 67 ]
+FRAME_jump3 : i32 [ 68 ]
+FRAME_jump6 : i32 [ 71 ]
+FRAME_flip01 : i32 [ 72 ]
+FRAME_flip12 : i32 [ 83 ]
+FRAME_salute01 : i32 [ 84 ]
+FRAME_salute11 : i32 [ 94 ]
+FRAME_taunt01 : i32 [ 95 ]
+FRAME_taunt17 : i32 [ 111 ]
+FRAME_wave01 : i32 [ 112 ]
+FRAME_wave08 : i32 [ 119 ]
+FRAME_wave11 : i32 [ 122 ]
+FRAME_point01 : i32 [ 123 ]
+FRAME_point12 : i32 [ 134 ]
+FRAME_crstnd01 : i32 [ 135 ]
+FRAME_crstnd19 : i32 [ 153 ]
+FRAME_crwalk1 : i32 [ 154 ]
+FRAME_crwalk6 : i32 [ 159 ]
+FRAME_crattak1 : i32 [ 160 ]
+FRAME_crattak3 : i32 [ 162 ]
+FRAME_crattak9 : i32 [ 168 ]
+FRAME_crpain1 : i32 [ 169 ]
+FRAME_crpain4 : i32 [ 172 ]
+FRAME_crdeath1 : i32 [ 173 ]
+FRAME_crdeath5 : i32 [ 177 ]
+FRAME_death101 : i32 [ 178 ]
+FRAME_death106 : i32 [ 183 ]
+FRAME_death201 : i32 [ 184 ]
+FRAME_death206 : i32 [ 189 ]
+FRAME_death301 : i32 [ 190 ]
+FRAME_death308 : i32 [ 197 ]
+
+# the plane of the touch that is running, else zero
+func touch_normal [] -> vec3f
+    if [ !g.touch_plane_on ] return vec3f [ 0.0, 0.0, 0.0 ]
+    return vec3f [ g.touch_plane.nx, g.touch_plane.ny, g.touch_plane.nz ]
+
+func touch_sky [] -> bool
+    if [ !g.touch_plane_on ] return false
+    return (g.touch_plane.surf_flags & SURF_SKY) != 0
+
+# ---- g_weapon.c
+func check_dodge [ e: Edict, start: vec3f, dir: vec3f,
+                   speed: i32 ]
+    # easy mode only ducks one quarter the time
+    if [ g.skill == 0 ]
+        if [ frand[] > 0.25 ] return
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    endp : v_ma[ start, 8192.0, dir ]
+    tr : g.world.trace[ start, zero, zero, endp, e, MASK_SHOT ]
+    if [ tr.ent && (tr.ent.svflags & SVF_MONSTER) != 0 && tr.ent.health > 0 &&
+         tr.ent.monsterinfo.dodge && infront[ tr.ent, e ] ]
+        v : v_sub[ vec3f [ tr.ex, tr.ey, tr.ez ], start ]
+        eta : f32 [ (v_len[ v ] - tr.ent.maxs.x) / f32[ speed ] ]
+        tr.ent.monsterinfo.dodge[ tr.ent, e, eta ]
+
+# fire_hit: every impact (hit, punch, slash) attack
+func fire_hit [ e: Edict, aim_in: vec3f, damage: i32,
+                kick: i32 ] -> bool
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    aim : vec3f [ aim_in ]
+    dir : v_sub[ e.enemy.origin, e.origin ]
+    range : f32 [ v_len[ dir ] ]
+    if [ range > aim.x ] return false
+    if [ aim.y > e.mins.x && aim.y < e.maxs.x ]
+        # the hit is straight on so back the range up to the edge of
+        # their bbox
+        range = range - e.enemy.maxs.x
+    el
+        # this is a side hit so adjust the "right" value out to the edge
+        # of their bbox
+        if [ aim.y < 0.0 ] aim = vec3f [ aim.x, e.enemy.mins.x, aim.z ]
+        el                 aim = vec3f [ aim.x, e.enemy.maxs.x, aim.z ]
+    point : v_ma[ e.origin, range, dir ]
+    tr : g.world.trace[ e.origin, zero, zero, point, e, MASK_SHOT ]
+    hit : tr.ent
+    if [ tr.fraction < 1.0 ]
+        if [ tr.ent.takedamage == DAMAGE_NO ] return false
+        # if it will hit any client/monster then hit the one we wanted
+        # to hit
+        if [ (tr.ent.svflags & SVF_MONSTER) != 0 || tr.ent.client ]
+            hit = e.enemy
+    ax : angle_vectors[ e.angles ]
+    point = v_ma[ e.origin, range, ax.forward ]
+    point = v_ma[ point, aim.y, ax.right ]
+    point = v_ma[ point, aim.z, ax.up ]
+    dir = v_sub[ point, e.enemy.origin ]
+    # do the damage
+    t_damage[ hit, e, e, dir, point, zero, damage, kick / 2,
+              DAMAGE_NO_KNOCKBACK, MOD_HIT ]
+    if [ (hit.svflags & SVF_MONSTER) == 0 && !hit.client ] return false
+    # do our special form of knockback here
+    v : v_ma[ e.enemy.absmin, 0.5, e.enemy.size ]
+    v = v_norm[ v_sub[ v, point ] ]
+    e.enemy.velocity = v_ma[ e.enemy.velocity, f32[ kick ], v ]
+    if [ e.enemy.velocity.z > 0.0 ] e.enemy.groundentity = null
+    return true
+
+# fire_lead: one bullet or pellet
+func fire_lead [ e: Edict, start: vec3f, aimdir: vec3f,
+                 damage: i32, kick: i32, te_impact: i32, hspread: i32,
+                 vspread: i32, means: i32 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    water : bool [ false ]
+    water_start : vec3f [ 0.0, 0.0, 0.0 ]
+    content_mask : i32 [ MASK_SHOT | MASK_WATER ]
+    tr : g.world.trace[ e.origin, zero, zero, start, e, MASK_SHOT ]
+    if [ !(tr.fraction < 1.0) ]
+        ax : angle_vectors[ vectoangles[ aimdir ] ]
+        r : f32 [ crandom[] * f32[ hspread ] ]
+        u : f32 [ crandom[] * f32[ vspread ] ]
+        endp : v_ma[ start, 8192.0, ax.forward ]
+        endp = v_ma[ endp, r, ax.right ]
+        endp = v_ma[ endp, u, ax.up ]
+        if [ g.world.point_contents[ start ] & MASK_WATER ]
+            water = true
+            water_start = start
+            content_mask = content_mask & ~MASK_WATER
+        tr = g.world.trace[ start, zero, zero, endp, e, content_mask ]
+        # see if we hit water
+        if [ tr.contents & MASK_WATER ]
+            water = true
+            water_start = vec3f [ tr.ex, tr.ey, tr.ez ]
+            if [ !v_eq[ start, water_start ] ]
+                color : i32 [ SPLASH_UNKNOWN ]
+                if [ tr.contents & CONTENTS_WATER ]  color = SPLASH_BLUE_WATER
+                el [ tr.contents & CONTENTS_SLIME ]  color = SPLASH_SLIME
+                el [ tr.contents & CONTENTS_LAVA ]   color = SPLASH_LAVA
+                if [ color != SPLASH_UNKNOWN ]
+                    g.temp_entity[ TE_SPLASH, water_start,
+                                   vec3f [ tr.nx, tr.ny, tr.nz ], 8, color ]
+                # change bullet's course when it enters water
+                dir : v_sub[ endp, start ]
+                ax = angle_vectors[ vectoangles[ dir ] ]
+                r = crandom[] * f32[ hspread ] * 2.0
+                u = crandom[] * f32[ vspread ] * 2.0
+                endp = v_ma[ water_start, 8192.0, ax.forward ]
+                endp = v_ma[ endp, r, ax.right ]
+                endp = v_ma[ endp, u, ax.up ]
+            # re-trace ignoring water this time
+            tr = g.world.trace[ water_start, zero, zero, endp, e, MASK_SHOT ]
+    # send gun puff / flash
+    if [ (tr.surf_flags & SURF_SKY) == 0 ]
+        if [ tr.fraction < 1.0 ]
+            hitpos : vec3f [ tr.ex, tr.ey, tr.ez ]
+            normal : vec3f [ tr.nx, tr.ny, tr.nz ]
+            if [ tr.ent.takedamage != DAMAGE_NO ]
+                t_damage[ tr.ent, e, e, aimdir, hitpos, normal, damage,
+                          kick, DAMAGE_BULLET, means ]
+            el
+                g.temp_entity_dir[ te_impact, hitpos, normal ]
+                if [ e.client ] player_noise[ e, hitpos, PNOISE_IMPACT ]
+    # if went through water, determine where the end and make a bubble
+    # trail
+    if [ water ]
+        endpos : vec3f [ tr.ex, tr.ey, tr.ez ]
+        dir : v_norm[ v_sub[ endpos, water_start ] ]
+        pos : v_ma[ endpos, -2.0, dir ]
+        if [ g.world.point_contents[ pos ] & MASK_WATER ]
+            endpos = pos
+        el
+            tr = g.world.trace[ pos, zero, zero, water_start, tr.ent,
+                                MASK_WATER ]
+            endpos = vec3f [ tr.ex, tr.ey, tr.ez ]
+        g.temp_entity_line[ TE_BUBBLETRAIL, water_start, endpos ]
+
+func fire_bullet [ e: Edict, start: vec3f, aimdir: vec3f,
+                   damage: i32, kick: i32, hspread: i32, vspread: i32,
+                   means: i32 ]
+    fire_lead[ e, start, aimdir, damage, kick, TE_GUNSHOT, hspread,
+               vspread, means ]
+
+func fire_shotgun [ e: Edict, start: vec3f, aimdir: vec3f,
+                    damage: i32, kick: i32, hspread: i32, vspread: i32,
+                    count: i32, means: i32 ]
+    for [ i: i32 0, i < count, i += 1 ]
+        fire_lead[ e, start, aimdir, damage, kick, TE_SHOTGUN, hspread,
+                   vspread, means ]
+
+func blaster_touch [ e: Edict, other: Edict ]
+    if [ other == e.owner ] return
+    if [ touch_sky[] ]
+        g.free_edict[ e ]
+        return
+    if [ e.owner.client ] player_noise[ e.owner, e.origin, PNOISE_IMPACT ]
+    if [ other.takedamage != DAMAGE_NO ]
+        means : i32 [ (e.spawnflags & 1) ? MOD_HYPERBLASTER : MOD_BLASTER ]
+        t_damage[ other, e, e.owner, e.velocity, e.origin,
+                  touch_normal[], e.dmg, 1, DAMAGE_ENERGY, means ]
+    el
+        g.temp_entity_dir[ TE_BLASTER, e.origin, touch_normal[] ]
+    g.free_edict[ e ]
+
+func fire_blaster [ e: Edict, start: vec3f, dir_in: vec3f,
+                    damage: i32, speed: i32, effect: i32, hyper: bool ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    dir : v_norm[ dir_in ]
+    bolt : g.spawn[]
+    bolt.svflags = SVF_DEADMONSTER
+    bolt.origin = start
+    bolt.old_origin = start
+    bolt.angles = vectoangles[ dir ]
+    bolt.velocity = v_scale[ dir, f32[ speed ] ]
+    bolt.movetype = MOVETYPE_FLYMISSILE
+    bolt.clipmask = MASK_SHOT
+    bolt.solid = SOLID_BBOX
+    bolt.effects = bolt.effects | effect
+    bolt.mins = zero
+    bolt.maxs = zero
+    bolt.modelindex = g.modelindex[ 'models/objects/laser/tris.md2' ]
+    bolt.sound = g.soundindex[ 'misc/lasfly.wav' ]
+    bolt.owner = e
+    bolt.touch = lambda blaster_touch[]
+    bolt.nextthink = g.level.time + 2.0
+    bolt.think = lambda remove_edict[]
+    bolt.dmg = damage
+    bolt.classname = 'bolt'
+    if [ hyper ] bolt.spawnflags = 1
+    g.world.link[ bolt ]
+    if [ e.client ] check_dodge[ e, bolt.origin, dir, speed ]
+    tr : g.world.trace[ e.origin, zero, zero, bolt.origin, bolt, MASK_SHOT ]
+    if [ tr.fraction < 1.0 ]
+        bolt.origin = v_ma[ bolt.origin, -10.0, dir ]
+        g.touch_plane_on = false
+        blaster_touch[ bolt, tr.ent ]
+
+func grenade_explode [ e: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ e.owner.client ] player_noise[ e.owner, e.origin, PNOISE_IMPACT ]
+    means : i32 [ MOD_G_SPLASH ]
+    if [ e.enemy ]
+        v : v_ma[ e.enemy.origin, 0.5, v_add[ e.enemy.mins, e.enemy.maxs ] ]
+        v = v_sub[ e.origin, v ]
+        points : f32 [ f32[ e.dmg ] - 0.5 * v_len[ v ] ]
+        dir : v_sub[ e.enemy.origin, e.origin ]
+        means = (e.spawnflags & 1) ? MOD_HANDGRENADE : MOD_GRENADE
+        t_damage[ e.enemy, e, e.owner, dir, e.origin, zero,
+                  i32[ points ], i32[ points ], DAMAGE_RADIUS, means ]
+    if [ e.spawnflags & 2 ]      means = MOD_HELD_GRENADE
+    el [ e.spawnflags & 1 ]      means = MOD_HG_SPLASH
+    el                           means = MOD_G_SPLASH
+    t_radius_damage[ e, e.owner, f32[ e.dmg ], e.enemy, e.dmg_radius,
+                     means ]
+    origin : v_ma[ e.origin, -0.02, e.velocity ]
+    kind : i32 [ TE_ROCKET_EXPLOSION ]
+    if [ e.waterlevel != 0 ]
+        kind = (e.groundentity) ? TE_GRENADE_EXPLOSION_WATER
+                                : TE_ROCKET_EXPLOSION_WATER
+    el
+        kind = (e.groundentity) ? TE_GRENADE_EXPLOSION : TE_ROCKET_EXPLOSION
+    g.temp_entity_at[ kind, origin ]
+    g.free_edict[ e ]
+
+func grenade_touch [ e: Edict, other: Edict ]
+    if [ other == e.owner ] return
+    if [ touch_sky[] ]
+        g.free_edict[ e ]
+        return
+    if [ other.takedamage == DAMAGE_NO ]
+        if [ e.spawnflags & 1 ]
+            if [ frand[] > 0.5 ]
+                g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/hgrenb1a.wav' ],
+                         1.0, ATTN_NORM ]
+            el
+                g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/hgrenb2a.wav' ],
+                         1.0, ATTN_NORM ]
+        el
+            g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/grenlb1b.wav' ],
+                     1.0, ATTN_NORM ]
+        return
+    e.enemy = other
+    grenade_explode[ e ]
+
+func grenade_make [ e: Edict, start: vec3f, aimdir: vec3f,
+                    damage: i32, speed: i32, timer: f32,
+                    damage_radius: f32 ] -> Edict
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    ax : angle_vectors[ vectoangles[ aimdir ] ]
+    grenade : g.spawn[]
+    grenade.origin = start
+    grenade.velocity = v_scale[ aimdir, f32[ speed ] ]
+    grenade.velocity = v_ma[ grenade.velocity, 200.0 + crandom[] * 10.0,
+                             ax.up ]
+    grenade.velocity = v_ma[ grenade.velocity, crandom[] * 10.0, ax.right ]
+    grenade.avelocity = vec3f [ 300.0, 300.0, 300.0 ]
+    grenade.movetype = MOVETYPE_BOUNCE
+    grenade.clipmask = MASK_SHOT
+    grenade.solid = SOLID_BBOX
+    grenade.effects = grenade.effects | EF_GRENADE
+    grenade.mins = zero
+    grenade.maxs = zero
+    grenade.owner = e
+    grenade.touch = lambda grenade_touch[]
+    grenade.nextthink = g.level.time + timer
+    grenade.think = lambda grenade_explode[]
+    grenade.dmg = damage
+    grenade.dmg_radius = damage_radius
+    return grenade
+
+func fire_grenade [ e: Edict, start: vec3f, aimdir: vec3f,
+                    damage: i32, speed: i32, timer: f32,
+                    damage_radius: f32 ]
+    grenade : grenade_make[ e, start, aimdir, damage, speed, timer,
+                            damage_radius ]
+    grenade.modelindex = g.modelindex[ 'models/objects/grenade/tris.md2' ]
+    grenade.classname = 'grenade'
+    g.world.link[ grenade ]
+
+func fire_grenade2 [ e: Edict, start: vec3f, aimdir: vec3f,
+                     damage: i32, speed: i32, timer: f32,
+                     damage_radius: f32, held: bool ]
+    grenade : grenade_make[ e, start, aimdir, damage, speed, timer,
+                            damage_radius ]
+    grenade.modelindex = g.modelindex[ 'models/objects/grenade2/tris.md2' ]
+    grenade.classname = 'hgrenade'
+    grenade.spawnflags = (held) ? 3 : 1
+    grenade.sound = g.soundindex[ 'weapons/hgrenc1b.wav' ]
+    if [ timer <= 0.0 ]
+        grenade_explode[ grenade ]
+    el
+        g.sound[ e, CHAN_WEAPON, g.soundindex[ 'weapons/hgrent1a.wav' ], 1.0,
+                 ATTN_NORM ]
+        g.world.link[ grenade ]
+
+func rocket_touch [ e: Edict, other: Edict ]
+    if [ other == e.owner ] return
+    if [ touch_sky[] ]
+        g.free_edict[ e ]
+        return
+    if [ e.owner.client ] player_noise[ e.owner, e.origin, PNOISE_IMPACT ]
+    # calculate position for the explosion entity
+    origin : v_ma[ e.origin, -0.02, e.velocity ]
+    if [ other.takedamage != DAMAGE_NO ]
+        t_damage[ other, e, e.owner, e.velocity, e.origin,
+                  touch_normal[], e.dmg, 0, 0, MOD_ROCKET ]
+    el
+        # don't throw any debris in net games
+        if [ !g.deathmatch && !g.coop ]
+            if [ g.touch_plane_on &&
+                 (g.touch_plane.surf_flags & (SURF_WARP | SURF_TRANS33
+                  | SURF_TRANS66 | SURF_FLOWING)) == 0 ]
+                n : i32 [ rand[] % 5 ]
+                for [ i: i32 0, i < n, i += 1 ]
+                    throw_debris[ e, 'models/objects/debris2/tris.md2',
+                                  2.0, e.origin ]
+    t_radius_damage[ e, e.owner, f32[ e.radius_dmg ], other,
+                     e.dmg_radius, MOD_R_SPLASH ]
+    kind : i32 [ (e.waterlevel != 0) ? TE_ROCKET_EXPLOSION_WATER
+                                     : TE_ROCKET_EXPLOSION ]
+    g.temp_entity_at[ kind, origin ]
+    g.free_edict[ e ]
+
+func fire_rocket [ e: Edict, start: vec3f, dir: vec3f,
+                   damage: i32, speed: i32, damage_radius: f32,
+                   radius_damage: i32 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    rocket : g.spawn[]
+    rocket.origin = start
+    rocket.movedir = dir
+    rocket.angles = vectoangles[ dir ]
+    rocket.velocity = v_scale[ dir, f32[ speed ] ]
+    rocket.movetype = MOVETYPE_FLYMISSILE
+    rocket.clipmask = MASK_SHOT
+    rocket.solid = SOLID_BBOX
+    rocket.effects = rocket.effects | EF_ROCKET
+    rocket.mins = zero
+    rocket.maxs = zero
+    rocket.modelindex = g.modelindex[ 'models/objects/rocket/tris.md2' ]
+    rocket.owner = e
+    rocket.touch = lambda rocket_touch[]
+    rocket.nextthink = g.level.time + 8000.0 / f32[ speed ]
+    rocket.think = lambda remove_edict[]
+    rocket.dmg = damage
+    rocket.radius_dmg = radius_damage
+    rocket.dmg_radius = damage_radius
+    rocket.sound = g.soundindex[ 'weapons/rockfly.wav' ]
+    rocket.classname = 'rocket'
+    if [ e.client ] check_dodge[ e, rocket.origin, dir, speed ]
+    g.world.link[ rocket ]
+
+func fire_rail [ e: Edict, start: vec3f, aimdir: vec3f,
+                 damage: i32, kick: i32 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    endp : v_ma[ start, 8192.0, aimdir ]
+    from : vec3f [ start ]
+    ignore : e
+    water : bool [ false ]
+    mask : i32 [ MASK_SHOT | CONTENTS_SLIME | CONTENTS_LAVA ]
+    tr : g.world.trace[ from, zero, zero, endp, ignore, mask ]
+    while [ ignore ]
+        tr = g.world.trace[ from, zero, zero, endp, ignore, mask ]
+        if [ tr.contents & (CONTENTS_SLIME | CONTENTS_LAVA) ]
+            mask = mask & ~(CONTENTS_SLIME | CONTENTS_LAVA)
+            water = true
+        el
+            if [ (tr.ent.svflags & SVF_MONSTER) != 0 || tr.ent.client ]
+                ignore = tr.ent
+            el
+                ignore = null
+            if [ tr.ent != e && tr.ent.takedamage != DAMAGE_NO ]
+                t_damage[ tr.ent, e, e, aimdir,
+                          vec3f [ tr.ex, tr.ey, tr.ez ],
+                          vec3f [ tr.nx, tr.ny, tr.nz ], damage, kick, 0,
+                          MOD_RAILGUN ]
+        from = vec3f [ tr.ex, tr.ey, tr.ez ]
+    # send gun puff / flash
+    g.temp_entity_line[ TE_RAILTRAIL, start, from ]
+    if [ e.client ] player_noise[ e, from, PNOISE_IMPACT ]
+
+func bfg_explode [ e: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ e.frame == 0 ]
+        # the BFG effect
+        ent : Edict [ null ]
+        while [ true ]
+            ent = g.findradius[ ent, e.origin, e.dmg_radius ]
+            if [ !ent ] break
+            if [ ent.takedamage == DAMAGE_NO ] continue
+            if [ ent == e.owner ] continue
+            if [ !can_damage[ ent, e ] ] continue
+            if [ !can_damage[ ent, e.owner ] ] continue
+            v : v_ma[ ent.origin, 0.5, v_add[ ent.mins, ent.maxs ] ]
+            v = v_sub[ e.origin, v ]
+            dist : f32 [ v_len[ v ] ]
+            points : f32 [ f32[ e.radius_dmg ]
+                           * (1.0 - sqrt[ dist / e.dmg_radius ]) ]
+            if [ ent == e.owner ] points = points * 0.5
+            g.temp_entity_at[ TE_BFG_EXPLOSION, ent.origin ]
+            t_damage[ ent, e, e.owner, e.velocity, ent.origin, zero,
+                      i32[ points ], 0, DAMAGE_ENERGY, MOD_BFG_EFFECT ]
+    e.nextthink = g.level.time + FRAMETIME
+    e.frame += 1
+    if [ e.frame == 5 ] e.think = lambda remove_edict[]
+
+func bfg_touch [ e: Edict, other: Edict ]
+    if [ other == e.owner ] return
+    if [ touch_sky[] ]
+        g.free_edict[ e ]
+        return
+    if [ e.owner.client ] player_noise[ e.owner, e.origin, PNOISE_IMPACT ]
+    # core explosion - prevents firing it into the wall/floor
+    if [ other.takedamage != DAMAGE_NO ]
+        t_damage[ other, e, e.owner, e.velocity, e.origin,
+                  touch_normal[], 200, 0, 0, MOD_BFG_BLAST ]
+    t_radius_damage[ e, e.owner, 200.0, other, 100.0, MOD_BFG_BLAST ]
+    g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/bfg__x1b.wav' ], 1.0,
+             ATTN_NORM ]
+    e.solid = SOLID_NOT
+    e.touch = null
+    e.origin = v_ma[ e.origin, 0.0 - FRAMETIME, e.velocity ]
+    e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+    e.modelindex = g.modelindex[ 'sprites/s_bfg3.sp2' ]
+    e.frame = 0
+    e.sound = 0
+    e.effects = e.effects & ~EF_ANIM_ALLFAST
+    e.think = lambda bfg_explode[]
+    e.nextthink = g.level.time + FRAMETIME
+    e.enemy = other
+    g.temp_entity_at[ TE_BFG_BIGEXPLOSION, e.origin ]
+
+func bfg_think [ e: Edict ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    dmg : i32 [ (g.deathmatch) ? 5 : 10 ]
+    mask : i32 [ CONTENTS_SOLID | CONTENTS_MONSTER | CONTENTS_DEADMONSTER ]
+    ent : Edict [ null ]
+    while [ true ]
+        ent = g.findradius[ ent, e.origin, 256.0 ]
+        if [ !ent ] break
+        if [ ent == e ] continue
+        if [ ent == e.owner ] continue
+        if [ ent.takedamage == DAMAGE_NO ] continue
+        if [ (ent.svflags & SVF_MONSTER) == 0 && !ent.client &&
+             ent.classname != 'misc_explobox' ]
+            continue
+        point : v_ma[ ent.absmin, 0.5, ent.size ]
+        dir : v_norm[ v_sub[ point, e.origin ] ]
+        ignore : e
+        start : vec3f [ e.origin ]
+        endp : v_ma[ start, 2048.0, dir ]
+        tr : g.world.trace[ start, zero, zero, endp, ignore, mask ]
+        while [ true ]
+            tr = g.world.trace[ start, zero, zero, endp, ignore, mask ]
+            if [ !tr.ent ] break
+            hitpos : vec3f [ tr.ex, tr.ey, tr.ez ]
+            # hurt it if we can
+            if [ tr.ent.takedamage != DAMAGE_NO &&
+                 (tr.ent.flags & FL_IMMUNE_LASER) == 0 && tr.ent != e.owner ]
+                t_damage[ tr.ent, e, e.owner, dir, hitpos, zero, dmg, 1,
+                          DAMAGE_ENERGY, MOD_BFG_LASER ]
+            # if we hit something that's not a monster or player we're
+            # done
+            if [ (tr.ent.svflags & SVF_MONSTER) == 0 && !tr.ent.client ]
+                g.temp_entity[ TE_LASER_SPARKS, hitpos,
+                               vec3f [ tr.nx, tr.ny, tr.nz ], 4, e.skinnum ]
+                break
+            ignore = tr.ent
+            start = hitpos
+        g.temp_entity_line[ TE_BFG_LASER, e.origin,
+                            vec3f [ tr.ex, tr.ey, tr.ez ] ]
+    e.nextthink = g.level.time + FRAMETIME
+
+func fire_bfg [ e: Edict, start: vec3f, dir: vec3f, damage: i32,
+                speed: i32, damage_radius: f32 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    bfg : g.spawn[]
+    bfg.origin = start
+    bfg.movedir = dir
+    bfg.angles = vectoangles[ dir ]
+    bfg.velocity = v_scale[ dir, f32[ speed ] ]
+    bfg.movetype = MOVETYPE_FLYMISSILE
+    bfg.clipmask = MASK_SHOT
+    bfg.solid = SOLID_BBOX
+    bfg.effects = bfg.effects | EF_BFG | EF_ANIM_ALLFAST
+    bfg.mins = zero
+    bfg.maxs = zero
+    bfg.modelindex = g.modelindex[ 'sprites/s_bfg1.sp2' ]
+    bfg.owner = e
+    bfg.touch = lambda bfg_touch[]
+    bfg.nextthink = g.level.time + 8000.0 / f32[ speed ]
+    bfg.think = lambda remove_edict[]
+    bfg.radius_dmg = damage
+    bfg.dmg_radius = damage_radius
+    bfg.classname = 'bfg blast'
+    bfg.sound = g.soundindex[ 'weapons/bfg__l1a.wav' ]
+    bfg.think = lambda bfg_think[]
+    bfg.nextthink = g.level.time + FRAMETIME
+    bfg.teammaster = bfg
+    bfg.teamchain = null
+    if [ e.client ] check_dodge[ e, bfg.origin, dir, speed ]
+    g.world.link[ bfg ]
+
+# ---- p_weapon.c
+func p_project_source [ client: Client, point: vec3f, distance: vec3f,
+                        forward: vec3f, right: vec3f ] -> vec3f
+    d : vec3f [ distance ]
+    if [ client.pers.hand == LEFT_HANDED ]
+        d = vec3f [ d.x, 0.0 - d.y, d.z ]
+    el [ client.pers.hand == CENTER_HANDED ]
+        d = vec3f [ d.x, 0.0, d.z ]
+    return project_source[ point, d, forward, right ]
+
+# PlayerNoise: a personal noise and a weapon target noise monsters
+# can move toward
+func player_noise [ who: Edict, where: vec3f, kind: i32 ]
+    if [ kind == PNOISE_WEAPON ]
+        if [ who.client.silencer_shots != 0 ]
+            who.client.silencer_shots -= 1
+            return
+    if [ g.deathmatch ] return
+    if [ who.flags & FL_NOTARGET ] return
+    if [ !who.mynoise ]
+        noise : g.spawn[]
+        noise.classname = 'player_noise'
+        noise.mins = vec3f [ -8.0, -8.0, -8.0 ]
+        noise.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+        noise.owner = who
+        noise.svflags = SVF_NOCLIENT
+        who.mynoise = noise
+        noise = g.spawn[]
+        noise.classname = 'player_noise'
+        noise.mins = vec3f [ -8.0, -8.0, -8.0 ]
+        noise.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+        noise.owner = who
+        noise.svflags = SVF_NOCLIENT
+        who.mynoise2 = noise
+    noise : Edict [ null ]
+    if [ kind == PNOISE_SELF || kind == PNOISE_WEAPON ]
+        noise = who.mynoise
+        g.level.sound_entity = noise
+        g.level.sound_entity_framenum = g.level.framenum
+    el
+        noise = who.mynoise2
+        g.level.sound2_entity = noise
+        g.level.sound2_entity_framenum = g.level.framenum
+    noise.origin = where
+    noise.absmin = v_sub[ where, noise.maxs ]
+    noise.absmax = v_add[ where, noise.maxs ]
+    noise.teleport_time = g.level.time
+    g.world.link[ noise ]
+
+func pickup_weapon [ e: Edict, other: Edict ] -> bool
+    index : i32 [ e.item.index ]
+    if [ ((g.dmflags & 4) != 0 || g.coop) && inv_get[ other, index ] != 0 ]
+        if [ (e.spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)) == 0 ]
+            # leave the weapon for others to pickup
+            return false
+    inv_add[ other, index, 1 ]
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 ]
+        # give them some ammo with it
+        ammo : find_item[ e.item.ammo ]
+        if [ g.dmflags & 8192 ] add_ammo[ other, ammo, 1000 ]
+        el                      add_ammo[ other, ammo, ammo.quantity ]
+        if [ (e.spawnflags & DROPPED_PLAYER_ITEM) == 0 ]
+            if [ g.deathmatch ]
+                if [ g.dmflags & 4 ] e.flags = e.flags | FL_RESPAWN
+                el                   set_respawn[ e, 30.0 ]
+            if [ g.coop ] e.flags = e.flags | FL_RESPAWN
+    if [ other.client.pers.weapon != e.item && inv_get[ other, index ] == 1 &&
+         (!g.deathmatch ||
+          other.client.pers.weapon == find_item[ 'blaster' ]) ]
+        other.client.newweapon = e.item
+    return true
+
+# ChangeWeapon: the old weapon has been dropped all the way, so make
+# the new one current
+func change_weapon [ e: Edict ]
+    cl : e.client
+    if [ cl.grenade_time != 0.0 ]
+        cl.grenade_time = g.level.time
+        cl.weapon_sound = 0
+        weapon_grenade_fire[ e, false ]
+        cl.grenade_time = 0.0
+    cl.pers.lastweapon = cl.pers.weapon
+    cl.pers.weapon = cl.newweapon
+    cl.newweapon = null
+    cl.machinegun_shots = 0
+    # set visible model
+    if [ e.modelindex == 255 ]
+        i : i32 [ (cl.pers.weapon) ? ((cl.pers.weapon.weapmodel & 255) << 8)
+                                   : 0 ]
+        e.skinnum = (e.number - 1) | i
+    if [ cl.pers.weapon && cl.pers.weapon.ammo ]
+        cl.ammo_index = find_item[ cl.pers.weapon.ammo ].index
+    el
+        cl.ammo_index = 0
+    if [ !cl.pers.weapon ]
+        # dead
+        cl.ps.gunindex = 0
+        return
+    cl.weaponstate = WEAPON_ACTIVATING
+    cl.ps.gunframe = 0
+    cl.ps.gunindex = g.modelindex[ cl.pers.weapon.view_model ]
+    cl.anim_priority = ANIM_PAIN
+    if [ cl.ps.pm_flags & PMF_DUCKED ]
+        e.frame = FRAME_crpain1
+        cl.anim_end = FRAME_crpain4
+    el
+        e.frame = FRAME_pain301
+        cl.anim_end = FRAME_pain304
+
+func has_both [ e: Edict, ammo: string, weapon: string,
+                least: i32 ] -> bool
+    return inv_get[ e, find_item[ ammo ].index ] >= least &&
+           inv_get[ e, find_item[ weapon ].index ] != 0
+
+func no_ammo_weapon_change [ e: Edict ]
+    cl : e.client
+    if [ has_both[ e, 'slugs', 'railgun', 1 ] ]
+        cl.newweapon = find_item[ 'railgun' ]
+    el [ has_both[ e, 'cells', 'hyperblaster', 1 ] ]
+        cl.newweapon = find_item[ 'hyperblaster' ]
+    el [ has_both[ e, 'bullets', 'chaingun', 1 ] ]
+        cl.newweapon = find_item[ 'chaingun' ]
+    el [ has_both[ e, 'bullets', 'machinegun', 1 ] ]
+        cl.newweapon = find_item[ 'machinegun' ]
+    el [ has_both[ e, 'shells', 'super shotgun', 2 ] ]
+        cl.newweapon = find_item[ 'super shotgun' ]
+    el [ has_both[ e, 'shells', 'shotgun', 1 ] ]
+        cl.newweapon = find_item[ 'shotgun' ]
+    el
+        cl.newweapon = find_item[ 'blaster' ]
+
+# Think_Weapon: called by ClientBeginServerFrame and ClientThink
+func think_weapon [ e: Edict ]
+    cl : e.client
+    # if just died, put the weapon away
+    if [ e.health < 1 ]
+        cl.newweapon = null
+        change_weapon[ e ]
+    # call active weapon think routine
+    if [ cl.pers.weapon && cl.pers.weapon.weaponthink ]
+        g.is_quad = cl.quad_framenum > f32[ g.level.framenum ]
+        g.is_silenced = (cl.silencer_shots != 0) ? MZ_SILENCED : 0
+        cl.pers.weapon.weaponthink[ e ]
+
+# Use_Weapon: make the weapon ready if there is ammo
+func use_weapon [ e: Edict, item: GItem ]
+    if [ item == e.client.pers.weapon ] return
+    if [ item.ammo && !g.g_select_empty && (item.flags & IT_AMMO) == 0 ]
+        ammo_item : find_item[ item.ammo ]
+        ammo_index : i32 [ ammo_item.index ]
+        if [ inv_get[ e, ammo_index ] == 0 ]
+            g.cprintf[ e, 'No {ammo_item.pickup_name} for {item.pickup_name}.' ]
+            return
+        if [ inv_get[ e, ammo_index ] < item.quantity ]
+            g.cprintf[ e, 'Not enough {ammo_item.pickup_name} for {item.pickup_name}.' ]
+            return
+    # change to this weapon when down
+    e.client.newweapon = item
+
+func drop_weapon [ e: Edict, item: GItem ]
+    if [ g.dmflags & 4 ] return
+    index : i32 [ item.index ]
+    # see if we're already using it
+    if [ (item == e.client.pers.weapon || item == e.client.newweapon) &&
+         inv_get[ e, index ] == 1 ]
+        g.cprintf[ e, 'Cannot drop current weapon' ]
+        return
+    drop_item[ e, item ]
+    inv_add[ e, index, -1 ]
+
+func in_list [ frames: vec i32, frame: i32 ] -> bool
+    for [ i: i32 0, i < frames.count, i += 1 ]
+        if [ frames[ i ] == frame ] return true
+    return false
+
+# Weapon_Generic: the basics of weapon thinking; fire is a Fn
+func weapon_generic [ e: Edict, activate_last: i32,
+                      fire_last: i32, idle_last: i32, deactivate_last: i32,
+                      pause_frames: vec i32, fire_frames: vec i32,
+                      fire: lambda none [ Edict ] ]
+    cl : e.client
+    fire_first : i32 [ activate_last + 1 ]
+    idle_first : i32 [ fire_last + 1 ]
+    deactivate_first : i32 [ idle_last + 1 ]
+    # VWep animations screw up corpses
+    if [ e.deadflag != 0 || e.modelindex != 255 ] return
+    if [ cl.weaponstate == WEAPON_DROPPING ]
+        if [ cl.ps.gunframe == deactivate_last ]
+            change_weapon[ e ]
+            return
+        el [ deactivate_last - cl.ps.gunframe == 4 ]
+            cl.anim_priority = ANIM_REVERSE
+            if [ cl.ps.pm_flags & PMF_DUCKED ]
+                e.frame = FRAME_crpain4 + 1
+                cl.anim_end = FRAME_crpain1
+            el
+                e.frame = FRAME_pain304 + 1
+                cl.anim_end = FRAME_pain301
+        cl.ps.gunframe += 1
+        return
+    if [ cl.weaponstate == WEAPON_ACTIVATING ]
+        if [ cl.ps.gunframe == activate_last ]
+            cl.weaponstate = WEAPON_READY
+            cl.ps.gunframe = idle_first
+            return
+        cl.ps.gunframe += 1
+        return
+    if [ cl.newweapon && cl.weaponstate != WEAPON_FIRING ]
+        cl.weaponstate = WEAPON_DROPPING
+        cl.ps.gunframe = deactivate_first
+        if [ deactivate_last - deactivate_first < 4 ]
+            cl.anim_priority = ANIM_REVERSE
+            if [ cl.ps.pm_flags & PMF_DUCKED ]
+                e.frame = FRAME_crpain4 + 1
+                cl.anim_end = FRAME_crpain1
+            el
+                e.frame = FRAME_pain304 + 1
+                cl.anim_end = FRAME_pain301
+        return
+    if [ cl.weaponstate == WEAPON_READY ]
+        if [ (cl.latched_buttons | cl.buttons) & BUTTON_ATTACK ]
+            cl.latched_buttons = cl.latched_buttons & ~BUTTON_ATTACK
+            if [ cl.ammo_index == 0 ||
+                 inv_get[ e, cl.ammo_index ] >= cl.pers.weapon.quantity ]
+                cl.ps.gunframe = fire_first
+                cl.weaponstate = WEAPON_FIRING
+                # start the animation
+                cl.anim_priority = ANIM_ATTACK
+                if [ cl.ps.pm_flags & PMF_DUCKED ]
+                    e.frame = FRAME_crattak1 - 1
+                    cl.anim_end = FRAME_crattak9
+                el
+                    e.frame = FRAME_attack1 - 1
+                    cl.anim_end = FRAME_attack8
+            el
+                if [ g.level.time >= e.pain_debounce_time ]
+                    g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/noammo.wav' ],
+                             1.0, ATTN_NORM ]
+                    e.pain_debounce_time = g.level.time + 1.0
+                no_ammo_weapon_change[ e ]
+        el
+            if [ cl.ps.gunframe == idle_last ]
+                cl.ps.gunframe = idle_first
+                return
+            if [ in_list[ pause_frames, cl.ps.gunframe ] ]
+                if [ rand[] & 15 ] return
+            cl.ps.gunframe += 1
+            return
+    if [ cl.weaponstate == WEAPON_FIRING ]
+        if [ in_list[ fire_frames, cl.ps.gunframe ] ]
+            if [ cl.quad_framenum > f32[ g.level.framenum ] ]
+                g.sound[ e, CHAN_ITEM, g.soundindex[ 'items/damage3.wav' ], 1.0,
+                         ATTN_NORM ]
+            fire[ e ]
+        el
+            cl.ps.gunframe += 1
+        if [ cl.ps.gunframe == idle_first + 1 ] cl.weaponstate = WEAPON_READY
+
+# ---- grenade
+func weapon_grenade_fire [ e: Edict, held: bool ]
+    cl : e.client
+    damage : i32 [ 125 ]
+    radius : f32 [ f32[ damage + 40 ] ]
+    if [ g.is_quad ] damage = damage * 4
+    offset : vec3f [ 8.0, 8.0, f32[ e.viewheight - 8 ] ]
+    ax : angle_vectors[ cl.v_angle ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    timer : f32 [ cl.grenade_time - g.level.time ]
+    speed : i32 [ GRENADE_MINSPEED + (GRENADE_TIMER - timer)
+                  * ((GRENADE_MAXSPEED - GRENADE_MINSPEED) / GRENADE_TIMER) ]
+    fire_grenade2[ e, start, ax.forward, damage, speed, timer, radius,
+                   held ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+    cl.grenade_time = g.level.time + 1.0
+    if [ e.deadflag != 0 || e.modelindex != 255 ] return
+    if [ e.health <= 0 ] return
+    if [ cl.ps.pm_flags & PMF_DUCKED ]
+        cl.anim_priority = ANIM_ATTACK
+        e.frame = FRAME_crattak1 - 1
+        cl.anim_end = FRAME_crattak3
+    el
+        cl.anim_priority = ANIM_REVERSE
+        e.frame = FRAME_wave08
+        cl.anim_end = FRAME_wave01
+
+func weapon_grenade [ e: Edict ]
+    cl : e.client
+    if [ cl.newweapon && cl.weaponstate == WEAPON_READY ]
+        change_weapon[ e ]
+        return
+    if [ cl.weaponstate == WEAPON_ACTIVATING ]
+        cl.weaponstate = WEAPON_READY
+        cl.ps.gunframe = 16
+        return
+    if [ cl.weaponstate == WEAPON_READY ]
+        if [ (cl.latched_buttons | cl.buttons) & BUTTON_ATTACK ]
+            cl.latched_buttons = cl.latched_buttons & ~BUTTON_ATTACK
+            if [ inv_get[ e, cl.ammo_index ] != 0 ]
+                cl.ps.gunframe = 1
+                cl.weaponstate = WEAPON_FIRING
+                cl.grenade_time = 0.0
+            el
+                if [ g.level.time >= e.pain_debounce_time ]
+                    g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/noammo.wav' ],
+                             1.0, ATTN_NORM ]
+                    e.pain_debounce_time = g.level.time + 1.0
+                no_ammo_weapon_change[ e ]
+            return
+        if [ cl.ps.gunframe == 29 || cl.ps.gunframe == 34 ||
+             cl.ps.gunframe == 39 || cl.ps.gunframe == 48 ]
+            if [ rand[] & 15 ] return
+        cl.ps.gunframe += 1
+        if [ cl.ps.gunframe > 48 ] cl.ps.gunframe = 16
+        return
+    if [ cl.weaponstate == WEAPON_FIRING ]
+        if [ cl.ps.gunframe == 5 ]
+            g.sound[ e, CHAN_WEAPON, g.soundindex[ 'weapons/hgrena1b.wav' ],
+                     1.0, ATTN_NORM ]
+        if [ cl.ps.gunframe == 11 ]
+            if [ cl.grenade_time == 0.0 ]
+                cl.grenade_time = g.level.time + GRENADE_TIMER + 0.2
+                cl.weapon_sound = g.soundindex[ 'weapons/hgrenc1b.wav' ]
+            # they waited too long, detonate it in their hand
+            if [ !cl.grenade_blew_up && g.level.time >= cl.grenade_time ]
+                cl.weapon_sound = 0
+                weapon_grenade_fire[ e, true ]
+                cl.grenade_blew_up = true
+            if [ cl.buttons & BUTTON_ATTACK ] return
+            if [ cl.grenade_blew_up ]
+                if [ g.level.time >= cl.grenade_time ]
+                    cl.ps.gunframe = 15
+                    cl.grenade_blew_up = false
+                el
+                    return
+        if [ cl.ps.gunframe == 12 ]
+            cl.weapon_sound = 0
+            weapon_grenade_fire[ e, false ]
+        if [ cl.ps.gunframe == 15 && g.level.time < cl.grenade_time ] return
+        cl.ps.gunframe += 1
+        if [ cl.ps.gunframe == 16 ]
+            cl.grenade_time = 0.0
+            cl.weaponstate = WEAPON_READY
+
+# ---- grenade launcher
+func weapon_grenadelauncher_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ 120 ]
+    radius : f32 [ f32[ damage + 40 ] ]
+    if [ g.is_quad ] damage = damage * 4
+    offset : vec3f [ 8.0, 8.0, f32[ e.viewheight - 8 ] ]
+    ax : angle_vectors[ cl.v_angle ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    cl.kick_angles = vec3f [ -1.0, 0.0, 0.0 ]
+    fire_grenade[ e, start, ax.forward, damage, 600, 2.5, radius ]
+    g.muzzleflash[ e, MZ_GRENADE | g.is_silenced ]
+    cl.ps.gunframe += 1
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+
+func weapon_grenadelauncher [ e: Edict ]
+    weapon_generic[ e, 5, 16, 59, 64, vec i32 [] [ 34, 51, 59 ],
+                    vec i32 [] [ 6 ], lambda weapon_grenadelauncher_fire[] ]
+
+# ---- rocket
+func weapon_rocketlauncher_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ 100 + i32[ frand[] * 20.0 ] ]
+    radius_damage : i32 [ 120 ]
+    damage_radius : f32 [ 120.0 ]
+    if [ g.is_quad ]
+        damage = damage * 4
+        radius_damage = radius_damage * 4
+    ax : angle_vectors[ cl.v_angle ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    cl.kick_angles = vec3f [ -1.0, 0.0, 0.0 ]
+    offset : vec3f [ 8.0, 8.0, f32[ e.viewheight - 8 ] ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    fire_rocket[ e, start, ax.forward, damage, 650, damage_radius,
+                 radius_damage ]
+    g.muzzleflash[ e, MZ_ROCKET | g.is_silenced ]
+    cl.ps.gunframe += 1
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+
+func weapon_rocketlauncher [ e: Edict ]
+    weapon_generic[ e, 4, 12, 50, 54, vec i32 [] [ 25, 33, 42, 50 ],
+                    vec i32 [] [ 5 ], lambda weapon_rocketlauncher_fire[] ]
+
+# ---- blaster and hyperblaster
+func blaster_fire [ e: Edict, g_offset: vec3f, damage_in: i32,
+                    hyper: bool, effect: i32 ]
+    cl : e.client
+    damage : i32 [ (g.is_quad) ? damage_in * 4 : damage_in ]
+    ax : angle_vectors[ cl.v_angle ]
+    offset : v_add[ vec3f [ 24.0, 8.0, f32[ e.viewheight - 8 ] ], g_offset ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    cl.kick_angles = vec3f [ -1.0, 0.0, 0.0 ]
+    fire_blaster[ e, start, ax.forward, damage, 1000, effect, hyper ]
+    g.muzzleflash[ e, ((hyper) ? MZ_HYPERBLASTER : MZ_BLASTER)
+                      | g.is_silenced ]
+    player_noise[ e, start, PNOISE_WEAPON ]
+
+func weapon_blaster_fire [ e: Edict ]
+    damage : i32 [ (g.deathmatch) ? 15 : 10 ]
+    blaster_fire[ e, vec3f [ 0.0, 0.0, 0.0 ], damage, false, EF_BLASTER ]
+    e.client.ps.gunframe += 1
+
+func weapon_blaster [ e: Edict ]
+    weapon_generic[ e, 4, 8, 52, 55, vec i32 [] [ 19, 32 ],
+                    vec i32 [] [ 5 ], lambda weapon_blaster_fire[] ]
+
+func weapon_hyperblaster_fire [ e: Edict ]
+    cl : e.client
+    cl.weapon_sound = g.soundindex[ 'weapons/hyprbl1a.wav' ]
+    if [ (cl.buttons & BUTTON_ATTACK) == 0 ]
+        cl.ps.gunframe += 1
+    el
+        if [ inv_get[ e, cl.ammo_index ] == 0 ]
+            if [ g.level.time >= e.pain_debounce_time ]
+                g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/noammo.wav' ],
+                         1.0, ATTN_NORM ]
+                e.pain_debounce_time = g.level.time + 1.0
+            no_ammo_weapon_change[ e ]
+        el
+            rotation : f32 [ f32[ cl.ps.gunframe - 5 ] * 2.0
+                             * 3.14159265358979 / 6.0 ]
+            offset : vec3f [ -4.0 * sin[ rotation ], 0.0,
+                             4.0 * cos[ rotation ] ]
+            effect : i32 [ (cl.ps.gunframe == 6 || cl.ps.gunframe == 9)
+                           ? EF_HYPERBLASTER : 0 ]
+            damage : i32 [ (g.deathmatch) ? 15 : 20 ]
+            blaster_fire[ e, offset, damage, true, effect ]
+            if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+            cl.anim_priority = ANIM_ATTACK
+            if [ cl.ps.pm_flags & PMF_DUCKED ]
+                e.frame = FRAME_crattak1 - 1
+                cl.anim_end = FRAME_crattak9
+            el
+                e.frame = FRAME_attack1 - 1
+                cl.anim_end = FRAME_attack8
+        cl.ps.gunframe += 1
+        if [ cl.ps.gunframe == 12 && inv_get[ e, cl.ammo_index ] != 0 ]
+            cl.ps.gunframe = 6
+    if [ cl.ps.gunframe == 12 ]
+        g.sound[ e, CHAN_AUTO, g.soundindex[ 'weapons/hyprbd1a.wav' ], 1.0,
+                 ATTN_NORM ]
+        cl.weapon_sound = 0
+
+func weapon_hyperblaster [ e: Edict ]
+    weapon_generic[ e, 5, 20, 49, 53, vec i32 [],
+                    vec i32 [] [ 6, 7, 8, 9, 10, 11 ],
+                    lambda weapon_hyperblaster_fire[] ]
+
+# ---- machinegun and chaingun
+func machinegun_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ 8 ]
+    kick : i32 [ 2 ]
+    if [ (cl.buttons & BUTTON_ATTACK) == 0 ]
+        cl.machinegun_shots = 0
+        cl.ps.gunframe += 1
+        return
+    if [ cl.ps.gunframe == 5 ] cl.ps.gunframe = 4
+    el                         cl.ps.gunframe = 5
+    if [ inv_get[ e, cl.ammo_index ] < 1 ]
+        cl.ps.gunframe = 6
+        if [ g.level.time >= e.pain_debounce_time ]
+            g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/noammo.wav' ], 1.0,
+                     ATTN_NORM ]
+            e.pain_debounce_time = g.level.time + 1.0
+        no_ammo_weapon_change[ e ]
+        return
+    if [ g.is_quad ]
+        damage = damage * 4
+        kick = kick * 4
+    cl.kick_origin = vec3f [ crandom[] * 0.35, crandom[] * 0.35,
+                             crandom[] * 0.35 ]
+    cl.kick_angles = vec3f [ f32[ cl.machinegun_shots ] * -1.5,
+                             crandom[] * 0.7, crandom[] * 0.7 ]
+    # raise the gun as it is firing
+    if [ !g.deathmatch ]
+        cl.machinegun_shots += 1
+        if [ cl.machinegun_shots > 9 ] cl.machinegun_shots = 9
+    # get start / end positions
+    angles : v_add[ cl.v_angle, cl.kick_angles ]
+    ax : angle_vectors[ angles ]
+    offset : vec3f [ 0.0, 8.0, f32[ e.viewheight - 8 ] ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    fire_bullet[ e, start, ax.forward, damage, kick,
+                 DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                 MOD_MACHINEGUN ]
+    g.muzzleflash[ e, MZ_MACHINEGUN | g.is_silenced ]
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+    cl.anim_priority = ANIM_ATTACK
+    if [ cl.ps.pm_flags & PMF_DUCKED ]
+        e.frame = FRAME_crattak1 - i32[ frand[] + 0.25 ]
+        cl.anim_end = FRAME_crattak9
+    el
+        e.frame = FRAME_attack1 - i32[ frand[] + 0.25 ]
+        cl.anim_end = FRAME_attack8
+
+func weapon_machinegun [ e: Edict ]
+    weapon_generic[ e, 3, 5, 45, 49, vec i32 [] [ 23, 45 ],
+                    vec i32 [] [ 4, 5 ], lambda machinegun_fire[] ]
+
+func chaingun_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ (g.deathmatch) ? 6 : 8 ]
+    kick : i32 [ 2 ]
+    if [ cl.ps.gunframe == 5 ]
+        g.sound[ e, CHAN_AUTO, g.soundindex[ 'weapons/chngnu1a.wav' ], 1.0,
+                 ATTN_IDLE ]
+    if [ cl.ps.gunframe == 14 && (cl.buttons & BUTTON_ATTACK) == 0 ]
+        cl.ps.gunframe = 32
+        cl.weapon_sound = 0
+        return
+    el [ cl.ps.gunframe == 21 && (cl.buttons & BUTTON_ATTACK) != 0 &&
+         inv_get[ e, cl.ammo_index ] != 0 ]
+        cl.ps.gunframe = 15
+    el
+        cl.ps.gunframe += 1
+    if [ cl.ps.gunframe == 22 ]
+        cl.weapon_sound = 0
+        g.sound[ e, CHAN_AUTO, g.soundindex[ 'weapons/chngnd1a.wav' ], 1.0,
+                 ATTN_IDLE ]
+    el
+        cl.weapon_sound = g.soundindex[ 'weapons/chngnl1a.wav' ]
+    cl.anim_priority = ANIM_ATTACK
+    if [ cl.ps.pm_flags & PMF_DUCKED ]
+        e.frame = FRAME_crattak1 - (cl.ps.gunframe & 1)
+        cl.anim_end = FRAME_crattak9
+    el
+        e.frame = FRAME_attack1 - (cl.ps.gunframe & 1)
+        cl.anim_end = FRAME_attack8
+    shots : i32 [ 3 ]
+    if [ cl.ps.gunframe <= 9 ]
+        shots = 1
+    el [ cl.ps.gunframe <= 14 ]
+        shots = (cl.buttons & BUTTON_ATTACK) ? 2 : 1
+    if [ inv_get[ e, cl.ammo_index ] < shots ] shots = inv_get[ e, cl.ammo_index ]
+    if [ shots == 0 ]
+        if [ g.level.time >= e.pain_debounce_time ]
+            g.sound[ e, CHAN_VOICE, g.soundindex[ 'weapons/noammo.wav' ], 1.0,
+                     ATTN_NORM ]
+            e.pain_debounce_time = g.level.time + 1.0
+        no_ammo_weapon_change[ e ]
+        return
+    if [ g.is_quad ]
+        damage = damage * 4
+        kick = kick * 4
+    cl.kick_origin = vec3f [ crandom[] * 0.35, crandom[] * 0.35,
+                             crandom[] * 0.35 ]
+    cl.kick_angles = vec3f [ crandom[] * 0.7, crandom[] * 0.7,
+                             crandom[] * 0.7 ]
+    start : vec3f [ 0.0, 0.0, 0.0 ]
+    for [ i: i32 0, i < shots, i += 1 ]
+        # get start / end positions
+        ax : angle_vectors[ cl.v_angle ]
+        r : f32 [ 7.0 + crandom[] * 4.0 ]
+        u : f32 [ crandom[] * 4.0 ]
+        offset : vec3f [ 0.0, r, u + f32[ e.viewheight - 8 ] ]
+        start = p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+        fire_bullet[ e, start, ax.forward, damage, kick,
+                     DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                     MOD_CHAINGUN ]
+    g.muzzleflash[ e, (MZ_CHAINGUN1 + shots - 1) | g.is_silenced ]
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, 0 - shots ]
+
+func weapon_chaingun [ e: Edict ]
+    weapon_generic[ e, 4, 31, 61, 64, vec i32 [] [ 38, 43, 51, 61 ],
+                    vec i32 [] [ 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                                 17, 18, 19, 20, 21 ],
+                    lambda chaingun_fire[] ]
+
+# ---- shotgun and super shotgun
+func weapon_shotgun_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ 4 ]
+    kick : i32 [ 8 ]
+    if [ cl.ps.gunframe == 9 ]
+        cl.ps.gunframe += 1
+        return
+    ax : angle_vectors[ cl.v_angle ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    cl.kick_angles = vec3f [ -2.0, 0.0, 0.0 ]
+    offset : vec3f [ 0.0, 8.0, f32[ e.viewheight - 8 ] ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    if [ g.is_quad ]
+        damage = damage * 4
+        kick = kick * 4
+    fire_shotgun[ e, start, ax.forward, damage, kick, 500, 500,
+                  DEFAULT_SHOTGUN_COUNT, MOD_SHOTGUN ]
+    g.muzzleflash[ e, MZ_SHOTGUN | g.is_silenced ]
+    cl.ps.gunframe += 1
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+
+func weapon_shotgun [ e: Edict ]
+    weapon_generic[ e, 7, 18, 36, 39, vec i32 [] [ 22, 28, 34 ],
+                    vec i32 [] [ 8, 9 ], lambda weapon_shotgun_fire[] ]
+
+func weapon_supershotgun_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ 6 ]
+    kick : i32 [ 12 ]
+    ax : angle_vectors[ cl.v_angle ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    cl.kick_angles = vec3f [ -2.0, 0.0, 0.0 ]
+    offset : vec3f [ 0.0, 8.0, f32[ e.viewheight - 8 ] ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    if [ g.is_quad ]
+        damage = damage * 4
+        kick = kick * 4
+    v : vec3f [ cl.v_angle.x, cl.v_angle.y - 5.0, cl.v_angle.z ]
+    ax = angle_vectors[ v ]
+    fire_shotgun[ e, start, ax.forward, damage, kick,
+                  DEFAULT_SHOTGUN_HSPREAD, DEFAULT_SHOTGUN_VSPREAD,
+                  DEFAULT_SSHOTGUN_COUNT / 2, MOD_SSHOTGUN ]
+    v = vec3f [ cl.v_angle.x, cl.v_angle.y + 5.0, cl.v_angle.z ]
+    ax = angle_vectors[ v ]
+    fire_shotgun[ e, start, ax.forward, damage, kick,
+                  DEFAULT_SHOTGUN_HSPREAD, DEFAULT_SHOTGUN_VSPREAD,
+                  DEFAULT_SSHOTGUN_COUNT / 2, MOD_SSHOTGUN ]
+    g.muzzleflash[ e, MZ_SSHOTGUN | g.is_silenced ]
+    cl.ps.gunframe += 1
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -2 ]
+
+func weapon_supershotgun [ e: Edict ]
+    weapon_generic[ e, 6, 17, 57, 61, vec i32 [] [ 29, 42, 57 ],
+                    vec i32 [] [ 7 ], lambda weapon_supershotgun_fire[] ]
+
+# ---- railgun
+func weapon_railgun_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ (g.deathmatch) ? 100 : 150 ]
+    kick : i32 [ (g.deathmatch) ? 200 : 250 ]
+    if [ g.is_quad ]
+        damage = damage * 4
+        kick = kick * 4
+    ax : angle_vectors[ cl.v_angle ]
+    cl.kick_origin = v_scale[ ax.forward, -3.0 ]
+    cl.kick_angles = vec3f [ -3.0, 0.0, 0.0 ]
+    offset : vec3f [ 0.0, 7.0, f32[ e.viewheight - 8 ] ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    fire_rail[ e, start, ax.forward, damage, kick ]
+    g.muzzleflash[ e, MZ_RAILGUN | g.is_silenced ]
+    cl.ps.gunframe += 1
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -1 ]
+
+func weapon_railgun [ e: Edict ]
+    weapon_generic[ e, 3, 18, 56, 61, vec i32 [] [ 56 ],
+                    vec i32 [] [ 4 ], lambda weapon_railgun_fire[] ]
+
+# ---- bfg10k
+func weapon_bfg_fire [ e: Edict ]
+    cl : e.client
+    damage : i32 [ (g.deathmatch) ? 200 : 500 ]
+    damage_radius : f32 [ 1000.0 ]
+    if [ cl.ps.gunframe == 9 ]
+        # send muzzle flash
+        g.muzzleflash[ e, MZ_BFG | g.is_silenced ]
+        cl.ps.gunframe += 1
+        player_noise[ e, e.origin, PNOISE_WEAPON ]
+        return
+    # cells can go down during windup (from power armor hits), so
+    # check again and abort firing if we don't have enough now
+    if [ inv_get[ e, cl.ammo_index ] < 50 ]
+        cl.ps.gunframe += 1
+        return
+    if [ g.is_quad ] damage = damage * 4
+    ax : angle_vectors[ cl.v_angle ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    # make a big pitch kick with an inverse fall
+    cl.v_dmg_pitch = -40.0
+    cl.v_dmg_roll = crandom[] * 8.0
+    cl.v_dmg_time = g.level.time + DAMAGE_TIME
+    offset : vec3f [ 8.0, 8.0, f32[ e.viewheight - 8 ] ]
+    start : p_project_source[ cl, e.origin, offset, ax.forward, ax.right ]
+    fire_bfg[ e, start, ax.forward, damage, 400, damage_radius ]
+    cl.ps.gunframe += 1
+    player_noise[ e, start, PNOISE_WEAPON ]
+    if [ (g.dmflags & 8192) == 0 ] inv_add[ e, cl.ammo_index, -50 ]
+
+func weapon_bfg [ e: Edict ]
+    weapon_generic[ e, 8, 32, 55, 58, vec i32 [] [ 39, 45, 50, 55 ],
+                    vec i32 [] [ 9, 17 ], lambda weapon_bfg_fire[] ]
+

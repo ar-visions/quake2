@@ -1,0 +1,242 @@
+# g_turret.c: the rocket turret (breach, base) and its driver
+extend quake2
+
+# set on the breach by its driver: fire on the next think
+TURRET_FIRE : i32 [ 65536 ]
+
+# AnglesNormalize: pitch and yaw into 0 .. 360
+func angles_normalize [ v: vec3f ] -> vec3f
+    pitch : f32 [ v.x ]
+    yaw   : f32 [ v.y ]
+    while [ pitch > 360.0 ] pitch = pitch - 360.0
+    while [ pitch < 0.0 ]   pitch = pitch + 360.0
+    while [ yaw > 360.0 ]   yaw = yaw - 360.0
+    while [ yaw < 0.0 ]     yaw = yaw + 360.0
+    return vec3f [ pitch, yaw, v.z ]
+
+func snap_to_eights [ x: f32 ] -> f32
+    scaled : f32 [ x * 8.0 ]
+    if [ scaled > 0.0 ] scaled = scaled + 0.5
+    el                  scaled = scaled - 0.5
+    whole : i32 [ scaled ]
+    return 0.125 * f32[ whole ]
+
+# half a turn, to or from 180: the wrap g_turret.c uses
+func turret_wrap [ a: f32 ] -> f32
+    if [ a < -180.0 ] return a + 360.0
+    if [ a > 180.0 ]  return a - 360.0
+    return a
+
+func turret_blocked [ e: Edict, other: Edict ]
+    if [ other.takedamage == DAMAGE_NO ] return
+    attacker : Edict [ e.teammaster ]
+    if [ e.teammaster.owner ] attacker = e.teammaster.owner
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    t_damage[ other, e, attacker, zero, other.origin, zero,
+              e.teammaster.dmg, 10, 0, MOD_CRUSH ]
+
+func turret_breach_fire [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : v_ma[ e.origin, e.move_origin.x, ax.forward ]
+    start = v_ma[ start, e.move_origin.y, ax.right ]
+    start = v_ma[ start, e.move_origin.z, ax.up ]
+    damage : i32 [ 100 + i32[ frand[] * 50.0 ] ]
+    speed : i32 [ 550 + 50 * g.skill ]
+    fire_rocket[ e.teammaster.owner, start, ax.forward, damage, speed,
+                 150.0, damage ]
+    g.positioned_sound[ start, e, CHAN_WEAPON,
+                        g.soundindex[ 'weapons/rocklf1a.wav' ], 1.0,
+                        ATTN_NORM ]
+
+func turret_breach_think [ e: Edict ]
+    current : angles_normalize[ e.angles ]
+    aim : angles_normalize[ e.move_angles ]
+    pitch : f32 [ aim.x ]
+    yaw   : f32 [ aim.y ]
+    if [ pitch > 180.0 ] pitch = pitch - 360.0
+    # clamp angles to mins & maxs
+    if [ pitch > e.pos1.x ]    pitch = e.pos1.x
+    el [ pitch < e.pos2.x ]    pitch = e.pos2.x
+    if [ yaw < e.pos1.y || yaw > e.pos2.y ]
+        dmin : f32 [ turret_wrap[ fabs[ e.pos1.y - yaw ] ] ]
+        dmax : f32 [ turret_wrap[ fabs[ e.pos2.y - yaw ] ] ]
+        if [ fabs[ dmin ] < fabs[ dmax ] ] yaw = e.pos1.y
+        el                                 yaw = e.pos2.y
+    e.move_angles = vec3f [ pitch, yaw, aim.z ]
+    step : f32 [ e.speed * FRAMETIME ]
+    turn_x : f32 [ turret_wrap[ pitch - current.x ] ]
+    turn_y : f32 [ turret_wrap[ yaw - current.y ] ]
+    if [ turn_x > step ]        turn_x = step
+    if [ turn_x < 0.0 - step ]  turn_x = 0.0 - step
+    if [ turn_y > step ]        turn_y = step
+    if [ turn_y < 0.0 - step ]  turn_y = 0.0 - step
+    e.avelocity = vec3f [ turn_x / FRAMETIME, turn_y / FRAMETIME, 0.0 ]
+    e.nextthink = g.level.time + FRAMETIME
+    part : Edict [ e.teammaster ]
+    while [ part ]
+        part.avelocity = vec3f [ part.avelocity.x, e.avelocity.y,
+                                 part.avelocity.z ]
+        part = part.teamchain
+    # if we have a driver, adjust his velocities
+    if [ !e.owner ] return
+    driver : e.owner
+    # angular is easy, just copy ours
+    driver.avelocity = vec3f [ e.avelocity.x, e.avelocity.y,
+                               driver.avelocity.z ]
+    # x & y: move_origin is the driver's reach, bearing and height
+    reach : f32 [ driver.move_origin.x ]
+    angle : f32 [ (e.angles.y + driver.move_origin.y) * 0.017453292 ]
+    seat_x : f32 [ snap_to_eights[ e.origin.x + cos[ angle ] * reach ] ]
+    seat_y : f32 [ snap_to_eights[ e.origin.y + sin[ angle ] * reach ] ]
+    # z
+    angle = e.angles.x * 0.017453292
+    seat_z : f32 [ snap_to_eights[ e.origin.z + reach * tan[ angle ]
+                                   + driver.move_origin.z ] ]
+    driver.velocity = vec3f [ (seat_x - driver.origin.x) / FRAMETIME,
+                              (seat_y - driver.origin.y) / FRAMETIME,
+                              (seat_z - driver.origin.z) / FRAMETIME ]
+    if [ e.spawnflags & TURRET_FIRE ]
+        turret_breach_fire[ e ]
+        e.spawnflags = e.spawnflags & ~TURRET_FIRE
+
+func turret_breach_finish_init [ e: Edict ]
+    # get and save info for muzzle location
+    if [ !e.target ]
+        g.dprintf[ '{e.classname} needs a target' ]
+    el
+        e.target_ent = g.pick_target[ e.target ]
+        e.move_origin = v_sub[ e.target_ent.origin, e.origin ]
+        g.free_edict[ e.target_ent ]
+    e.teammaster.dmg = e.dmg
+    e.think = lambda turret_breach_think[]
+    e.think[ e ]
+
+func sp_turret_breach [ e: Edict ]
+    e.solid = SOLID_BSP
+    e.movetype = MOVETYPE_PUSH
+    g.setmodel[ e, e.model ]
+    if [ e.speed == 0.0 ] e.speed = 50.0
+    if [ e.dmg == 0 ] e.dmg = 10
+    st : g.st
+    if [ st.minpitch == 0.0 ] st.minpitch = -30.0
+    if [ st.maxpitch == 0.0 ] st.maxpitch = 30.0
+    if [ st.maxyaw == 0.0 ]   st.maxyaw = 360.0
+    e.pos1 = vec3f [ -1.0 * st.minpitch, st.minyaw, e.pos1.z ]
+    e.pos2 = vec3f [ -1.0 * st.maxpitch, st.maxyaw, e.pos2.z ]
+    e.ideal_yaw = e.angles.y
+    e.move_angles = vec3f [ e.move_angles.x, e.ideal_yaw,
+                            e.move_angles.z ]
+    e.blocked = lambda turret_blocked[]
+    e.think = lambda turret_breach_finish_init[]
+    e.nextthink = g.level.time + FRAMETIME
+    g.world.link[ e ]
+
+# turret_base: turns in yaw only; teamed with a turret_breach
+func sp_turret_base [ e: Edict ]
+    e.solid = SOLID_BSP
+    e.movetype = MOVETYPE_PUSH
+    g.setmodel[ e, e.model ]
+    e.blocked = lambda turret_blocked[]
+    g.world.link[ e ]
+
+func turret_driver_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                         damage: i32, point: vec3f ]
+    breach : e.target_ent
+    # level the gun
+    breach.move_angles = vec3f [ 0.0, breach.move_angles.y,
+                                 breach.move_angles.z ]
+    # remove the driver from the end of the team chain
+    part : Edict [ breach.teammaster ]
+    while [ part.teamchain != e ] part = part.teamchain
+    part.teamchain = null
+    e.teammaster = null
+    e.flags = e.flags & ~FL_TEAMSLAVE
+    breach.owner = null
+    breach.teammaster.owner = null
+    infantry_die[ e, inflictor, attacker, damage, point ]
+
+func turret_driver_think [ e: Edict ]
+    mi : e.monsterinfo
+    e.nextthink = g.level.time + FRAMETIME
+    if [ e.enemy && (!e.enemy.inuse || e.enemy.health <= 0) ]
+        e.enemy = null
+    if [ !e.enemy ]
+        if [ !find_target[ e ] ] return
+        mi.trail_time = g.level.time
+        mi.aiflags = mi.aiflags & ~AI_LOST_SIGHT
+    el [ visible[ e, e.enemy ] ]
+        if [ mi.aiflags & AI_LOST_SIGHT ]
+            mi.trail_time = g.level.time
+            mi.aiflags = mi.aiflags & ~AI_LOST_SIGHT
+    el
+        mi.aiflags = mi.aiflags | AI_LOST_SIGHT
+        return
+    # let the turret know where we want it to aim
+    target : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                     e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    toward : v_sub[ target, e.target_ent.origin ]
+    e.target_ent.move_angles = vectoangles[ toward ]
+    # decide if we should shoot
+    if [ g.level.time < mi.attack_finished ] return
+    reaction_time : f32 [ 3 - g.skill ]
+    if [ (g.level.time - mi.trail_time) < reaction_time ] return
+    mi.attack_finished = g.level.time + reaction_time + 1.0
+    e.target_ent.spawnflags = e.target_ent.spawnflags | TURRET_FIRE
+
+func turret_driver_link [ e: Edict ]
+    e.think = lambda turret_driver_think[]
+    e.nextthink = g.level.time + FRAMETIME
+    breach : g.pick_target[ e.target ]
+    e.target_ent = breach
+    breach.owner = e
+    breach.teammaster.owner = e
+    e.angles = breach.angles
+    flat : vec3f [ breach.origin.x - e.origin.x,
+                   breach.origin.y - e.origin.y, 0.0 ]
+    bearing : angles_normalize[ vectoangles[ v_sub[ e.origin,
+                                                    breach.origin ] ] ]
+    e.move_origin = vec3f [ v_len[ flat ], bearing.y,
+                            e.origin.z - breach.origin.z ]
+    # add the driver to the end of the team chain
+    part : Edict [ breach.teammaster ]
+    while [ part.teamchain ] part = part.teamchain
+    part.teamchain = e
+    e.teammaster = breach.teammaster
+    e.flags = e.flags | FL_TEAMSLAVE
+
+# turret_driver: an infantry at the gun; he targets the breach
+func sp_turret_driver [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    # the driver dies as an infantry: its moves must be built
+    infantry_moves[]
+    e.movetype = MOVETYPE_PUSH
+    e.solid = SOLID_BBOX
+    infantry : 'models/monsters/infantry/tris.md2'
+    e.modelindex = g.modelindex[ infantry ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.health = 100
+    e.gib_health = 0
+    e.mass = 200
+    e.viewheight = 24
+    e.die = lambda turret_driver_die[]
+    e.monsterinfo.stand = lambda infantry_stand[]
+    e.flags = e.flags | FL_NO_KNOCKBACK
+    g.level.total_monsters += 1
+    e.svflags = e.svflags | SVF_MONSTER
+    e.renderfx = e.renderfx | RF_FRAMELERP
+    e.takedamage = DAMAGE_AIM
+    e.use = lambda monster_use[]
+    e.clipmask = MASK_MONSTERSOLID
+    e.old_origin = e.origin
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags | AI_STAND_GROUND |
+                            AI_DUCKED
+    if [ g.st.item ]
+        e.item = find_item_by_classname[ g.st.item ]
+        if [ !e.item ]
+            g.dprintf[ '{e.classname} has bad item: {g.st.item}' ]
+    e.think = lambda turret_driver_link[]
+    e.nextthink = g.level.time + FRAMETIME
+    g.world.link[ e ]

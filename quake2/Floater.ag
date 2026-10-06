@@ -1,0 +1,231 @@
+# m_float.c: the technician (blaster, claws and a zap up close)
+extend quake2
+
+floater_sound_attack2 : i32
+floater_sound_attack3 : i32
+floater_sound_death1 : i32
+floater_sound_idle : i32
+floater_sound_pain1 : i32
+floater_sound_pain2 : i32
+floater_sound_sight : i32
+floater_move_stand1 : MMove
+floater_move_stand2 : MMove
+floater_move_activate : MMove
+floater_move_attack1 : MMove
+floater_move_attack2 : MMove
+floater_move_attack3 : MMove
+floater_move_death : MMove
+floater_move_pain1 : MMove
+floater_move_pain2 : MMove
+floater_move_pain3 : MMove
+floater_move_walk : MMove
+floater_move_run : MMove
+
+func floater_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, floater_sound_sight, 1.0, ATTN_NORM ]
+
+func floater_idle [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, floater_sound_idle, 1.0, ATTN_IDLE ]
+
+func floater_fire_blaster [ e: Edict ]
+    # attak104 34, attak107 37
+    effect : i32 [ 0 ]
+    if [ e.frame == 34 || e.frame == 37 ]
+        effect = EF_HYPERBLASTER
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_FLOAT_BLASTER_1 ],
+                            ax.forward, ax.right ]
+    end : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_sub[ end, start ]
+    monster_fire_blaster[ e, start, dir, 1, 1000, MZ2_FLOAT_BLASTER_1,
+                          effect ]
+
+func floater_stand [ e: Edict ]
+    if [ frand[] <= 0.5 ]
+        e.monsterinfo.currentmove = floater_move_stand1
+    el
+        e.monsterinfo.currentmove = floater_move_stand2
+
+func floater_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = floater_move_stand1
+    el
+        e.monsterinfo.currentmove = floater_move_run
+
+func floater_walk [ e: Edict ]
+    e.monsterinfo.currentmove = floater_move_walk
+
+func floater_wham [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, 0.0, 0.0 ]
+    g.sound[ e, CHAN_WEAPON, floater_sound_attack3, 1.0, ATTN_NORM ]
+    fire_hit[ e, aim, 5 + rand[] % 6, -50 ]
+
+func floater_zap [ e: Edict ]
+    dir : v_sub[ e.enemy.origin, e.origin ]
+    ax : angle_vectors[ e.angles ]
+    offset : vec3f [ 18.5, -0.9, 10.0 ]
+    origin : project_source[ e.origin, offset, ax.forward, ax.right ]
+    g.sound[ e, CHAN_WEAPON, floater_sound_attack2, 1.0, ATTN_NORM ]
+    # sparks
+    g.temp_entity[ TE_SPLASH, origin, dir, 32, 1 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    t_damage[ e.enemy, e, e, dir, e.enemy.origin, zero, 5 + rand[] % 6,
+              -10, DAMAGE_ENERGY, MOD_UNKNOWN ]
+
+func floater_attack [ e: Edict ]
+    e.monsterinfo.currentmove = floater_move_attack1
+
+func floater_melee [ e: Edict ]
+    if [ frand[] < 0.5 ]
+        e.monsterinfo.currentmove = floater_move_attack3
+    el
+        e.monsterinfo.currentmove = floater_move_attack2
+
+func floater_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ ((rand[] + 1) % 3) == 0 ]
+        g.sound[ e, CHAN_VOICE, floater_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = floater_move_pain1
+    el
+        g.sound[ e, CHAN_VOICE, floater_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = floater_move_pain2
+
+func floater_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func floater_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                   damage: i32, point: vec3f ]
+    g.sound[ e, CHAN_VOICE, floater_sound_death1, 1.0, ATTN_NORM ]
+    become_explosion1[ e ]
+
+func sp_monster_floater [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    floater_moves[]
+    floater_sound_attack2 = g.soundindex[ 'floater/fltatck2.wav' ]
+    floater_sound_attack3 = g.soundindex[ 'floater/fltatck3.wav' ]
+    floater_sound_death1  = g.soundindex[ 'floater/fltdeth1.wav' ]
+    floater_sound_idle    = g.soundindex[ 'floater/fltidle1.wav' ]
+    floater_sound_pain1   = g.soundindex[ 'floater/fltpain1.wav' ]
+    floater_sound_pain2   = g.soundindex[ 'floater/fltpain2.wav' ]
+    floater_sound_sight   = g.soundindex[ 'floater/fltsght1.wav' ]
+    g.soundindex[ 'floater/fltatck1.wav' ]
+    e.sound = g.soundindex[ 'floater/fltsrch1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/float/tris.md2' ]
+    e.mins = vec3f [ -24.0, -24.0, -24.0 ]
+    e.maxs = vec3f [ 24.0, 24.0, 32.0 ]
+    e.health = 200
+    e.gib_health = -80
+    e.mass = 300
+    e.pain = lambda floater_pain[]
+    e.die  = lambda floater_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda floater_stand[]
+    mi.walk   = lambda floater_walk[]
+    mi.run    = lambda floater_run[]
+    mi.attack = lambda floater_attack[]
+    mi.melee  = lambda floater_melee[]
+    mi.sight  = lambda floater_sight[]
+    mi.idle   = lambda floater_idle[]
+    g.world.link[ e ]
+    if [ frand[] <= 0.5 ] mi.currentmove = floater_move_stand1
+    el                    mi.currentmove = floater_move_stand2
+    mi.scale = 1.0
+    flymonster_start[ e ]
+
+# the moves, built once: frame numbers from m_floater.h
+func floater_moves []
+    if [ floater_move_stand1 ] return
+    v : vec MFrame []
+    mf[ v, 52, lambda ai_stand[], 0.0, null ]
+    # stand101 .. stand152
+    floater_move_stand1 = MMove [
+        firstframe: 144, lastframe: 195, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 52, lambda ai_stand[], 0.0, null ]
+    # stand201 .. stand252
+    floater_move_stand2 = MMove [
+        firstframe: 196, lastframe: 247, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 30, lambda ai_move[], 0.0, null ]
+    # actvat01 .. actvat31
+    floater_move_activate = MMove [
+        firstframe: 0, lastframe: 30, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 7, lambda ai_charge[], 0.0, lambda floater_fire_blaster[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    # attak101 .. attak114
+    floater_move_attack1 = MMove [
+        firstframe: 31, lastframe: 44, frames: v,
+        endfunc: lambda floater_run[] ]
+    v = vec MFrame []
+    mf[ v, 11, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda floater_wham[] ]
+    mf[ v, 13, lambda ai_charge[], 0.0, null ]
+    # attak201 .. attak225
+    floater_move_attack2 = MMove [
+        firstframe: 45, lastframe: 69, frames: v,
+        endfunc: lambda floater_run[] ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda floater_zap[] ]
+    mf[ v, 25, lambda ai_charge[], 0.0, null ]
+    # attak301 .. attak334
+    floater_move_attack3 = MMove [
+        firstframe: 70, lastframe: 103, frames: v,
+        endfunc: lambda floater_run[] ]
+    v = vec MFrame []
+    mf[ v, 13, lambda ai_move[], 0.0, null ]
+    # death01 .. death13
+    floater_move_death = MMove [
+        firstframe: 104, lastframe: 116, frames: v,
+        endfunc: lambda floater_dead[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain107
+    floater_move_pain1 = MMove [
+        firstframe: 117, lastframe: 123, frames: v,
+        endfunc: lambda floater_run[] ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain208
+    floater_move_pain2 = MMove [
+        firstframe: 124, lastframe: 131, frames: v,
+        endfunc: lambda floater_run[] ]
+    v = vec MFrame []
+    mf[ v, 12, lambda ai_move[], 0.0, null ]
+    # pain301 .. pain312
+    floater_move_pain3 = MMove [
+        firstframe: 132, lastframe: 143, frames: v,
+        endfunc: lambda floater_run[] ]
+    v = vec MFrame []
+    mf[ v, 52, lambda ai_walk[], 5.0, null ]
+    # stand101 .. stand152
+    floater_move_walk = MMove [
+        firstframe: 144, lastframe: 195, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 52, lambda ai_run[], 13.0, null ]
+    # stand101 .. stand152
+    floater_move_run = MMove [
+        firstframe: 144, lastframe: 195, frames: v,
+        endfunc: null ]
+

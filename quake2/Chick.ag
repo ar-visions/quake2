@@ -1,0 +1,459 @@
+# m_chick.c: the iron maiden (rockets, a slash up close)
+extend quake2
+
+chick_sound_missile_prelaunch : i32
+chick_sound_missile_launch : i32
+chick_sound_melee_swing : i32
+chick_sound_melee_hit : i32
+chick_sound_missile_reload : i32
+chick_sound_death1 : i32
+chick_sound_death2 : i32
+chick_sound_fall_down : i32
+chick_sound_idle1 : i32
+chick_sound_idle2 : i32
+chick_sound_pain1 : i32
+chick_sound_pain2 : i32
+chick_sound_pain3 : i32
+chick_sound_sight : i32
+chick_sound_search : i32
+chick_move_fidget : MMove
+chick_move_stand : MMove
+chick_move_start_run : MMove
+chick_move_run : MMove
+chick_move_walk : MMove
+chick_move_pain1 : MMove
+chick_move_pain2 : MMove
+chick_move_pain3 : MMove
+chick_move_death2 : MMove
+chick_move_death1 : MMove
+chick_move_duck : MMove
+chick_move_start_attack1 : MMove
+chick_move_attack1 : MMove
+chick_move_end_attack1 : MMove
+chick_move_slash : MMove
+chick_move_end_slash : MMove
+chick_move_start_slash : MMove
+
+func chick_moan [ e: Edict ]
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, chick_sound_idle1, 1.0, ATTN_IDLE ]
+    el
+        g.sound[ e, CHAN_VOICE, chick_sound_idle2, 1.0, ATTN_IDLE ]
+
+func chick_fidget [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ] return
+    if [ frand[] <= 0.3 ]
+        e.monsterinfo.currentmove = chick_move_fidget
+
+func chick_stand [ e: Edict ]
+    e.monsterinfo.currentmove = chick_move_stand
+
+func chick_walk [ e: Edict ]
+    e.monsterinfo.currentmove = chick_move_walk
+
+func chick_run [ e: Edict ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_STAND_GROUND ]
+        mi.currentmove = chick_move_stand
+        return
+    if [ mi.currentmove == chick_move_walk ||
+         mi.currentmove == chick_move_start_run ]
+        mi.currentmove = chick_move_run
+    el
+        mi.currentmove = chick_move_start_run
+
+func chick_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    r : f32 [ frand[] ]
+    if [ r < 0.33 ]
+        g.sound[ e, CHAN_VOICE, chick_sound_pain1, 1.0, ATTN_NORM ]
+    el [ r < 0.66 ]
+        g.sound[ e, CHAN_VOICE, chick_sound_pain2, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, chick_sound_pain3, 1.0, ATTN_NORM ]
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    mi : e.monsterinfo
+    if [ damage <= 10 ]      mi.currentmove = chick_move_pain1
+    el [ damage <= 25 ]      mi.currentmove = chick_move_pain2
+    el                       mi.currentmove = chick_move_pain3
+
+func chick_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 16.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func chick_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    if [ (rand[] % 2) == 0 ]
+        e.monsterinfo.currentmove = chick_move_death1
+        g.sound[ e, CHAN_VOICE, chick_sound_death1, 1.0, ATTN_NORM ]
+    el
+        e.monsterinfo.currentmove = chick_move_death2
+        g.sound[ e, CHAN_VOICE, chick_sound_death2, 1.0, ATTN_NORM ]
+
+func chick_duck_down [ e: Edict ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_DUCKED ] return
+    mi.aiflags = mi.aiflags | AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z - 32.0 ]
+    e.takedamage = DAMAGE_YES
+    mi.pausetime = g.level.time + 1.0
+    g.world.link[ e ]
+
+func chick_duck_hold [ e: Edict ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func chick_duck_up [ e: Edict ]
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags & ~AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z + 32.0 ]
+    e.takedamage = DAMAGE_AIM
+    g.world.link[ e ]
+
+func chick_dodge [ e: Edict, attacker: Edict, eta: f32 ]
+    if [ frand[] > 0.25 ] return
+    if [ !e.enemy ] e.enemy = attacker
+    e.monsterinfo.currentmove = chick_move_duck
+
+func chick_slash_hit [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.mins.x, 10.0 ]
+    g.sound[ e, CHAN_WEAPON, chick_sound_melee_swing, 1.0, ATTN_NORM ]
+    fire_hit[ e, aim, 10 + (rand[] % 6), 100 ]
+
+func chick_rocket [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_CHICK_ROCKET_1 ],
+                            ax.forward, ax.right ]
+    aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_norm[ v_sub[ aim, start ] ]
+    monster_fire_rocket[ e, start, dir, 50, 500, MZ2_CHICK_ROCKET_1 ]
+
+func chick_preattack1 [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, chick_sound_missile_prelaunch, 1.0,
+             ATTN_NORM ]
+
+func chick_reload [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, chick_sound_missile_reload, 1.0, ATTN_NORM ]
+
+func chick_rerocket [ e: Edict ]
+    if [ e.enemy.health > 0 && ai_range[ e, e.enemy ] > RANGE_MELEE &&
+         visible[ e, e.enemy ] && frand[] <= 0.6 ]
+        e.monsterinfo.currentmove = chick_move_attack1
+        return
+    e.monsterinfo.currentmove = chick_move_end_attack1
+
+func chick_attack1 [ e: Edict ]
+    e.monsterinfo.currentmove = chick_move_attack1
+
+func chick_reslash [ e: Edict ]
+    if [ e.enemy.health > 0 && ai_range[ e, e.enemy ] == RANGE_MELEE &&
+         frand[] <= 0.9 ]
+        e.monsterinfo.currentmove = chick_move_slash
+        return
+    e.monsterinfo.currentmove = chick_move_end_slash
+
+func chick_slash [ e: Edict ]
+    e.monsterinfo.currentmove = chick_move_slash
+
+func chick_melee [ e: Edict ]
+    e.monsterinfo.currentmove = chick_move_start_slash
+
+func chick_attack [ e: Edict ]
+    e.monsterinfo.currentmove = chick_move_start_attack1
+
+func chick_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, chick_sound_sight, 1.0, ATTN_NORM ]
+
+func sp_monster_chick [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    chick_moves[]
+    chick_sound_missile_prelaunch = g.soundindex[ 'chick/chkatck1.wav' ]
+    chick_sound_missile_launch = g.soundindex[ 'chick/chkatck2.wav' ]
+    chick_sound_melee_swing    = g.soundindex[ 'chick/chkatck3.wav' ]
+    chick_sound_melee_hit      = g.soundindex[ 'chick/chkatck4.wav' ]
+    chick_sound_missile_reload = g.soundindex[ 'chick/chkatck5.wav' ]
+    chick_sound_death1    = g.soundindex[ 'chick/chkdeth1.wav' ]
+    chick_sound_death2    = g.soundindex[ 'chick/chkdeth2.wav' ]
+    chick_sound_fall_down = g.soundindex[ 'chick/chkfall1.wav' ]
+    chick_sound_idle1     = g.soundindex[ 'chick/chkidle1.wav' ]
+    chick_sound_idle2     = g.soundindex[ 'chick/chkidle2.wav' ]
+    chick_sound_pain1     = g.soundindex[ 'chick/chkpain1.wav' ]
+    chick_sound_pain2     = g.soundindex[ 'chick/chkpain2.wav' ]
+    chick_sound_pain3     = g.soundindex[ 'chick/chkpain3.wav' ]
+    chick_sound_sight     = g.soundindex[ 'chick/chksght1.wav' ]
+    chick_sound_search    = g.soundindex[ 'chick/chksrch1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/bitch/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 56.0 ]
+    e.health = 175
+    e.gib_health = -70
+    e.mass = 200
+    e.pain = lambda chick_pain[]
+    e.die  = lambda chick_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda chick_stand[]
+    mi.walk   = lambda chick_walk[]
+    mi.run    = lambda chick_run[]
+    mi.dodge  = lambda chick_dodge[]
+    mi.attack = lambda chick_attack[]
+    mi.melee  = lambda chick_melee[]
+    mi.sight  = lambda chick_sight[]
+    g.world.link[ e ]
+    mi.currentmove = chick_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_chick.h
+func chick_moves []
+    if [ chick_move_fidget ] return
+    v : vec MFrame []
+    mf[ v, 8, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda chick_moan[] ]
+    mf[ v, 21, lambda ai_stand[], 0.0, null ]
+    # stand201 .. stand230
+    chick_move_fidget = MMove [
+        firstframe: 151, lastframe: 180, frames: v,
+        endfunc: lambda chick_stand[] ]
+    v = vec MFrame []
+    mf[ v, 29, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda chick_fidget[] ]
+    # stand101 .. stand130
+    chick_move_stand = MMove [
+        firstframe: 121, lastframe: 150, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 1.0, null ]
+    mf[ v, 2, lambda ai_run[], 0.0, null ]
+    mf[ v, 2, lambda ai_run[], -1.0, null ]
+    mf[ v, 1, lambda ai_run[], 0.0, null ]
+    mf[ v, 1, lambda ai_run[], 1.0, null ]
+    mf[ v, 1, lambda ai_run[], 3.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 3.0, null ]
+    # walk01 .. walk10
+    chick_move_start_run = MMove [
+        firstframe: 181, lastframe: 190, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 13.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, null ]
+    mf[ v, 1, lambda ai_run[], 7.0, null ]
+    mf[ v, 1, lambda ai_run[], 4.0, null ]
+    mf[ v, 1, lambda ai_run[], 11.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, null ]
+    mf[ v, 1, lambda ai_run[], 9.0, null ]
+    mf[ v, 1, lambda ai_run[], 7.0, null ]
+    # walk11 .. walk20
+    chick_move_run = MMove [
+        firstframe: 191, lastframe: 200, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.0, null ]
+    mf[ v, 1, lambda ai_walk[], 13.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 11.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    # walk11 .. walk20
+    chick_move_walk = MMove [
+        firstframe: 191, lastframe: 200, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain105
+    chick_move_pain1 = MMove [
+        firstframe: 90, lastframe: 94, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain205
+    chick_move_pain2 = MMove [
+        firstframe: 95, lastframe: 99, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -8.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    # pain301 .. pain321
+    chick_move_pain3 = MMove [
+        firstframe: 100, lastframe: 120, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 10.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 15.0, null ]
+    mf[ v, 1, lambda ai_move[], 14.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    # death201 .. death223
+    chick_move_death2 = MMove [
+        firstframe: 60, lastframe: 82, frames: v,
+        endfunc: lambda chick_dead[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, null ]
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # death101 .. death112
+    chick_move_death1 = MMove [
+        firstframe: 48, lastframe: 59, frames: v,
+        endfunc: lambda chick_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, lambda chick_duck_down[] ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, lambda chick_duck_hold[] ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, lambda chick_duck_up[] ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    # duck01 .. duck07
+    chick_move_duck = MMove [
+        firstframe: 83, lastframe: 89, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda chick_preattack1[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 1, lambda ai_charge[], 7.0, null ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda chick_attack1[] ]
+    # attak101 .. attak113
+    chick_move_start_attack1 = MMove [
+        firstframe: 0, lastframe: 12, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 19.0, lambda chick_rocket[] ]
+    mf[ v, 1, lambda ai_charge[], -6.0, null ]
+    mf[ v, 1, lambda ai_charge[], -5.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -7.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 10.0, lambda chick_reload[] ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 2, lambda ai_charge[], 6.0, null ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, lambda chick_rerocket[] ]
+    # attak114 .. attak127
+    chick_move_attack1 = MMove [
+        firstframe: 13, lastframe: 26, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -6.0, null ]
+    mf[ v, 1, lambda ai_charge[], -4.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    # attak128 .. attak132
+    chick_move_end_attack1 = MMove [
+        firstframe: 27, lastframe: 31, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 7.0, lambda chick_slash_hit[] ]
+    mf[ v, 1, lambda ai_charge[], -7.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, lambda chick_reslash[] ]
+    # attak204 .. attak212
+    chick_move_slash = MMove [
+        firstframe: 35, lastframe: 43, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], -6.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -6.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    # attak213 .. attak216
+    chick_move_end_slash = MMove [
+        firstframe: 44, lastframe: 47, frames: v,
+        endfunc: lambda chick_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 8.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    # attak201 .. attak203
+    chick_move_start_slash = MMove [
+        firstframe: 32, lastframe: 34, frames: v,
+        endfunc: lambda chick_slash[] ]
+

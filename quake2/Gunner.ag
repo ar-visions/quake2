@@ -1,0 +1,361 @@
+# m_gunner.c: the gunner (chaingun and grenades)
+extend quake2
+
+gunner_sound_pain : i32
+gunner_sound_pain2 : i32
+gunner_sound_death : i32
+gunner_sound_idle : i32
+gunner_sound_open : i32
+gunner_sound_search : i32
+gunner_sound_sight : i32
+gunner_move_fidget : MMove
+gunner_move_stand : MMove
+gunner_move_walk : MMove
+gunner_move_run : MMove
+gunner_move_runandshoot : MMove
+gunner_move_pain3 : MMove
+gunner_move_pain2 : MMove
+gunner_move_pain1 : MMove
+gunner_move_death : MMove
+gunner_move_duck : MMove
+gunner_move_attack_chain : MMove
+gunner_move_fire_chain : MMove
+gunner_move_endfire_chain : MMove
+gunner_move_attack_grenade : MMove
+
+func gunner_idlesound [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, gunner_sound_idle, 1.0, ATTN_IDLE ]
+
+func gunner_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, gunner_sound_sight, 1.0, ATTN_NORM ]
+
+func gunner_search [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, gunner_sound_search, 1.0, ATTN_NORM ]
+
+func gunner_fidget [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ] return
+    if [ frand[] <= 0.05 ]
+        e.monsterinfo.currentmove = gunner_move_fidget
+
+func gunner_stand [ e: Edict ]
+    e.monsterinfo.currentmove = gunner_move_stand
+
+func gunner_walk [ e: Edict ]
+    e.monsterinfo.currentmove = gunner_move_walk
+
+func gunner_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = gunner_move_stand
+    el
+        e.monsterinfo.currentmove = gunner_move_run
+
+func gunner_runandshoot [ e: Edict ]
+    e.monsterinfo.currentmove = gunner_move_runandshoot
+
+func gunner_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    if [ rand[] & 1 ]
+        g.sound[ e, CHAN_VOICE, gunner_sound_pain, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, gunner_sound_pain2, 1.0, ATTN_NORM ]
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    mi : e.monsterinfo
+    if [ damage <= 10 ]      mi.currentmove = gunner_move_pain3
+    el [ damage <= 25 ]      mi.currentmove = gunner_move_pain2
+    el                       mi.currentmove = gunner_move_pain1
+
+func gunner_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func gunner_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                  damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, gunner_sound_death, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = gunner_move_death
+
+func gunner_duck_down [ e: Edict ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_DUCKED ] return
+    mi.aiflags = mi.aiflags | AI_DUCKED
+    if [ g.skill >= 2 ]
+        if [ frand[] > 0.5 ] gunner_grenade[ e ]
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z - 32.0 ]
+    e.takedamage = DAMAGE_YES
+    mi.pausetime = g.level.time + 1.0
+    g.world.link[ e ]
+
+func gunner_duck_hold [ e: Edict ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func gunner_duck_up [ e: Edict ]
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags & ~AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z + 32.0 ]
+    e.takedamage = DAMAGE_AIM
+    g.world.link[ e ]
+
+func gunner_dodge [ e: Edict, attacker: Edict, eta: f32 ]
+    if [ frand[] > 0.25 ] return
+    if [ !e.enemy ] e.enemy = attacker
+    e.monsterinfo.currentmove = gunner_move_duck
+
+func gunner_opengun [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, gunner_sound_open, 1.0, ATTN_IDLE ]
+
+func gunner_fire [ e: Edict ]
+    # attak216 is 144
+    flash_number : i32 [ MZ2_GUNNER_MACHINEGUN_1 +
+                         (e.frame - 144) ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    # project enemy back a bit and target there
+    target : v_ma[ e.enemy.origin, -0.2, e.enemy.velocity ]
+    target = vec3f [ target.x, target.y,
+                     target.z + f32[ e.enemy.viewheight ] ]
+    aim : v_norm[ v_sub[ target, start ] ]
+    monster_fire_bullet[ e, start, aim, 3, 4, DEFAULT_BULLET_HSPREAD,
+                         DEFAULT_BULLET_VSPREAD, flash_number ]
+
+func gunner_grenade [ e: Edict ]
+    # attak105 112, attak108 115, attak111 118
+    flash_number : i32 [ MZ2_GUNNER_GRENADE_4 ]
+    if [ e.frame == 112 ]      flash_number = MZ2_GUNNER_GRENADE_1
+    el [ e.frame == 115 ]      flash_number = MZ2_GUNNER_GRENADE_2
+    el [ e.frame == 118 ]      flash_number = MZ2_GUNNER_GRENADE_3
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    monster_fire_grenade[ e, start, ax.forward, 50, 600, flash_number ]
+
+func gunner_attack [ e: Edict ]
+    mi : e.monsterinfo
+    if [ ai_range[ e, e.enemy ] == RANGE_MELEE ]
+        mi.currentmove = gunner_move_attack_chain
+    el
+        if [ frand[] <= 0.5 ]
+            mi.currentmove = gunner_move_attack_grenade
+        el
+            mi.currentmove = gunner_move_attack_chain
+
+func gunner_fire_chain [ e: Edict ]
+    e.monsterinfo.currentmove = gunner_move_fire_chain
+
+func gunner_refire_chain [ e: Edict ]
+    if [ e.enemy.health > 0 && visible[ e, e.enemy ] && frand[] <= 0.5 ]
+        e.monsterinfo.currentmove = gunner_move_fire_chain
+        return
+    e.monsterinfo.currentmove = gunner_move_endfire_chain
+
+func sp_monster_gunner [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    gunner_moves[]
+    gunner_sound_death  = g.soundindex[ 'gunner/death1.wav' ]
+    gunner_sound_pain   = g.soundindex[ 'gunner/gunpain2.wav' ]
+    gunner_sound_pain2  = g.soundindex[ 'gunner/gunpain1.wav' ]
+    gunner_sound_idle   = g.soundindex[ 'gunner/gunidle1.wav' ]
+    gunner_sound_open   = g.soundindex[ 'gunner/gunatck1.wav' ]
+    gunner_sound_search = g.soundindex[ 'gunner/gunsrch1.wav' ]
+    gunner_sound_sight  = g.soundindex[ 'gunner/sight1.wav' ]
+    g.soundindex[ 'gunner/gunatck2.wav' ]
+    g.soundindex[ 'gunner/gunatck3.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/gunner/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.health = 175
+    e.gib_health = -70
+    e.mass = 200
+    e.pain = lambda gunner_pain[]
+    e.die  = lambda gunner_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda gunner_stand[]
+    mi.walk   = lambda gunner_walk[]
+    mi.run    = lambda gunner_run[]
+    mi.dodge  = lambda gunner_dodge[]
+    mi.attack = lambda gunner_attack[]
+    mi.melee  = null
+    mi.sight  = lambda gunner_sight[]
+    mi.search = lambda gunner_search[]
+    g.world.link[ e ]
+    mi.currentmove = gunner_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_gunner.h
+func gunner_moves []
+    if [ gunner_move_fidget ] return
+    v : vec MFrame []
+    mf[ v, 7, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda gunner_idlesound[] ]
+    mf[ v, 41, lambda ai_stand[], 0.0, null ]
+    # stand31 .. stand70
+    gunner_move_fidget = MMove [ firstframe: 30, lastframe: 69,
+        frames: v, endfunc: lambda gunner_stand[] ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda gunner_fidget[] ]
+    mf[ v, 9, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda gunner_fidget[] ]
+    mf[ v, 9, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda gunner_fidget[] ]
+    # stand01 .. stand30
+    gunner_move_stand = MMove [ firstframe: 0, lastframe: 29,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    # walk07 .. walk19
+    gunner_move_walk = MMove [ firstframe: 76, lastframe: 88,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 26.0, null ]
+    mf[ v, 3, lambda ai_run[], 9.0, null ]
+    mf[ v, 1, lambda ai_run[], 15.0, null ]
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    mf[ v, 1, lambda ai_run[], 13.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    # run01 .. run08
+    gunner_move_run = MMove [ firstframe: 94, lastframe: 101,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 32.0, null ]
+    mf[ v, 1, lambda ai_run[], 15.0, null ]
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    mf[ v, 1, lambda ai_run[], 18.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 20.0, null ]
+    # runs01 .. runs06
+    gunner_move_runandshoot = MMove [ firstframe: 102, lastframe: 107,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    # pain301 .. pain305
+    gunner_move_pain3 = MMove [ firstframe: 185, lastframe: 189,
+        frames: v, endfunc: lambda gunner_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    # pain201 .. pain208
+    gunner_move_pain2 = MMove [ firstframe: 177, lastframe: 184,
+        frames: v, endfunc: lambda gunner_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], -2.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain118
+    gunner_move_pain1 = MMove [ firstframe: 159, lastframe: 176,
+        frames: v, endfunc: lambda gunner_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], 8.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    # death01 .. death11
+    gunner_move_death = MMove [ firstframe: 190, lastframe: 200,
+        frames: v, endfunc: lambda gunner_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 1.0, lambda gunner_duck_down[] ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, lambda gunner_duck_hold[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda gunner_duck_up[] ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    # duck01 .. duck08
+    gunner_move_duck = MMove [ firstframe: 201, lastframe: 208,
+        frames: v, endfunc: lambda gunner_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gunner_opengun[] ]
+    mf[ v, 6, lambda ai_charge[], 0.0, null ]
+    # attak209 .. attak215
+    gunner_move_attack_chain = MMove [ firstframe: 137, lastframe: 143,
+        frames: v, endfunc: lambda gunner_fire_chain[] ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_charge[], 0.0, lambda gunner_fire[] ]
+    # attak216 .. attak223
+    gunner_move_fire_chain = MMove [ firstframe: 144, lastframe: 151,
+        frames: v, endfunc: lambda gunner_refire_chain[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_charge[], 0.0, null ]
+    # attak224 .. attak230
+    gunner_move_endfire_chain = MMove [ firstframe: 152, lastframe: 158,
+        frames: v, endfunc: lambda gunner_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gunner_grenade[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gunner_grenade[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gunner_grenade[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gunner_grenade[] ]
+    mf[ v, 7, lambda ai_charge[], 0.0, null ]
+    # attak101 .. attak121
+    gunner_move_attack_grenade = MMove [
+        firstframe: 108, lastframe: 128, frames: v,
+        endfunc: lambda gunner_run[] ]
+

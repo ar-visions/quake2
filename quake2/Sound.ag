@@ -1,0 +1,416 @@
+# snd_dma.c over spectra's mixer: the game's sounds, by distance
+extend quake2
+
+SOUND_FULLVOLUME    : f32 [ 80.0 ]
+SOUND_LOOPATTENUATE : f32 [ 0.003 ]
+# s_volume's default
+SOUND_VOLUME        : f32 [ 0.7 ]
+SOUND_LOOPS         : i32 [ 6 ]
+
+# one sound waiting to start, or playing on a mixer voice
+class SoundPlay
+    public clip    : AudioClip
+    public voice   : i32
+    public entnum  : i32
+    public channel : i32
+    public fixed   : bool
+    public origin  : vec3f
+    public volume  : f32
+    public attenuation : f32
+    public begin   : f32
+    public finish  : f32
+    public done    : bool
+
+class SoundSet
+    public pak    : Pak
+    public mixer  : AudioMixer
+    public on     : bool
+    public list   : vec AudioClip
+    # sound index -> 1 + its place in list; 0 until asked for
+    public slot   : vec i32
+    public plays  : vec SoundPlay
+    # looping entity sounds: index, voice and this frame's share
+    public loop_index : vec i32
+    public loop_voice : vec i32
+    public loop_total : vec f32
+    public clock  : f32
+    public ear    : vec3f
+    # the listener's right; the last sound's share and gain an ear
+    public ear_right  : vec3f
+    public part_left  : f32
+    public part_right : f32
+    public gain_left  : f32
+    public gain_right : f32
+    public loop_right : vec f32
+    public kept       : vec PakData
+    # the menu's effects volume, 0 to 1
+    public master     : f32 [ 1.0 ]
+
+    func init []
+        mixer = AudioMixer [ sample_rate: 44100 ]
+        on = mixer.start[]
+        if [ !on ] log 'sound: no audio device, the game is silent'
+        reset[]
+
+    # a new map: every voice stops, the sound indices start over
+    public func reset []
+        if [ on && plays ]
+            for [ p: SoundPlay ] in plays
+                if [ p.voice != 0 ] mixer.voice_stop[ p.voice ]
+            for [ i: i32 0, i < loop_voice.count, i += 1 ]
+                if [ loop_voice[ i ] != 0 ]
+                    mixer.voice_stop[ loop_voice[ i ] ]
+        list  = vec AudioClip []
+        slot  = vec i32 []
+        plays = vec SoundPlay []
+        loop_index = vec i32 []
+        loop_voice = vec i32 []
+        loop_total = vec f32 []
+        loop_right = vec f32 []
+        kept = vec PakData []
+
+    # S_LoadSound: RIFF WAVE, 8 or 16 bit; no frames when it fails
+    func load [ name: string ] -> AudioClip
+        clip : AudioClip [ name: name ]
+        file : 'sound/{name}'
+        # a '*' name is the player model's own: the male one's
+        if [ name[ 0 ] == 42 ]
+            rest : name.mid[ 1, name.count - 1 ]
+            file = 'sound/player/male/{rest}'
+        d : pak.read[ file ]
+        if [ !d ]
+            log 'sound: missing {file}'
+            return clip
+        b : @u8 [ d.data ]
+        # 'RIFF' and 'WAVE'
+        if [ d.size < 44 || bsp_i32[ b, 0 ] != 1179011410 ||
+             bsp_i32[ b, 8 ] != 1163280727 ]
+            return clip
+        rate : i32 [ 0 ]
+        channels : i32 [ 0 ]
+        bits : i32 [ 0 ]
+        data_at : i32 [ 0 ]
+        data_n : i32 [ 0 ]
+        at : i32 [ 12 ]
+        while [ at + 8 <= d.size ]
+            id : i32 [ bsp_i32[ b, at ] ]
+            n  : i32 [ bsp_i32[ b, at + 4 ] ]
+            if [ n < 0 || n > d.size - at - 8 ] n = d.size - at - 8
+            # 'fmt '
+            if [ id == 544501094 && n >= 16 ]
+                channels = bsp_i16[ b, at + 10 ]
+                rate     = bsp_i32[ b, at + 12 ]
+                bits     = bsp_i16[ b, at + 22 ]
+            # 'data'
+            if [ id == 1635017060 ]
+                data_at = at + 8
+                data_n  = n
+                break
+            at = at + 8 + n + (n & 1)
+        if [ rate < 1 || channels < 1 || data_n < 2 ] return clip
+        if [ bits != 8 && bits != 16 ] return clip
+        samples : i32 [ data_n / (bits / 8) ]
+        # the samples live with the set, until the next map
+        store : pak_data[ samples * 2 ]
+        kept.push[ store ]
+        pcm : @i16 [ cast @i16 [ store.data ] ]
+        if [ bits == 16 ]
+            memcpy[ pcm, @b[ data_at ], samples * 2 ]
+        el
+            for [ i: i32 0, i < samples, i += 1 ]
+                pcm[ i ] = (i32[ b[ data_at + i ] ] - 128) * 256
+        clip.rate     = rate
+        clip.channels = channels
+        clip.frames   = samples / channels
+        clip.pcm      = pcm
+        return clip
+
+    # the clip a game sound index names, loaded the first time
+    public func clip_of [ index: i32 ] -> AudioClip
+        while [ slot.count <= index ] slot.push[ 0 ]
+        if [ slot[ index ] == 0 ]
+            list.push[ load[ g.sounds[ index ] ] ]
+            slot[ index ] = list.count
+        return list[ slot[ index ] - 1 ]
+
+    # S_StartSound: queued; it starts when the clock reaches begin
+    public func start [ fixed: bool, origin: vec3f, entnum: i32,
+                        channel: i32, index: i32, volume: f32,
+                        attenuation: f32, timeofs: f32 ]
+        if [ !on || index <= 0 || index >= g.sounds.count ] return
+        clip : clip_of[ index ]
+        if [ clip.frames < 2 ] return
+        plays.push[ SoundPlay [ clip: clip, entnum: entnum,
+            channel: channel, fixed: fixed, origin: origin,
+            volume: volume, attenuation: attenuation,
+            begin: clock + timeofs ] ]
+
+    public func start_named [ name: string, fixed: bool, origin: vec3f,
+                              entnum: i32, channel: i32, volume: f32,
+                              attenuation: f32, timeofs: f32 ]
+        start[ fixed, origin, entnum, channel, g.soundindex[ name ],
+               volume, attenuation, timeofs ]
+
+    # S_SpatializeOrigin: each ear's share; the louder comes back
+    func spatial [ origin: vec3f, dist_mult: f32 ] -> f32
+        part_left = 1.0
+        part_right = 1.0
+        # no attenuation = no spatialization
+        if [ dist_mult == 0.0 ] return 1.0
+        source : vec3f [ v_sub[ origin, ear ] ]
+        dist : f32 [ v_len[ source ] - SOUND_FULLVOLUME ]
+        if [ dist < 0.0 ] dist = 0.0
+        dot : f32 [ v_dot[ ear_right, v_norm[ source ] ] ]
+        nearness : f32 [ 1.0 - dist * dist_mult ]
+        part_right = nearness * 0.5 * (1.0 + dot)
+        part_left = nearness * 0.5 * (1.0 - dot)
+        if [ part_right < 0.0 ] part_right = 0.0
+        if [ part_left < 0.0 ] part_left = 0.0
+        return (part_left > part_right) ? part_left : part_right
+
+    # S_Spatialize: the view entity's own sounds are at full volume
+    func gain_of [ p: SoundPlay ] -> f32
+        full : f32 [ p.volume * SOUND_VOLUME * master ]
+        gain_left = full
+        gain_right = full
+        if [ p.entnum == 1 ] return full
+        origin : vec3f [ p.origin ]
+        if [ !p.fixed && p.entnum > 0 && p.entnum < g.num_edicts ]
+            origin = g.edicts[ p.entnum ].origin
+        mult : f32 [ p.attenuation * 0.0005 ]
+        if [ p.attenuation == ATTN_STATIC ] mult = p.attenuation * 0.001
+        heard : f32 [ spatial[ origin, mult ] ]
+        gain_left = part_left * full
+        gain_right = part_right * full
+        return heard * full
+
+    # S_PickChannel, then the voice: same entity and channel goes
+    func begin_play [ p: SoundPlay ]
+        if [ p.channel != 0 ]
+            for [ q: SoundPlay ] in plays
+                if [ q.voice != 0 && !q.done && q.entnum == p.entnum &&
+                     q.channel == p.channel ]
+                    mixer.voice_stop[ q.voice ]
+                    q.done = true
+        gain : f32 [ gain_of[ p ] ]
+        # S_Update: a sound with no volume gives its channel back
+        if [ gain <= 0.0 ]
+            p.done = true
+            return
+        p.voice = mixer.play_voice[ p.clip, false, gain, 1.0 ]
+        if [ p.voice == 0 ]
+            # every voice is busy: the one nearest its end makes room
+            least : f32 [ 1000000.0 ]
+            victim : SoundPlay [ null ]
+            for [ q: SoundPlay ] in plays
+                if [ q.voice == 0 || q.done ] continue
+                # don't let monster sounds override player sounds
+                if [ q.entnum == 1 && p.entnum != 1 ] continue
+                if [ q.finish - clock < least ]
+                    least = q.finish - clock
+                    victim = q
+            if [ victim ]
+                mixer.voice_stop[ victim.voice ]
+                victim.done = true
+                p.voice = mixer.play_voice[ p.clip, false, gain, 1.0 ]
+        if [ p.voice == 0 ] p.done = true
+        el mixer.voice_sides[ p.voice, gain_left, gain_right ]
+        length : f32 [ f32[ p.clip.frames ] / f32[ p.clip.rate ] ]
+        p.finish = clock + length - 0.05
+
+    # CL_ParseMuzzleFlash: the player's weapon sounds
+    func flash [ ev: GameEvent ]
+        if [ !ev.ent ] return
+        n : i32 [ ev.ent.number ]
+        weapon : i32 [ ev.index & ~MZ_SILENCED ]
+        volume : f32 [ (ev.index & MZ_SILENCED) ? 0.2 : 1.0 ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        first : string [ null ]
+        second : string [ null ]
+        if [ weapon == MZ_BLASTER ]       first = 'weapons/blastf1a.wav'
+        el [ weapon == MZ_HYPERBLASTER ]  first = 'weapons/hyprbf1a.wav'
+        el [ weapon == MZ_RAILGUN ]       first = 'weapons/railgf1a.wav'
+        el [ weapon == MZ_BFG ]           first = 'weapons/bfg__f1y.wav'
+        el [ weapon == MZ_SSHOTGUN ]      first = 'weapons/sshotf1b.wav'
+        el [ weapon == MZ_SHOTGUN ]
+            first  = 'weapons/shotgf1b.wav'
+            second = 'weapons/shotgr1b.wav'
+        el [ weapon == MZ_ROCKET ]
+            first  = 'weapons/rocklf1a.wav'
+            second = 'weapons/rocklr1b.wav'
+        el [ weapon == MZ_GRENADE ]
+            first  = 'weapons/grenlf1a.wav'
+            second = 'weapons/grenlr1b.wav'
+        el [ weapon >= MZ_LOGIN && weapon <= MZ_LOGIN + 2 ]
+            # login, logout, respawn
+            first  = 'weapons/grenlf1a.wav'
+            volume = 1.0
+        el [ weapon == MZ_MACHINEGUN ||
+             (weapon >= MZ_CHAINGUN1 && weapon <= MZ_CHAINGUN1 + 2) ]
+            # the machinegun once; chainguns 1, 2 and 3 that many
+            shots : i32 [ (weapon == MZ_MACHINEGUN) ? 1
+                          : weapon - MZ_CHAINGUN1 + 1 ]
+            for [ i: i32 0, i < shots, i += 1 ]
+                pick : i32 [ rand[] % 5 + 1 ]
+                later : f32 [ f32[ i ] * 0.1 / f32[ shots ] ]
+                start_named[ 'weapons/machgf{pick}b.wav', false, zero,
+                             n, CHAN_WEAPON, volume, ATTN_NORM, later ]
+        if [ first ]
+            start_named[ first, false, zero, n, CHAN_WEAPON, volume,
+                         ATTN_NORM, 0.0 ]
+        # the reload, a tenth of a second on, on any channel
+        if [ second ]
+            start_named[ second, false, zero, n, CHAN_AUTO, volume,
+                         ATTN_NORM, 0.1 ]
+
+    # CL_ParseMuzzleFlash2: the monsters' weapon sounds, by flash
+    func flash2 [ ev: GameEvent ]
+        if [ !ev.ent ] return
+        f : i32 [ ev.index ]
+        name : string [ null ]
+        attenuation : f32 [ ATTN_NORM ]
+        if [ f >= 1 && f <= 3 ]          name = 'tank/tnkatck3.wav'
+        el [ f >= 4 && f <= 22 ]
+            letters : vec string [] [ 'a', 'b', 'c', 'd', 'e' ]
+            name = 'tank/tnkatk2{letters[ rand[] % 5 ]}.wav'
+        el [ f >= 23 && f <= 25 ]        name = 'tank/tnkatck1.wav'
+        el [ f >= 26 && f <= 38 ]        name = 'infantry/infatck1.wav'
+        el [ f == 39 || f == 40 ]        name = 'soldier/solatck2.wav'
+        el [ f == 41 || f == 42 ]        name = 'soldier/solatck1.wav'
+        el [ f == 43 || f == 44 ]        name = 'soldier/solatck3.wav'
+        el [ f >= 45 && f <= 52 ]        name = 'gunner/gunatck2.wav'
+        el [ f >= 53 && f <= 56 ]        name = 'gunner/gunatck3.wav'
+        el [ f == 57 ]                   name = 'chick/chkatck2.wav'
+        el [ f == 58 || f == 59 ]        name = 'flyer/flyatck3.wav'
+        el [ f == 60 ]                   name = 'medic/medatck1.wav'
+        el [ f == 62 ]                   name = 'hover/hovatck1.wav'
+        el [ f >= 63 && f <= 69 ]        name = 'infantry/infatck1.wav'
+        el [ f >= 70 && f <= 72 ]        name = 'tank/rocket.wav'
+        el [ f >= 73 && f <= 77 ]
+            # the hornet's left guns, heard everywhere
+            name = 'infantry/infatck1.wav'
+            attenuation = ATTN_NONE
+        el [ f >= 78 && f <= 81 ]        name = 'tank/rocket.wav'
+        el [ f == 82 ]                   name = 'floater/fltatck1.wav'
+        el [ f >= 83 && f <= 100 ]
+            # the soldiers' later flashes: blaster, shotgun, machinegun
+            kind : i32 [ (f - 83) % 3 ]
+            if [ kind == 0 ]      name = 'soldier/solatck2.wav'
+            el [ kind == 1 ]      name = 'soldier/solatck1.wav'
+            el                    name = 'soldier/solatck3.wav'
+        el [ f >= 102 && f <= 118 ]      name = 'makron/blaster.wav'
+        el [ f >= 120 && f <= 125 ]      name = 'boss3/xfire.wav'
+        if [ !name ] return
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        start_named[ name, false, zero, ev.ent.number, CHAN_WEAPON, 1.0,
+                     attenuation, 0.0 ]
+
+    # CL_ParseTEnt: the sounds of impacts and explosions
+    func temp [ ev: GameEvent ]
+        k : i32 [ ev.index ]
+        at : vec3f [ ev.origin ]
+        name : string [ null ]
+        attenuation : f32 [ ATTN_NORM ]
+        if [ k == TE_GUNSHOT || k == TE_BULLET_SPARKS ]
+            # one impact in sixteen rings off each of three ways
+            cnt : i32 [ rand[] & 15 ]
+            if [ cnt >= 1 && cnt <= 3 ] name = 'world/ric{cnt}.wav'
+        el [ k == TE_SCREEN_SPARKS || k == TE_SHIELD_SPARKS ||
+             k == TE_BLASTER ]
+            name = 'weapons/lashit.wav'
+        el [ k == TE_SPLASH && ev.color == SPLASH_SPARKS ]
+            pick : i32 [ rand[] & 3 ]
+            if [ pick > 2 ] pick = 2
+            name = 'world/spark{pick + 5}.wav'
+            attenuation = ATTN_STATIC
+        el [ k == TE_RAILTRAIL ]
+            # heard where the rail ends
+            name = 'weapons/railgf1a.wav'
+            at = ev.dir
+        el [ k == TE_EXPLOSION2 || k == TE_GRENADE_EXPLOSION ]
+            name = 'weapons/grenlx1a.wav'
+        el [ k == TE_EXPLOSION1 || k == TE_ROCKET_EXPLOSION ]
+            name = 'weapons/rocklx1a.wav'
+        el [ k == TE_GRENADE_EXPLOSION_WATER ||
+             k == TE_ROCKET_EXPLOSION_WATER ]
+            name = 'weapons/xpld_wat.wav'
+        el [ k == TE_BOSSTPORT ]
+            name = 'misc/bigtele.wav'
+            attenuation = ATTN_NONE
+        if [ name ]
+            start_named[ name, true, at, 0, 0, 1.0, attenuation, 0.0 ]
+
+    # S_AddLoopSounds: one voice a sound, every entity's share added
+    func run_loops []
+        for [ i: i32 0, i < loop_total.count, i += 1 ]
+            loop_total[ i ] = 0.0
+            loop_right[ i ] = 0.0
+        for [ i: i32 1, i < g.num_edicts, i += 1 ]
+            e : g.edicts[ i ]
+            if [ !e.inuse || e.sound == 0 ] continue
+            share : f32 [ spatial[ e.origin, SOUND_LOOPATTENUATE ] ]
+            if [ share <= 0.0 ] continue
+            k : i32 [ 0 ]
+            while [ k < loop_index.count && loop_index[ k ] != e.sound ]
+                k += 1
+            if [ k == loop_index.count ]
+                if [ k >= SOUND_LOOPS ] continue
+                loop_index.push[ e.sound ]
+                loop_voice.push[ 0 ]
+                loop_total.push[ 0.0 ]
+                loop_right.push[ 0.0 ]
+            loop_total[ k ] = loop_total[ k ] + part_left
+            loop_right[ k ] = loop_right[ k ] + part_right
+        for [ k: i32 loop_index.count - 1, k >= 0, k = k - 1 ]
+            left : f32 [ loop_total[ k ] ]
+            right : f32 [ loop_right[ k ] ]
+            if [ left > 1.0 ] left = 1.0
+            if [ right > 1.0 ] right = 1.0
+            left = left * SOUND_VOLUME * master
+            right = right * SOUND_VOLUME * master
+            total : f32 [ (left > right) ? left : right ]
+            if [ total > 0.0 && loop_voice[ k ] == 0 ]
+                clip : clip_of[ loop_index[ k ] ]
+                voice : i32 [ 0 ]
+                if [ clip.frames >= 2 ]
+                    voice = mixer.play_voice[ clip, true, total, 1.0 ]
+                loop_voice[ k ] = voice
+            if [ total > 0.0 && loop_voice[ k ] != 0 ]
+                mixer.voice_sides[ loop_voice[ k ], left, right ]
+            if [ total <= 0.0 || loop_voice[ k ] == 0 ]
+                if [ loop_voice[ k ] != 0 ]
+                    mixer.voice_stop[ loop_voice[ k ] ]
+                loop_index.remove[ k ]
+                loop_voice.remove[ k ]
+                loop_total.remove[ k ]
+                loop_right.remove[ k ]
+
+    # a frame: the game's events become sounds, the voices follow
+    public func frame [ listener: vec3f, side: vec3f, dt: f32 ]
+        clock = clock + dt
+        ear = listener
+        ear_right = side
+        for [ ev: GameEvent ] in g.events
+            if [ ev.kind == EVENT_SOUND ]
+                n : i32 [ (ev.ent) ? ev.ent.number : 0 ]
+                start[ true, ev.origin, n, ev.channel, ev.index,
+                       ev.volume, ev.attenuation, 0.0 ]
+            el [ ev.kind == EVENT_FLASH ]  flash[ ev ]
+            el [ ev.kind == EVENT_FLASH2 ] flash2[ ev ]
+            el [ ev.kind == EVENT_TEMP ]   temp[ ev ]
+        g.events = vec GameEvent []
+        if [ !on ] return
+        # newest first, as the pending list issued equal begins
+        for [ i: i32 plays.count - 1, i >= 0, i = i - 1 ]
+            p : plays[ i ]
+            if [ !p.done && p.voice == 0 && p.begin <= clock ]
+                begin_play[ p ]
+            gain : f32 [ (p.voice != 0) ? gain_of[ p ] : 0.0 ]
+            if [ p.voice != 0 && !p.done && gain <= 0.0 ]
+                mixer.voice_stop[ p.voice ]
+                p.done = true
+            if [ p.done || (p.voice != 0 && clock >= p.finish) ]
+                plays.remove[ i ]
+            el [ p.voice != 0 ]
+                mixer.voice_sides[ p.voice, gain_left, gain_right ]
+        run_loops[]

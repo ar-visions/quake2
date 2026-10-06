@@ -1,0 +1,363 @@
+# m_actor.c: misc_actor (a scripted marine) and target_actor
+extend quake2
+
+actor_names : vec string
+actor_messages : vec string
+actor_move_stand : MMove
+actor_move_walk : MMove
+actor_move_run : MMove
+actor_move_pain1 : MMove
+actor_move_pain2 : MMove
+actor_move_pain3 : MMove
+actor_move_flipoff : MMove
+actor_move_taunt : MMove
+actor_move_death1 : MMove
+actor_move_death2 : MMove
+actor_move_attack : MMove
+
+func actor_name [ e: Edict ] -> string
+    return actor_names[ e.number % 8 ]
+
+func actor_stand [ e: Edict ]
+    mi : e.monsterinfo
+    mi.currentmove = actor_move_stand
+    # randomize on startup
+    if [ g.level.time < 1.0 ]
+        first : i32 [ mi.currentmove.firstframe ]
+        span : i32 [ mi.currentmove.lastframe - first + 1 ]
+        e.frame = first + (rand[] % span)
+
+func actor_walk [ e: Edict ]
+    e.monsterinfo.currentmove = actor_move_walk
+
+func actor_run [ e: Edict ]
+    if [ g.level.time < e.pain_debounce_time && !e.enemy ]
+        if [ e.movetarget ] actor_walk[ e ]
+        el                  actor_stand[ e ]
+        return
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        actor_stand[ e ]
+        return
+    e.monsterinfo.currentmove = actor_move_run
+
+func actor_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    if [ other.client && frand[] < 0.4 ]
+        v : v_sub[ other.origin, e.origin ]
+        e.ideal_yaw = vectoyaw[ v ]
+        if [ frand[] < 0.5 ]
+            e.monsterinfo.currentmove = actor_move_flipoff
+        el
+            e.monsterinfo.currentmove = actor_move_taunt
+        name : actor_name[ e ]
+        g.cprintf[ other, '{name}: {actor_messages[ rand[] % 3 ]}!' ]
+        return
+    n : i32 [ rand[] % 3 ]
+    if [ n == 0 ]      e.monsterinfo.currentmove = actor_move_pain1
+    el [ n == 1 ]      e.monsterinfo.currentmove = actor_move_pain2
+    el                 e.monsterinfo.currentmove = actor_move_pain3
+
+func actor_machinegun [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_ACTOR_MACHINEGUN_1 ],
+                            ax.forward, ax.right ]
+    forward : vec3f [ ax.forward ]
+    if [ e.enemy ]
+        target : vec3f [ 0.0, 0.0, 0.0 ]
+        if [ e.enemy.health > 0 ]
+            target = v_ma[ e.enemy.origin, -0.2, e.enemy.velocity ]
+            target = vec3f [ target.x, target.y,
+                             target.z + f32[ e.enemy.viewheight ] ]
+        el
+            target = vec3f [ e.enemy.absmin.x, e.enemy.absmin.y,
+                             e.enemy.absmin.z + e.enemy.size.z / 2.0 ]
+        forward = v_norm[ v_sub[ target, start ] ]
+    monster_fire_bullet[ e, start, forward, 3, 4,
+                         DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                         MZ2_ACTOR_MACHINEGUN_1 ]
+
+func actor_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func actor_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= -80 ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    if [ (rand[] % 2) == 0 ]
+        e.monsterinfo.currentmove = actor_move_death1
+    el
+        e.monsterinfo.currentmove = actor_move_death2
+
+func actor_fire [ e: Edict ]
+    actor_machinegun[ e ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func actor_attack [ e: Edict ]
+    e.monsterinfo.currentmove = actor_move_attack
+    n : i32 [ (rand[] & 15) + 3 + 7 ]
+    e.monsterinfo.pausetime = g.level.time + f32[ n ] * FRAMETIME
+
+func actor_use [ e: Edict, other: Edict, activator: Edict ]
+    e.movetarget = g.pick_target[ e.target ]
+    e.goalentity = e.movetarget
+    if [ !e.movetarget || e.movetarget.classname != 'target_actor' ]
+        g.dprintf[ '{e.classname} has bad target {e.target}' ]
+        e.target = null
+        e.monsterinfo.pausetime = 100000000.0
+        e.monsterinfo.stand[ e ]
+        return
+    v : v_sub[ e.goalentity.origin, e.origin ]
+    e.ideal_yaw = vectoyaw[ v ]
+    e.angles = vec3f [ e.angles.x, e.ideal_yaw, e.angles.z ]
+    e.monsterinfo.walk[ e ]
+    e.target = null
+
+func sp_misc_actor [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    if [ !e.targetname ]
+        g.dprintf[ 'untargeted {e.classname}' ]
+        g.free_edict[ e ]
+        return
+    if [ !e.target ]
+        g.dprintf[ '{e.classname} with no target' ]
+        g.free_edict[ e ]
+        return
+    actor_moves[]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'players/male/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    if [ e.health == 0 ] e.health = 100
+    e.mass = 200
+    e.pain = lambda actor_pain[]
+    e.die  = lambda actor_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda actor_stand[]
+    mi.walk   = lambda actor_walk[]
+    mi.run    = lambda actor_run[]
+    mi.attack = lambda actor_attack[]
+    mi.melee  = null
+    mi.sight  = null
+    mi.aiflags = mi.aiflags | AI_GOOD_GUY
+    g.world.link[ e ]
+    mi.currentmove = actor_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+    # actors always start in a dormant state: a use gets them going
+    e.use = lambda actor_use[]
+
+func target_actor_touch [ e: Edict, other: Edict ]
+    if [ other.movetarget != e ] return
+    if [ other.enemy ] return
+    other.goalentity = null
+    other.movetarget = null
+    if [ e.message ]
+        name : actor_name[ other ]
+        for [ n: i32 1, n <= g.maxclients, n += 1 ]
+            ent : g.edicts[ n ]
+            if [ !ent.inuse ] continue
+            g.cprintf[ ent, '{name}: {e.message}' ]
+    # jump
+    if [ e.spawnflags & 1 ]
+        other.velocity = vec3f [ e.movedir.x * e.speed,
+                                 e.movedir.y * e.speed,
+                                 other.velocity.z ]
+        if [ other.groundentity ]
+            other.groundentity = null
+            other.velocity = vec3f [ other.velocity.x, other.velocity.y,
+                                     e.movedir.z ]
+            g.sound[ other, CHAN_VOICE,
+                     g.soundindex[ 'player/male/jump1.wav' ], 1.0,
+                     ATTN_NORM ]
+    # shoot: nothing; attack
+    if [ (e.spawnflags & 2) == 0 && (e.spawnflags & 4) != 0 ]
+        other.enemy = g.pick_target[ e.pathtarget ]
+        if [ other.enemy ]
+            other.goalentity = other.enemy
+            if [ e.spawnflags & 32 ]
+                other.monsterinfo.aiflags = other.monsterinfo.aiflags |
+                                            AI_BRUTAL
+            if [ e.spawnflags & 16 ]
+                other.monsterinfo.aiflags = other.monsterinfo.aiflags |
+                                            AI_STAND_GROUND
+                actor_stand[ other ]
+            el
+                actor_run[ other ]
+    if [ (e.spawnflags & 6) == 0 && e.pathtarget ]
+        savetarget : string [ e.target ]
+        e.target = e.pathtarget
+        g.use_targets[ e, other ]
+        e.target = savetarget
+    other.movetarget = g.pick_target[ e.target ]
+    if [ !other.goalentity ] other.goalentity = other.movetarget
+    if [ !other.movetarget && !other.enemy ]
+        other.monsterinfo.pausetime = g.level.time + 100000000.0
+        other.monsterinfo.stand[ other ]
+    el [ other.movetarget == other.goalentity ]
+        v : v_sub[ other.movetarget.origin, other.origin ]
+        other.ideal_yaw = vectoyaw[ v ]
+
+func sp_target_actor [ e: Edict ]
+    if [ !e.targetname ]
+        g.dprintf[ '{e.classname} with no targetname' ]
+    e.solid = SOLID_TRIGGER
+    e.touch = lambda target_actor_touch[]
+    e.mins = vec3f [ -8.0, -8.0, -8.0 ]
+    e.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+    e.svflags = SVF_NOCLIENT
+    if [ e.spawnflags & 1 ]
+        if [ e.speed == 0.0 ] e.speed = 200.0
+        if [ g.st.height == 0 ] g.st.height = 200
+        if [ e.angles.y == 0.0 ]
+            e.angles = vec3f [ e.angles.x, 360.0, e.angles.z ]
+        g.set_movedir[ e ]
+        e.movedir = vec3f [ e.movedir.x, e.movedir.y,
+                            f32[ g.st.height ] ]
+    g.world.link[ e ]
+
+# the moves, built once: frame numbers from m_actor.h
+func actor_moves []
+    if [ actor_move_stand ] return
+    actor_names = vec string [] [ 'Hellrot', 'Tokay', 'Killme',
+        'Disruptor', 'Adrianator', 'Rambear', 'Titus', 'Bitterman' ]
+    actor_messages = vec string [] [ 'Watch it', '#$@*&', 'Idiot',
+        'Check your targets' ]
+    v : vec MFrame []
+    mf[ v, 40, lambda ai_stand[], 0.0, null ]
+    # stand101 .. stand140
+    actor_move_stand = MMove [
+        firstframe: 128, lastframe: 167, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 2, lambda ai_walk[], 0.0, null ]
+    # walk01 .. walk08
+    actor_move_walk = MMove [
+        firstframe: 251, lastframe: 258, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 4.0, null ]
+    mf[ v, 2, lambda ai_run[], 15.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 20.0, null ]
+    mf[ v, 1, lambda ai_run[], 15.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 17.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 2, lambda ai_run[], -2.0, null ]
+    mf[ v, 1, lambda ai_run[], -1.0, null ]
+    # run02 .. run07
+    actor_move_run = MMove [
+        firstframe: 93, lastframe: 98, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    # pain101 .. pain103
+    actor_move_pain1 = MMove [
+        firstframe: 74, lastframe: 76, frames: v,
+        endfunc: lambda actor_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain203
+    actor_move_pain2 = MMove [
+        firstframe: 77, lastframe: 79, frames: v,
+        endfunc: lambda actor_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # pain301 .. pain303
+    actor_move_pain3 = MMove [
+        firstframe: 80, lastframe: 82, frames: v,
+        endfunc: lambda actor_run[] ]
+    v = vec MFrame []
+    mf[ v, 14, lambda ai_turn[], 0.0, null ]
+    # flip01 .. flip14
+    actor_move_flipoff = MMove [
+        firstframe: 39, lastframe: 52, frames: v,
+        endfunc: lambda actor_run[] ]
+    v = vec MFrame []
+    mf[ v, 17, lambda ai_turn[], 0.0, null ]
+    # taunt01 .. taunt17
+    actor_move_taunt = MMove [
+        firstframe: 234, lastframe: 250, frames: v,
+        endfunc: lambda actor_run[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -13.0, null ]
+    mf[ v, 1, lambda ai_move[], 14.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    # death101 .. death107
+    actor_move_death1 = MMove [
+        firstframe: 4, lastframe: 10, frames: v,
+        endfunc: lambda actor_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -9.0, null ]
+    mf[ v, 2, lambda ai_move[], -13.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # death201 .. death213
+    actor_move_death2 = MMove [
+        firstframe: 11, lastframe: 23, frames: v,
+        endfunc: lambda actor_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], -2.0, lambda actor_fire[] ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    # attak01 .. attak04
+    actor_move_attack = MMove [
+        firstframe: 0, lastframe: 3, frames: v,
+        endfunc: lambda actor_run[] ]
+

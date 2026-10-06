@@ -1,0 +1,243 @@
+# m_berserk.c: the berserker (a spike and a club, up close)
+extend quake2
+
+berserk_sound_pain : i32
+berserk_sound_die : i32
+berserk_sound_idle : i32
+berserk_sound_punch : i32
+berserk_sound_sight : i32
+berserk_sound_search : i32
+berserk_move_stand : MMove
+berserk_move_stand_fidget : MMove
+berserk_move_walk : MMove
+berserk_move_run1 : MMove
+berserk_move_attack_spike : MMove
+berserk_move_attack_club : MMove
+berserk_move_attack_strike : MMove
+berserk_move_pain1 : MMove
+berserk_move_pain2 : MMove
+berserk_move_death1 : MMove
+berserk_move_death2 : MMove
+
+func berserk_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, berserk_sound_sight, 1.0, ATTN_NORM ]
+
+func berserk_search [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, berserk_sound_search, 1.0, ATTN_NORM ]
+
+func berserk_stand [ e: Edict ]
+    e.monsterinfo.currentmove = berserk_move_stand
+
+func berserk_fidget [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ] return
+    if [ frand[] > 0.15 ] return
+    e.monsterinfo.currentmove = berserk_move_stand_fidget
+    g.sound[ e, CHAN_WEAPON, berserk_sound_idle, 1.0, ATTN_IDLE ]
+
+func berserk_walk [ e: Edict ]
+    e.monsterinfo.currentmove = berserk_move_walk
+
+func berserk_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = berserk_move_stand
+    el
+        e.monsterinfo.currentmove = berserk_move_run1
+
+# faster attack: upwards and backwards
+func berserk_attack_spike [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, 0.0, -24.0 ]
+    fire_hit[ e, aim, 15 + (rand[] % 6), 400 ]
+
+func berserk_swing [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, berserk_sound_punch, 1.0, ATTN_NORM ]
+
+# slower attack
+func berserk_attack_club [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.mins.x, -4.0 ]
+    fire_hit[ e, aim, 5 + (rand[] % 6), 400 ]
+
+func berserk_strike [ e: Edict ]
+    return
+
+func berserk_melee [ e: Edict ]
+    if [ (rand[] % 2) == 0 ]
+        e.monsterinfo.currentmove = berserk_move_attack_spike
+    el
+        e.monsterinfo.currentmove = berserk_move_attack_club
+
+func berserk_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    g.sound[ e, CHAN_VOICE, berserk_sound_pain, 1.0, ATTN_NORM ]
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ damage < 20 || frand[] < 0.5 ]
+        e.monsterinfo.currentmove = berserk_move_pain1
+    el
+        e.monsterinfo.currentmove = berserk_move_pain2
+
+func berserk_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func berserk_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                   damage: i32, point: vec3f ]
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    g.sound[ e, CHAN_VOICE, berserk_sound_die, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    if [ damage >= 50 ] e.monsterinfo.currentmove = berserk_move_death1
+    el                  e.monsterinfo.currentmove = berserk_move_death2
+
+func sp_monster_berserk [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    berserk_moves[]
+    berserk_sound_pain   = g.soundindex[ 'berserk/berpain2.wav' ]
+    berserk_sound_die    = g.soundindex[ 'berserk/berdeth2.wav' ]
+    berserk_sound_idle   = g.soundindex[ 'berserk/beridle1.wav' ]
+    berserk_sound_punch  = g.soundindex[ 'berserk/attack.wav' ]
+    berserk_sound_search = g.soundindex[ 'berserk/bersrch1.wav' ]
+    berserk_sound_sight  = g.soundindex[ 'berserk/sight.wav' ]
+    e.modelindex = g.modelindex[ 'models/monsters/berserk/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.health = 240
+    e.gib_health = -60
+    e.mass = 250
+    e.pain = lambda berserk_pain[]
+    e.die  = lambda berserk_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda berserk_stand[]
+    mi.walk   = lambda berserk_walk[]
+    mi.run    = lambda berserk_run[]
+    mi.dodge  = null
+    mi.attack = null
+    mi.melee  = lambda berserk_melee[]
+    mi.sight  = lambda berserk_sight[]
+    mi.search = lambda berserk_search[]
+    mi.currentmove = berserk_move_stand
+    mi.scale = 1.0
+    g.world.link[ e ]
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_berserk.h
+func berserk_moves []
+    if [ berserk_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda berserk_fidget[] ]
+    mf[ v, 4, lambda ai_stand[], 0.0, null ]
+    # stand1 .. stand5
+    berserk_move_stand = MMove [
+        firstframe: 0, lastframe: 4, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 20, lambda ai_stand[], 0.0, null ]
+    # standb1 .. standb20
+    berserk_move_stand_fidget = MMove [
+        firstframe: 5, lastframe: 24, frames: v,
+        endfunc: lambda berserk_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 9.1, null ]
+    mf[ v, 1, lambda ai_walk[], 6.3, null ]
+    mf[ v, 1, lambda ai_walk[], 4.9, null ]
+    mf[ v, 1, lambda ai_walk[], 6.7, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.2, null ]
+    mf[ v, 1, lambda ai_walk[], 7.2, null ]
+    mf[ v, 1, lambda ai_walk[], 6.1, null ]
+    mf[ v, 1, lambda ai_walk[], 4.9, null ]
+    mf[ v, 2, lambda ai_walk[], 4.7, null ]
+    mf[ v, 1, lambda ai_walk[], 4.8, null ]
+    # walkc1 .. walkc11
+    berserk_move_walk = MMove [
+        firstframe: 25, lastframe: 35, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 21.0, null ]
+    mf[ v, 1, lambda ai_run[], 11.0, null ]
+    mf[ v, 1, lambda ai_run[], 21.0, null ]
+    mf[ v, 1, lambda ai_run[], 25.0, null ]
+    mf[ v, 1, lambda ai_run[], 18.0, null ]
+    mf[ v, 1, lambda ai_run[], 19.0, null ]
+    # run1 .. run6
+    berserk_move_run1 = MMove [
+        firstframe: 36, lastframe: 41, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda berserk_swing[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda berserk_attack_spike[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    # att_c1 .. att_c8
+    berserk_move_attack_spike = MMove [
+        firstframe: 76, lastframe: 83, frames: v,
+        endfunc: lambda berserk_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda berserk_swing[] ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda berserk_attack_club[] ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    # att_c9 .. att_c20
+    berserk_move_attack_club = MMove [
+        firstframe: 84, lastframe: 95, frames: v,
+        endfunc: lambda berserk_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda berserk_swing[] ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda berserk_strike[] ]
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 9.7, null ]
+    mf[ v, 1, lambda ai_move[], 13.6, null ]
+    # att_c21 .. att_c34
+    berserk_move_attack_strike = MMove [
+        firstframe: 96, lastframe: 109, frames: v,
+        endfunc: lambda berserk_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # painc1 .. painc4
+    berserk_move_pain1 = MMove [
+        firstframe: 199, lastframe: 202, frames: v,
+        endfunc: lambda berserk_run[] ]
+    v = vec MFrame []
+    mf[ v, 20, lambda ai_move[], 0.0, null ]
+    # painb1 .. painb20
+    berserk_move_pain2 = MMove [
+        firstframe: 203, lastframe: 222, frames: v,
+        endfunc: lambda berserk_run[] ]
+    v = vec MFrame []
+    mf[ v, 13, lambda ai_move[], 0.0, null ]
+    # death1 .. death13
+    berserk_move_death1 = MMove [
+        firstframe: 223, lastframe: 235, frames: v,
+        endfunc: lambda berserk_dead[] ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_move[], 0.0, null ]
+    # deathc1 .. deathc8
+    berserk_move_death2 = MMove [
+        firstframe: 236, lastframe: 243, frames: v,
+        endfunc: lambda berserk_dead[] ]
+

@@ -1,0 +1,191 @@
+# m_flipper.c: the barracuda shark (a bite, in water)
+extend quake2
+
+flipper_sound_chomp : i32
+flipper_sound_attack : i32
+flipper_sound_pain1 : i32
+flipper_sound_pain2 : i32
+flipper_sound_death : i32
+flipper_sound_idle : i32
+flipper_sound_search : i32
+flipper_sound_sight : i32
+flipper_move_stand : MMove
+flipper_move_run_loop : MMove
+flipper_move_run_start : MMove
+flipper_move_walk : MMove
+flipper_move_start_run : MMove
+flipper_move_pain2 : MMove
+flipper_move_pain1 : MMove
+flipper_move_attack : MMove
+flipper_move_death : MMove
+
+func flipper_stand [ e: Edict ]
+    e.monsterinfo.currentmove = flipper_move_stand
+
+func flipper_run_loop [ e: Edict ]
+    e.monsterinfo.currentmove = flipper_move_run_loop
+
+func flipper_run [ e: Edict ]
+    e.monsterinfo.currentmove = flipper_move_run_start
+
+func flipper_walk [ e: Edict ]
+    e.monsterinfo.currentmove = flipper_move_walk
+
+func flipper_start_run [ e: Edict ]
+    e.monsterinfo.currentmove = flipper_move_start_run
+
+func flipper_bite [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, 0.0, 0.0 ]
+    fire_hit[ e, aim, 5, 0 ]
+
+func flipper_preattack [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, flipper_sound_chomp, 1.0, ATTN_NORM ]
+
+func flipper_melee [ e: Edict ]
+    e.monsterinfo.currentmove = flipper_move_attack
+
+func flipper_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ ((rand[] + 1) % 2) == 0 ]
+        g.sound[ e, CHAN_VOICE, flipper_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = flipper_move_pain1
+    el
+        g.sound[ e, CHAN_VOICE, flipper_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = flipper_move_pain2
+
+func flipper_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func flipper_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, flipper_sound_sight, 1.0, ATTN_NORM ]
+
+func flipper_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                   damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, flipper_sound_death, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = flipper_move_death
+
+func sp_monster_flipper [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    flipper_moves[]
+    flipper_sound_pain1  = g.soundindex[ 'flipper/flppain1.wav' ]
+    flipper_sound_pain2  = g.soundindex[ 'flipper/flppain2.wav' ]
+    flipper_sound_death  = g.soundindex[ 'flipper/flpdeth1.wav' ]
+    flipper_sound_chomp  = g.soundindex[ 'flipper/flpatck1.wav' ]
+    flipper_sound_attack = g.soundindex[ 'flipper/flpatck2.wav' ]
+    flipper_sound_idle   = g.soundindex[ 'flipper/flpidle1.wav' ]
+    flipper_sound_search = g.soundindex[ 'flipper/flpsrch1.wav' ]
+    flipper_sound_sight  = g.soundindex[ 'flipper/flpsght1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/flipper/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.health = 50
+    e.gib_health = -30
+    e.mass = 100
+    e.pain = lambda flipper_pain[]
+    e.die  = lambda flipper_die[]
+    mi : e.monsterinfo
+    mi.stand = lambda flipper_stand[]
+    mi.walk  = lambda flipper_walk[]
+    mi.run   = lambda flipper_start_run[]
+    mi.melee = lambda flipper_melee[]
+    mi.sight = lambda flipper_sight[]
+    g.world.link[ e ]
+    mi.currentmove = flipper_move_stand
+    mi.scale = 1.0
+    swimmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_flipper.h
+func flipper_moves []
+    if [ flipper_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    # flphor01 .. flphor01
+    flipper_move_stand = MMove [
+        firstframe: 41, lastframe: 41, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 24, lambda ai_run[], 24.0, null ]
+    # flpver06 .. flpver29
+    flipper_move_run_loop = MMove [
+        firstframe: 70, lastframe: 93, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_run[], 8.0, null ]
+    # flpver01 .. flpver06
+    flipper_move_run_start = MMove [
+        firstframe: 65, lastframe: 70, frames: v,
+        endfunc: lambda flipper_run_loop[] ]
+    v = vec MFrame []
+    mf[ v, 24, lambda ai_walk[], 4.0, null ]
+    # flphor01 .. flphor24
+    flipper_move_walk = MMove [
+        firstframe: 41, lastframe: 64, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, lambda flipper_run[] ]
+    # flphor01 .. flphor05
+    flipper_move_start_run = MMove [
+        firstframe: 41, lastframe: 45, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    # flppn101 .. flppn105
+    flipper_move_pain2 = MMove [
+        firstframe: 94, lastframe: 98, frames: v,
+        endfunc: lambda flipper_run[] ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    # flppn201 .. flppn205
+    flipper_move_pain1 = MMove [
+        firstframe: 99, lastframe: 103, frames: v,
+        endfunc: lambda flipper_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda flipper_preattack[] ]
+    mf[ v, 12, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda flipper_bite[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda flipper_bite[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    # flpbit01 .. flpbit20
+    flipper_move_attack = MMove [
+        firstframe: 0, lastframe: 19, frames: v,
+        endfunc: lambda flipper_run[] ]
+    v = vec MFrame []
+    mf[ v, 56, lambda ai_move[], 0.0, null ]
+    # flpdth01 .. flpdth56
+    flipper_move_death = MMove [
+        firstframe: 104, lastframe: 159, frames: v,
+        endfunc: lambda flipper_dead[] ]
+

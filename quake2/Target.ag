@@ -1,0 +1,398 @@
+# g_target.c: the targets
+extend quake2
+
+RF_TRANSLUCENT : i32 [ 32 ]
+RF_BEAM        : i32 [ 128 ]
+CONTENTS_DEADMONSTER : i32 [ 67108864 ]
+SFL_CROSS_TRIGGER_MASK : i32 [ 255 ]
+LASER_SPARKS : i32 [ 1 << 31 ]
+
+# ---- target_temp_entity
+func use_target_tent [ e: Edict, other: Edict,
+                       activator: Edict ]
+    g.temp_entity_at[ e.style, e.origin ]
+
+func sp_target_temp_entity [ e: Edict ]
+    e.use = lambda use_target_tent[]
+
+# ---- target_speaker
+func use_target_speaker [ e: Edict, other: Edict,
+                          activator: Edict ]
+    if [ e.spawnflags & 3 ]
+        # a looping sound toggles
+        e.sound = (e.sound != 0) ? 0 : e.noise_index
+    el
+        # a positioned sound: this entity is never sent to the client
+        g.positioned_sound[ e.origin, e, CHAN_VOICE, e.noise_index, e.volume,
+                            e.attenuation ]
+
+func sp_target_speaker [ e: Edict ]
+    if [ !g.st.noise ]
+        g.dprintf[ 'target_speaker with no noise set' ]
+        return
+    noise : string [ g.st.noise ]
+    if [ !strstr[ noise.chars, '.wav' ] ] noise = '{noise}.wav'
+    e.noise_index = g.soundindex[ noise ]
+    if [ e.volume == 0.0 ] e.volume = 1.0
+    if [ e.attenuation == 0.0 ] e.attenuation = 1.0
+    el [ e.attenuation == -1.0 ] e.attenuation = 0.0
+    # a prestarted looping sound
+    if [ e.spawnflags & 1 ] e.sound = e.noise_index
+    e.use = lambda use_target_speaker[]
+    g.world.link[ e ]
+
+# ---- target_help
+func use_target_help [ e: Edict, other: Edict,
+                       activator: Edict ]
+    if [ e.spawnflags & 1 ] g.helpmessage1 = e.message
+    el                      g.helpmessage2 = e.message
+    g.helpchanged += 1
+
+func sp_target_help [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    if [ !e.message ]
+        g.dprintf[ '{e.classname} with no message' ]
+        g.free_edict[ e ]
+        return
+    e.use = lambda use_target_help[]
+
+# ---- target_secret, target_goal
+func use_target_secret [ e: Edict, other: Edict,
+                         activator: Edict ]
+    g.sound[ e, CHAN_VOICE, e.noise_index, 1.0, ATTN_NORM ]
+    g.level.found_secrets += 1
+    g.use_targets[ e, activator ]
+    g.free_edict[ e ]
+
+func sp_target_secret [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    e.use = lambda use_target_secret[]
+    if [ !g.st.noise ] g.st.noise = 'misc/secret.wav'
+    e.noise_index = g.soundindex[ g.st.noise ]
+    e.svflags = SVF_NOCLIENT
+    g.level.total_secrets += 1
+    # map bug hack
+    if [ g.level.mapname == 'mine3' && e.origin.x == 280.0 &&
+         e.origin.y == -2048.0 && e.origin.z == -624.0 ]
+        e.message = 'You have found a secret area.'
+
+func use_target_goal [ e: Edict, other: Edict,
+                       activator: Edict ]
+    g.sound[ e, CHAN_VOICE, e.noise_index, 1.0, ATTN_NORM ]
+    g.level.found_goals += 1
+    # all goals found: the cd track stops (configstring)
+    g.use_targets[ e, activator ]
+    g.free_edict[ e ]
+
+func sp_target_goal [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    e.use = lambda use_target_goal[]
+    if [ !g.st.noise ] g.st.noise = 'misc/secret.wav'
+    e.noise_index = g.soundindex[ g.st.noise ]
+    e.svflags = SVF_NOCLIENT
+    g.level.total_goals += 1
+
+# ---- target_explosion
+func target_explosion_explode [ e: Edict ]
+    g.temp_entity_at[ TE_EXPLOSION1, e.origin ]
+    t_radius_damage[ e, e.activator, f32[ e.dmg ], null, f32[ e.dmg + 40 ],
+                     MOD_EXPLOSIVE ]
+    save : f32 [ e.delay ]
+    e.delay = 0.0
+    g.use_targets[ e, e.activator ]
+    e.delay = save
+
+func use_target_explosion [ e: Edict, other: Edict,
+                            activator: Edict ]
+    e.activator = activator
+    if [ e.delay == 0.0 ]
+        target_explosion_explode[ e ]
+        return
+    e.think = lambda target_explosion_explode[]
+    e.nextthink = g.level.time + e.delay
+
+func sp_target_explosion [ e: Edict ]
+    e.use = lambda use_target_explosion[]
+    e.svflags = SVF_NOCLIENT
+
+# ---- target_changelevel
+func use_target_changelevel [ e: Edict, other: Edict,
+                              activator: Edict ]
+    # already activated
+    if [ g.level.intermissiontime != 0.0 ] return
+    if [ !g.deathmatch && !g.coop ]
+        if [ g.edicts[ 1 ].health <= 0 ] return
+    # deathmatch noexit damage and the exit print: the client port's
+    # a new unit clears the cross triggers
+    if [ strchr[ e.map.chars, 42 ] ]
+        g.serverflags = g.serverflags & ~SFL_CROSS_TRIGGER_MASK
+    begin_intermission[ e ]
+
+func sp_target_changelevel [ e: Edict ]
+    if [ !e.map ]
+        g.dprintf[ 'target_changelevel with no map' ]
+        g.free_edict[ e ]
+        return
+    # ugly hack because *SOMEBODY* screwed up their map
+    if [ g.level.mapname == 'fact1' && e.map == 'fact3' ]
+        e.map = 'fact3$secret1'
+    e.use = lambda use_target_changelevel[]
+    e.svflags = SVF_NOCLIENT
+
+# ---- target_splash
+func use_target_splash [ e: Edict, other: Edict,
+                         activator: Edict ]
+    g.temp_entity[ TE_SPLASH, e.origin, e.movedir, e.count, e.sounds ]
+    if [ e.dmg != 0 ]
+        t_radius_damage[ e, activator, f32[ e.dmg ], null, f32[ e.dmg + 40 ],
+                         MOD_SPLASH ]
+
+func sp_target_splash [ e: Edict ]
+    e.use = lambda use_target_splash[]
+    g.set_movedir[ e ]
+    if [ e.count == 0 ] e.count = 32
+    e.svflags = SVF_NOCLIENT
+
+# ---- target_spawner
+func use_target_spawner [ e: Edict, other: Edict,
+                          activator: Edict ]
+    ent : g.spawn[]
+    ent.classname = e.target
+    ent.origin = e.origin
+    ent.angles = e.angles
+    g.call_spawn[ ent ]
+    g.world.unlink[ ent ]
+    g.kill_box[ ent ]
+    g.world.link[ ent ]
+    if [ e.speed != 0.0 ] ent.velocity = e.movedir
+
+func sp_target_spawner [ e: Edict ]
+    e.use = lambda use_target_spawner[]
+    e.svflags = SVF_NOCLIENT
+    if [ e.speed != 0.0 ]
+        g.set_movedir[ e ]
+        e.movedir = v_scale[ e.movedir, e.speed ]
+
+# ---- target_blaster
+func use_target_blaster [ e: Edict, other: Edict,
+                          activator: Edict ]
+    fire_blaster[ e, e.origin, e.movedir, e.dmg, i32[ e.speed ], EF_BLASTER,
+                  false ]
+    g.sound[ e, CHAN_VOICE, e.noise_index, 1.0, ATTN_NORM ]
+
+func sp_target_blaster [ e: Edict ]
+    e.use = lambda use_target_blaster[]
+    g.set_movedir[ e ]
+    e.noise_index = g.soundindex[ 'weapons/laser2.wav' ]
+    if [ e.dmg == 0 ] e.dmg = 15
+    if [ e.speed == 0.0 ] e.speed = 1000.0
+    e.svflags = SVF_NOCLIENT
+
+# ---- cross level triggers
+func crosslevel_trigger_use [ e: Edict, other: Edict,
+                              activator: Edict ]
+    g.serverflags = g.serverflags | e.spawnflags
+    g.free_edict[ e ]
+
+func sp_target_crosslevel_trigger [ e: Edict ]
+    e.svflags = SVF_NOCLIENT
+    e.use = lambda crosslevel_trigger_use[]
+
+func target_crosslevel_target_think [ e: Edict ]
+    if [ e.spawnflags == (g.serverflags & SFL_CROSS_TRIGGER_MASK
+                          & e.spawnflags) ]
+        g.use_targets[ e, e ]
+        g.free_edict[ e ]
+
+func sp_target_crosslevel_target [ e: Edict ]
+    if [ e.delay == 0.0 ] e.delay = 1.0
+    e.svflags = SVF_NOCLIENT
+    e.think = lambda target_crosslevel_target_think[]
+    e.nextthink = g.level.time + e.delay
+
+# ---- target_laser
+func target_laser_think [ e: Edict ]
+    count : i32 [ (e.spawnflags & LASER_SPARKS) ? 8 : 4 ]
+    if [ e.enemy ]
+        last_movedir : vec3f [ e.movedir ]
+        point : v_ma[ e.enemy.absmin, 0.5, e.enemy.size ]
+        e.movedir = v_norm[ v_sub[ point, e.origin ] ]
+        if [ !v_eq[ e.movedir, last_movedir ] ]
+            e.spawnflags = e.spawnflags | LASER_SPARKS
+    ignore : e
+    start : vec3f [ e.origin ]
+    endp : v_ma[ start, 2048.0, e.movedir ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    mask : i32 [ CONTENTS_SOLID | CONTENTS_MONSTER
+                 | CONTENTS_DEADMONSTER ]
+    tr : g.world.trace[ start, zero, zero, endp, ignore, mask ]
+    while [ true ]
+        tr = g.world.trace[ start, zero, zero, endp, ignore, mask ]
+        if [ !tr.ent ] break
+        hitpos : vec3f [ tr.ex, tr.ey, tr.ez ]
+        # hurt it if we can
+        if [ tr.ent.takedamage != DAMAGE_NO &&
+             (tr.ent.flags & FL_IMMUNE_LASER) == 0 ]
+            t_damage[ tr.ent, e, e.activator, e.movedir, hitpos, zero, e.dmg,
+                      1, DAMAGE_ENERGY, MOD_TARGET_LASER ]
+        # if we hit something that's not a monster or player or is
+        # immune to lasers, we're done
+        if [ (tr.ent.svflags & SVF_MONSTER) == 0 && !tr.ent.client ]
+            if [ e.spawnflags & LASER_SPARKS ]
+                e.spawnflags = e.spawnflags & ~LASER_SPARKS
+                g.temp_entity[ TE_LASER_SPARKS, hitpos,
+                               vec3f [ tr.nx, tr.ny, tr.nz ], count,
+                               e.skinnum ]
+            break
+        ignore = tr.ent
+        start = vec3f [ tr.ex, tr.ey, tr.ez ]
+    e.old_origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+    e.nextthink = g.level.time + FRAMETIME
+
+func target_laser_on [ e: Edict ]
+    if [ !e.activator ] e.activator = e
+    e.spawnflags = e.spawnflags | LASER_SPARKS | 1
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    target_laser_think[ e ]
+
+func target_laser_off [ e: Edict ]
+    e.spawnflags = e.spawnflags & ~1
+    e.svflags = e.svflags | SVF_NOCLIENT
+    e.nextthink = 0.0
+
+func target_laser_use [ e: Edict, other: Edict,
+                        activator: Edict ]
+    e.activator = activator
+    if [ e.spawnflags & 1 ] target_laser_off[ e ]
+    el                      target_laser_on[ e ]
+
+func target_laser_start [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_NOT
+    e.renderfx = e.renderfx | RF_BEAM | RF_TRANSLUCENT
+    # must be non-zero
+    e.modelindex = 1
+    # the beam diameter
+    e.frame = (e.spawnflags & 64) ? 16 : 4
+    # the color
+    if [ e.spawnflags & 2 ]       e.skinnum = -218959632
+    el [ e.spawnflags & 4 ]       e.skinnum = -791621421
+    el [ e.spawnflags & 8 ]       e.skinnum = -202116623
+    el [ e.spawnflags & 16 ]      e.skinnum = -589571361
+    el [ e.spawnflags & 32 ]      e.skinnum = -522133277
+    if [ !e.enemy ]
+        if [ e.target ]
+            ent : g.find[ null, EField.targetname, e.target ]
+            if [ !ent ]
+                g.dprintf[ '{e.classname}: {e.target} is a bad target' ]
+            e.enemy = ent
+        el
+            g.set_movedir[ e ]
+    e.use = lambda target_laser_use[]
+    e.think = lambda target_laser_think[]
+    if [ e.dmg == 0 ] e.dmg = 1
+    e.mins = vec3f [ -8.0, -8.0, -8.0 ]
+    e.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+    g.world.link[ e ]
+    if [ e.spawnflags & 1 ] target_laser_on[ e ]
+    el                      target_laser_off[ e ]
+
+func sp_target_laser [ e: Edict ]
+    # everything else spawns before it fires
+    e.think = lambda target_laser_start[]
+    e.nextthink = g.level.time + 1.0
+
+# ---- target_lightramp
+func target_lightramp_think [ e: Edict ]
+    # style letter: 'a' + start + elapsed frames * step
+    level : f32 [ e.movedir.x
+        + (g.level.time - e.timestamp) / FRAMETIME * e.movedir.z ]
+    g.set_lightstyle[ e.enemy.style, 97 + i32[ level ] ]
+    if [ g.level.time - e.timestamp < e.speed ]
+        e.nextthink = g.level.time + FRAMETIME
+    el [ e.spawnflags & 1 ]
+        e.movedir = vec3f [ e.movedir.y, e.movedir.x,
+                            0.0 - e.movedir.z ]
+
+func target_lightramp_use [ e: Edict, other: Edict,
+                            activator: Edict ]
+    if [ !e.enemy ]
+        # every target must be a light
+        t : Edict [ null ]
+        while [ true ]
+            t = g.find[ t, EField.targetname, e.target ]
+            if [ !t ] break
+            if [ t.classname != 'light' ]
+                g.dprintf[ '{e.classname} target {e.target} is not a light' ]
+            el
+                e.enemy = t
+        if [ !e.enemy ]
+            g.dprintf[ '{e.classname} target {e.target} not found' ]
+            g.free_edict[ e ]
+            return
+    e.timestamp = g.level.time
+    target_lightramp_think[ e ]
+
+func sp_target_lightramp [ e: Edict ]
+    bad : bool [ !e.message || e.message.count != 2 ]
+    if [ !bad ]
+        a : i32 [ e.message[ 0 ] ]
+        b : i32 [ e.message[ 1 ] ]
+        bad = a < 97 || a > 122 || b < 97 || b > 122 || a == b
+    if [ bad ]
+        g.dprintf[ 'target_lightramp has bad ramp' ]
+        g.free_edict[ e ]
+        return
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    if [ !e.target ]
+        g.dprintf[ '{e.classname} with no target' ]
+        g.free_edict[ e ]
+        return
+    e.svflags = e.svflags | SVF_NOCLIENT
+    e.use = lambda target_lightramp_use[]
+    e.think = lambda target_lightramp_think[]
+    from : f32 [ i32[ e.message[ 0 ] ] - 97 ]
+    to   : f32 [ i32[ e.message[ 1 ] ] - 97 ]
+    e.movedir = vec3f [ from, to, (to - from) / (e.speed / FRAMETIME) ]
+
+# ---- target_earthquake
+func target_earthquake_think [ e: Edict ]
+    if [ e.last_move_time < g.level.time ]
+        g.positioned_sound[ e.origin, e, CHAN_AUTO, e.noise_index, 1.0,
+                            ATTN_NONE ]
+        e.last_move_time = g.level.time + 0.5
+    for [ i: i32 1, i < g.num_edicts, i += 1 ]
+        ent : g.edicts[ i ]
+        if [ !ent.inuse ] continue
+        if [ !ent.client ] continue
+        if [ !ent.groundentity ] continue
+        ent.groundentity = null
+        ent.velocity = vec3f [ ent.velocity.x + crandom[] * 150.0,
+                               ent.velocity.y + crandom[] * 150.0,
+                               e.speed * (100.0 / f32[ ent.mass ]) ]
+    if [ g.level.time < e.timestamp ]
+        e.nextthink = g.level.time + FRAMETIME
+
+func target_earthquake_use [ e: Edict, other: Edict,
+                             activator: Edict ]
+    e.timestamp = g.level.time + f32[ e.count ]
+    e.nextthink = g.level.time + FRAMETIME
+    e.activator = activator
+    e.last_move_time = 0.0
+
+func sp_target_earthquake [ e: Edict ]
+    if [ !e.targetname ] g.dprintf[ 'untargeted {e.classname}' ]
+    if [ e.count == 0 ] e.count = 5
+    if [ e.speed == 0.0 ] e.speed = 200.0
+    e.svflags = e.svflags | SVF_NOCLIENT
+    e.think = lambda target_earthquake_think[]
+    e.use = lambda target_earthquake_use[]
+    e.noise_index = g.soundindex[ 'world/quake.wav' ]

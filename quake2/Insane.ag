@@ -1,0 +1,467 @@
+# m_insane.c: the insane marines (misc_insane; they do not fight)
+extend quake2
+
+insane_sound_fist : i32
+insane_sound_shake : i32
+insane_sound_moan : i32
+insane_sound_scream : vec i32
+insane_move_stand_normal : MMove
+insane_move_stand_insane : MMove
+insane_move_uptodown : MMove
+insane_move_downtoup : MMove
+insane_move_jumpdown : MMove
+insane_move_down : MMove
+insane_move_walk_normal : MMove
+insane_move_run_normal : MMove
+insane_move_walk_insane : MMove
+insane_move_run_insane : MMove
+insane_move_stand_pain : MMove
+insane_move_stand_death : MMove
+insane_move_crawl : MMove
+insane_move_runcrawl : MMove
+insane_move_crawl_pain : MMove
+insane_move_crawl_death : MMove
+insane_move_cross : MMove
+insane_move_struggle_cross : MMove
+
+func insane_fist [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, insane_sound_fist, 1.0, ATTN_IDLE ]
+
+func insane_shake [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, insane_sound_shake, 1.0, ATTN_IDLE ]
+
+func insane_moan [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, insane_sound_moan, 1.0, ATTN_IDLE ]
+
+func insane_scream [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, insane_sound_scream[ rand[] % 8 ], 1.0,
+             ATTN_IDLE ]
+
+func insane_cross [ e: Edict ]
+    if [ frand[] < 0.8 ]
+        e.monsterinfo.currentmove = insane_move_cross
+    el
+        e.monsterinfo.currentmove = insane_move_struggle_cross
+
+# crawling frames: crawl1 .. crawl9, stand99 .. stand160
+func insane_crawling [ e: Edict ] -> bool
+    if [ e.frame >= 227 && e.frame <= 235 ] return true
+    return e.frame >= 98 && e.frame <= 159
+
+func insane_walk [ e: Edict ]
+    mi : e.monsterinfo
+    # hold ground, down: cr_pain10 is 244
+    if [ (e.spawnflags & 16) != 0 && e.frame == 244 ]
+        mi.currentmove = insane_move_down
+        return
+    if [ e.spawnflags & 4 ]
+        mi.currentmove = insane_move_crawl
+    el [ frand[] <= 0.5 ]
+        mi.currentmove = insane_move_walk_normal
+    el
+        mi.currentmove = insane_move_walk_insane
+
+func insane_run [ e: Edict ]
+    mi : e.monsterinfo
+    if [ (e.spawnflags & 16) != 0 && e.frame == 244 ]
+        mi.currentmove = insane_move_down
+        return
+    if [ e.spawnflags & 4 ]      mi.currentmove = insane_move_runcrawl
+    el [ frand[] <= 0.5 ]        mi.currentmove = insane_move_run_normal
+    el                           mi.currentmove = insane_move_run_insane
+
+func insane_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    r : i32 [ 1 + (rand[] & 1) ]
+    l : i32 [ 100 ]
+    if [ e.health < 25 ]      l = 25
+    el [ e.health < 50 ]      l = 50
+    el [ e.health < 75 ]      l = 75
+    pain : 'player/male/pain{l}_{r}.wav'
+    g.sound[ e, CHAN_VOICE, g.soundindex[ pain ], 1.0, ATTN_IDLE ]
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    # don't go into pain frames if crucified
+    if [ e.spawnflags & 8 ]
+        e.monsterinfo.currentmove = insane_move_struggle_cross
+        return
+    if [ insane_crawling[ e ] ]
+        e.monsterinfo.currentmove = insane_move_crawl_pain
+    el
+        e.monsterinfo.currentmove = insane_move_stand_pain
+
+func insane_onground [ e: Edict ]
+    e.monsterinfo.currentmove = insane_move_down
+
+func insane_checkdown [ e: Edict ]
+    # always stand
+    if [ e.spawnflags & 32 ] return
+    if [ frand[] < 0.3 ]
+        if [ frand[] < 0.5 ]
+            e.monsterinfo.currentmove = insane_move_uptodown
+        el
+            e.monsterinfo.currentmove = insane_move_jumpdown
+
+func insane_checkup [ e: Edict ]
+    # if hold ground and crawl are set
+    if [ (e.spawnflags & 4) != 0 && (e.spawnflags & 16) != 0 ] return
+    if [ frand[] < 0.5 ]
+        e.monsterinfo.currentmove = insane_move_downtoup
+
+func insane_stand [ e: Edict ]
+    mi : e.monsterinfo
+    # crucified
+    if [ e.spawnflags & 8 ]
+        mi.currentmove = insane_move_cross
+        mi.aiflags = mi.aiflags | AI_STAND_GROUND
+    # if hold ground and crawl are set
+    el [ (e.spawnflags & 4) != 0 && (e.spawnflags & 16) != 0 ]
+        mi.currentmove = insane_move_down
+    el [ frand[] < 0.5 ]
+        mi.currentmove = insane_move_stand_normal
+    el
+        mi.currentmove = insane_move_stand_insane
+
+func insane_dead [ e: Edict ]
+    if [ e.spawnflags & 8 ]
+        e.flags = e.flags | FL_FLY
+    el
+        e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+        e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+        e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func insane_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                  damage: i32, point: vec3f ]
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_IDLE ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    n : i32 [ (rand[] % 4) + 1 ]
+    g.sound[ e, CHAN_VOICE, g.soundindex[ 'player/male/death{n}.wav' ],
+             1.0, ATTN_IDLE ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    if [ e.spawnflags & 8 ]
+        insane_dead[ e ]
+    el [ insane_crawling[ e ] ]
+        e.monsterinfo.currentmove = insane_move_crawl_death
+    el
+        e.monsterinfo.currentmove = insane_move_stand_death
+
+func sp_misc_insane [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    insane_moves[]
+    insane_sound_fist  = g.soundindex[ 'insane/insane11.wav' ]
+    insane_sound_shake = g.soundindex[ 'insane/insane5.wav' ]
+    insane_sound_moan  = g.soundindex[ 'insane/insane7.wav' ]
+    insane_sound_scream = vec i32 [] [
+        g.soundindex[ 'insane/insane1.wav' ],
+        g.soundindex[ 'insane/insane2.wav' ],
+        g.soundindex[ 'insane/insane3.wav' ],
+        g.soundindex[ 'insane/insane4.wav' ],
+        g.soundindex[ 'insane/insane6.wav' ],
+        g.soundindex[ 'insane/insane8.wav' ],
+        g.soundindex[ 'insane/insane9.wav' ],
+        g.soundindex[ 'insane/insane10.wav' ] ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/insane/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.health = 100
+    e.gib_health = -50
+    e.mass = 300
+    e.pain = lambda insane_pain[]
+    e.die  = lambda insane_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda insane_stand[]
+    mi.walk   = lambda insane_walk[]
+    mi.run    = lambda insane_run[]
+    mi.dodge  = null
+    mi.attack = null
+    mi.melee  = null
+    mi.sight  = null
+    mi.aiflags = mi.aiflags | AI_GOOD_GUY
+    g.world.link[ e ]
+    # stand ground
+    if [ e.spawnflags & 16 ] mi.aiflags = mi.aiflags | AI_STAND_GROUND
+    mi.currentmove = insane_move_stand_normal
+    mi.scale = 1.0
+    # crucified
+    if [ e.spawnflags & 8 ]
+        e.mins = vec3f [ -16.0, 0.0, 0.0 ]
+        e.maxs = vec3f [ 16.0, 8.0, 32.0 ]
+        e.flags = e.flags | FL_NO_KNOCKBACK
+        flymonster_start[ e ]
+    el
+        walkmonster_start[ e ]
+        e.skinnum = rand[] % 3
+
+# the moves, built once: frame numbers from m_insane.h
+func insane_moves []
+    if [ insane_move_stand_normal ] return
+    v : vec MFrame []
+    mf[ v, 5, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda insane_checkdown[] ]
+    # stand60 .. stand65
+    insane_move_stand_normal = MMove [
+        firstframe: 59, lastframe: 64, frames: v,
+        endfunc: lambda insane_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda insane_shake[] ]
+    mf[ v, 28, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda insane_checkdown[] ]
+    # stand65 .. stand94
+    insane_move_stand_insane = MMove [
+        firstframe: 64, lastframe: 93, frames: v,
+        endfunc: lambda insane_stand[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_moan[] ]
+    mf[ v, 12, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.7, null ]
+    mf[ v, 1, lambda ai_move[], 4.1, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.6, null ]
+    mf[ v, 1, lambda ai_move[], 3.6, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_fist[] ]
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_fist[] ]
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    # stand1 .. stand40
+    insane_move_uptodown = MMove [
+        firstframe: 0, lastframe: 39, frames: v,
+        endfunc: lambda insane_onground[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -0.7, null ]
+    mf[ v, 1, lambda ai_move[], -1.2, null ]
+    mf[ v, 1, lambda ai_move[], -1.5, null ]
+    mf[ v, 1, lambda ai_move[], -4.5, null ]
+    mf[ v, 1, lambda ai_move[], -3.5, null ]
+    mf[ v, 1, lambda ai_move[], -0.2, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.3, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.3, null ]
+    mf[ v, 1, lambda ai_move[], -1.6, null ]
+    mf[ v, 1, lambda ai_move[], -0.3, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    # stand41 .. stand59
+    insane_move_downtoup = MMove [
+        firstframe: 40, lastframe: 58, frames: v,
+        endfunc: lambda insane_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.2, null ]
+    mf[ v, 1, lambda ai_move[], 11.5, null ]
+    mf[ v, 1, lambda ai_move[], 5.1, null ]
+    mf[ v, 1, lambda ai_move[], 7.1, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # stand96 .. stand100
+    insane_move_jumpdown = MMove [
+        firstframe: 95, lastframe: 99, frames: v,
+        endfunc: lambda insane_onground[] ]
+    v = vec MFrame []
+    mf[ v, 11, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.7, null ]
+    mf[ v, 1, lambda ai_move[], -1.6, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_fist[] ]
+    mf[ v, 16, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_moan[] ]
+    mf[ v, 17, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.5, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -0.2, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.2, null ]
+    mf[ v, 1, lambda ai_move[], 0.4, null ]
+    mf[ v, 1, lambda ai_move[], 0.6, null ]
+    mf[ v, 1, lambda ai_move[], 0.8, null ]
+    mf[ v, 1, lambda ai_move[], 0.7, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_checkup[] ]
+    # stand100 .. stand160
+    insane_move_down = MMove [
+        firstframe: 99, lastframe: 159, frames: v,
+        endfunc: lambda insane_onground[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_walk[], 2.5, null ]
+    mf[ v, 1, lambda ai_walk[], 3.5, null ]
+    mf[ v, 1, lambda ai_walk[], 1.7, null ]
+    mf[ v, 1, lambda ai_walk[], 2.3, null ]
+    mf[ v, 1, lambda ai_walk[], 2.4, null ]
+    mf[ v, 1, lambda ai_walk[], 2.2, null ]
+    mf[ v, 1, lambda ai_walk[], 4.2, null ]
+    mf[ v, 1, lambda ai_walk[], 5.6, null ]
+    mf[ v, 1, lambda ai_walk[], 3.3, null ]
+    mf[ v, 1, lambda ai_walk[], 2.4, null ]
+    mf[ v, 1, lambda ai_walk[], 0.9, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    # walk27 .. walk39
+    insane_move_walk_normal = MMove [
+        firstframe: 160, lastframe: 172, frames: v,
+        endfunc: lambda insane_walk[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_walk[], 2.5, null ]
+    mf[ v, 1, lambda ai_walk[], 3.5, null ]
+    mf[ v, 1, lambda ai_walk[], 1.7, null ]
+    mf[ v, 1, lambda ai_walk[], 2.3, null ]
+    mf[ v, 1, lambda ai_walk[], 2.4, null ]
+    mf[ v, 1, lambda ai_walk[], 2.2, null ]
+    mf[ v, 1, lambda ai_walk[], 4.2, null ]
+    mf[ v, 1, lambda ai_walk[], 5.6, null ]
+    mf[ v, 1, lambda ai_walk[], 3.3, null ]
+    mf[ v, 1, lambda ai_walk[], 2.4, null ]
+    mf[ v, 1, lambda ai_walk[], 0.9, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    # walk27 .. walk39
+    insane_move_run_normal = MMove [
+        firstframe: 160, lastframe: 172, frames: v,
+        endfunc: lambda insane_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_walk[], 3.4, null ]
+    mf[ v, 1, lambda ai_walk[], 3.6, null ]
+    mf[ v, 1, lambda ai_walk[], 2.9, null ]
+    mf[ v, 1, lambda ai_walk[], 2.2, null ]
+    mf[ v, 1, lambda ai_walk[], 2.6, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.7, null ]
+    mf[ v, 1, lambda ai_walk[], 4.8, null ]
+    mf[ v, 1, lambda ai_walk[], 5.3, null ]
+    mf[ v, 1, lambda ai_walk[], 1.1, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.5, null ]
+    mf[ v, 2, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.9, null ]
+    mf[ v, 1, lambda ai_walk[], 6.7, null ]
+    mf[ v, 1, lambda ai_walk[], 3.8, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.2, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.4, null ]
+    mf[ v, 1, lambda ai_walk[], 6.4, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.8, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    # walk1 .. walk26
+    insane_move_walk_insane = MMove [
+        firstframe: 173, lastframe: 198, frames: v,
+        endfunc: lambda insane_walk[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_walk[], 3.4, null ]
+    mf[ v, 1, lambda ai_walk[], 3.6, null ]
+    mf[ v, 1, lambda ai_walk[], 2.9, null ]
+    mf[ v, 1, lambda ai_walk[], 2.2, null ]
+    mf[ v, 1, lambda ai_walk[], 2.6, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.7, null ]
+    mf[ v, 1, lambda ai_walk[], 4.8, null ]
+    mf[ v, 1, lambda ai_walk[], 5.3, null ]
+    mf[ v, 1, lambda ai_walk[], 1.1, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.5, null ]
+    mf[ v, 2, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.9, null ]
+    mf[ v, 1, lambda ai_walk[], 6.7, null ]
+    mf[ v, 1, lambda ai_walk[], 3.8, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.2, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.4, null ]
+    mf[ v, 1, lambda ai_walk[], 6.4, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.8, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    # walk1 .. walk26
+    insane_move_run_insane = MMove [
+        firstframe: 173, lastframe: 198, frames: v,
+        endfunc: lambda insane_run[] ]
+    v = vec MFrame []
+    mf[ v, 11, lambda ai_move[], 0.0, null ]
+    # st_pain2 .. st_pain12
+    insane_move_stand_pain = MMove [
+        firstframe: 199, lastframe: 209, frames: v,
+        endfunc: lambda insane_run[] ]
+    v = vec MFrame []
+    mf[ v, 17, lambda ai_move[], 0.0, null ]
+    # st_death2 .. st_death18
+    insane_move_stand_death = MMove [
+        firstframe: 210, lastframe: 226, frames: v,
+        endfunc: lambda insane_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_walk[], 1.5, null ]
+    mf[ v, 1, lambda ai_walk[], 2.1, null ]
+    mf[ v, 1, lambda ai_walk[], 3.6, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.9, null ]
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.4, null ]
+    mf[ v, 1, lambda ai_walk[], 2.4, null ]
+    # crawl1 .. crawl9
+    insane_move_crawl = MMove [
+        firstframe: 227, lastframe: 235, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, lambda insane_scream[] ]
+    mf[ v, 1, lambda ai_walk[], 1.5, null ]
+    mf[ v, 1, lambda ai_walk[], 2.1, null ]
+    mf[ v, 1, lambda ai_walk[], 3.6, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.9, null ]
+    mf[ v, 1, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 3.4, null ]
+    mf[ v, 1, lambda ai_walk[], 2.4, null ]
+    # crawl1 .. crawl9
+    insane_move_runcrawl = MMove [
+        firstframe: 227, lastframe: 235, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # cr_pain2 .. cr_pain10
+    insane_move_crawl_pain = MMove [
+        firstframe: 236, lastframe: 244, frames: v,
+        endfunc: lambda insane_run[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # cr_death10 .. cr_death16
+    insane_move_crawl_death = MMove [
+        firstframe: 245, lastframe: 251, frames: v,
+        endfunc: lambda insane_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_moan[] ]
+    mf[ v, 14, lambda ai_move[], 0.0, null ]
+    # cross1 .. cross15
+    insane_move_cross = MMove [
+        firstframe: 252, lastframe: 266, frames: v,
+        endfunc: lambda insane_cross[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, lambda insane_scream[] ]
+    mf[ v, 14, lambda ai_move[], 0.0, null ]
+    # cross16 .. cross30
+    insane_move_struggle_cross = MMove [
+        firstframe: 267, lastframe: 281, frames: v,
+        endfunc: lambda insane_cross[] ]
+

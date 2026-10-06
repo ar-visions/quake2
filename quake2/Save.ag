@@ -1,0 +1,2620 @@
+# g_save.c: the game and a level as lines of text, and back
+# made by gensave.py from Game.ag's classes: do not edit by hand
+extend quake2
+
+class SaveOut
+    public name : string
+    public out  : vec string
+
+    func init []
+        out = vec string []
+
+    public func put_i [ v: i32 ]
+        t : '{v}'
+        out.push[ t ]
+
+    # a float goes as its bits: it comes back exact
+    public func put_f [ v: f32 ]
+        value : f32 [ v ]
+        bits : i32 [ 0 ]
+        memcpy[ @bits, @value, 4 ]
+        t : '{bits}'
+        out.push[ t ]
+
+    public func put_v [ v: vec3f ]
+        put_f[ v.x ]
+        put_f[ v.y ]
+        put_f[ v.z ]
+
+    public func put_q [ v: vec4f ]
+        put_f[ v.x ]
+        put_f[ v.y ]
+        put_f[ v.z ]
+        put_f[ v.w ]
+
+    # ~ is no string; = leads one; a line break goes as byte 1
+    public func put_s [ s: string ]
+        buf : local i8 [ 2048 ]
+        if [ !s ]
+            # a fresh string each time, never the literal itself
+            buf[ 0 ] = 126
+            buf[ 1 ] = 0
+            none : string [ cast cstr [ buf ] ]
+            out.push[ none ]
+            return
+        buf[ 0 ] = 61
+        n : i32 [ 1 ]
+        for [ i: i32 0, i < s.count && n < 2046, i += 1 ]
+            c : i32 [ s[ i ] ]
+            if [ c == 10 ] c = 1
+            buf[ n ] = c
+            n += 1
+        buf[ n ] = 0
+        t : string [ cast cstr [ buf ] ]
+        out.push[ t ]
+
+    public func put_ints [ v: vec i32 ]
+        if [ !v ]
+            put_i[ 0 - 1 ]
+            return
+        put_i[ v.count ]
+        for [ i: i32 0, i < v.count, i += 1 ]
+            put_i[ v[ i ] ]
+
+    public func put_strs [ v: vec string ]
+        put_i[ v.count ]
+        for [ i: i32 0, i < v.count, i += 1 ]
+            put_s[ v[ i ] ]
+
+    public func append [ other: SaveOut ]
+        put_i[ other.out.count ]
+        for [ i: i32 0, i < other.out.count, i += 1 ]
+            w : other.out[ i ]
+            out.push[ w ]
+
+class SaveIn
+    public words : vec string
+    public at    : i32
+
+    public func get_i [] -> i32
+        if [ at >= words.count ] return 0
+        w : words[ at ]
+        at += 1
+        return atoi[ w.chars ]
+
+    public func get_f [] -> f32
+        bits : i32 [ get_i[] ]
+        value : f32 [ 0.0 ]
+        memcpy[ @value, @bits, 4 ]
+        return value
+
+    public func get_v [] -> vec3f
+        x : f32 [ get_f[] ]
+        y : f32 [ get_f[] ]
+        z : f32 [ get_f[] ]
+        return vec3f [ x, y, z ]
+
+    public func get_q [] -> vec4f
+        x : f32 [ get_f[] ]
+        y : f32 [ get_f[] ]
+        z : f32 [ get_f[] ]
+        w : f32 [ get_f[] ]
+        return vec4f [ x, y, z, w ]
+
+    public func get_s [] -> string
+        if [ at >= words.count ] return null
+        w : words[ at ]
+        at += 1
+        if [ w.count == 0 || w[ 0 ] == 126 ] return null
+        buf : local i8 [ 2048 ]
+        n : i32 [ 0 ]
+        for [ i: i32 1, i < w.count && n < 2046, i += 1 ]
+            c : i32 [ w[ i ] ]
+            if [ c == 1 ] c = 10
+            buf[ n ] = c
+            n += 1
+        buf[ n ] = 0
+        return string [ cast cstr [ buf ] ]
+
+    public func get_ints [] -> vec i32
+        n : i32 [ get_i[] ]
+        if [ n < 0 ] return null
+        v : vec i32 []
+        for [ i: i32 0, i < n, i += 1 ]
+            item : i32 [ get_i[] ]
+            v.push[ item ]
+        return v
+
+    public func get_strs [] -> vec string
+        n : i32 [ get_i[] ]
+        v : vec string []
+        for [ i: i32 0, i < n, i += 1 ]
+            item : get_s[]
+            v.push[ item ]
+        return v
+
+    # the next block another SaveOut appended, as its own writer
+    public func take [] -> SaveOut
+        n : i32 [ get_i[] ]
+        s : SaveOut [ ]
+        for [ i: i32 0, i < n && at < words.count, i += 1 ]
+            s.out.push[ words[ at ] ]
+            at += 1
+        return s
+
+func save_edict [ n: i32 ] -> Edict
+    if [ n < 0 || n >= g.edicts.count ] return null
+    return g.edicts[ n ]
+
+func save_item_no [ it: GItem ] -> i32
+    if [ it ]
+        for [ i: i32 0, i < g.num_items, i += 1 ]
+            if [ g.items[ i ] == it ] return i
+    return 0 - 1
+
+func save_item [ n: i32 ] -> GItem
+    if [ n < 0 || n >= g.num_items ] return null
+    return g.items[ n ]
+
+# WriteGame: what crosses levels
+func write_game [ s: SaveOut ]
+    s.put_s[ g.helpmessage1 ]
+    s.put_s[ g.helpmessage2 ]
+    s.put_i[ g.helpchanged ]
+    s.put_i[ g.serverflags ]
+    s.put_i[ g.skill ]
+    s.put_s[ g.spawnpoint ]
+
+func read_game [ s: SaveIn ]
+    g.helpmessage1 = s.get_s[]
+    g.helpmessage2 = s.get_s[]
+    g.helpchanged = s.get_i[]
+    g.serverflags = s.get_i[]
+    g.skill = s.get_i[]
+    g.spawnpoint = s.get_s[]
+
+# WriteLevel: every edict in use; a hub's copy leaves clients out
+func write_level [ hub: bool ] -> SaveOut
+    s : SaveOut [ ]
+    s.put_i[ g.num_edicts ]
+    save_Level[ s, g.level ]
+    s.put_ints[ g.lightstyles ]
+    s.put_strs[ g.models ]
+    s.put_strs[ g.sounds ]
+    s.put_strs[ g.images ]
+    for [ i: i32 0, i < g.num_edicts, i += 1 ]
+        e : g.edicts[ i ]
+        if [ !e.inuse ] continue
+        if [ hub && e.client ] continue
+        s.put_i[ i ]
+        save_Edict[ s, e ]
+    s.put_i[ 0 - 1 ]
+    return s
+
+# ReadLevel, over a level SpawnEntities has just made
+func read_level [ s: SaveIn, hub: bool ]
+    count : i32 [ s.get_i[] ]
+    load_Level[ s, g.level ]
+    g.lightstyles = s.get_ints[]
+    g.models = s.get_strs[]
+    g.sounds = s.get_strs[]
+    g.images = s.get_strs[]
+    # wipe all the entities; a hub return keeps the new client
+    for [ i: i32 0, i < g.num_edicts, i += 1 ]
+        e : g.edicts[ i ]
+        if [ hub && e.client ] continue
+        if [ e.inuse ] g.world.unlink[ e ]
+        e.inuse = false
+    if [ count > g.num_edicts && count <= g.edicts.count ]
+        g.num_edicts = count
+    while [ true ]
+        n : i32 [ s.get_i[] ]
+        if [ n < 0 || n >= g.edicts.count ] break
+        e : g.edicts[ n ]
+        load_Edict[ s, e ]
+    for [ i: i32 0, i < g.num_edicts, i += 1 ]
+        e : g.edicts[ i ]
+        if [ !e.inuse ] continue
+        if [ hub && e.client ] continue
+        g.world.link[ e ]
+        # fire any cross-level triggers
+        if [ e.classname && e.classname == 'target_crosslevel_target' ]
+            e.nextthink = g.level.time + e.delay
+
+# save<n>.sav in the app's cache folder
+func save_file [ n: i32 ] -> string
+    app : 'quake2'
+    dir : '{path.path_cache[ app.chars ]}'
+    return '{dir}/save{n}.sav'
+
+func save_write [ file: string, s: SaveOut ] -> bool
+    f : fopen[ file.chars, "w" ]
+    if [ !f ] return false
+    for [ w: string ] in s.out
+        fputs[ w.chars, f ]
+        fputs[ "\n", f ]
+    fclose[ f ]
+    return true
+
+# the first lines of a file, or all of it when most is 0
+func save_read [ file: string, most: i32 ] -> SaveIn
+    f : fopen[ file.chars, "r" ]
+    if [ !f ] return null
+    words : vec string []
+    buf : local i8 [ 4096 ]
+    while [ most == 0 || words.count < most ]
+        got : cstr [ fgets[ buf, 4096, f ] ]
+        if [ !got ] break
+        n : i32 [ strlen[ buf ] ]
+        if [ n > 0 && buf[ n - 1 ] == 10 ] buf[ n - 1 ] = 0
+        word : string [ cast cstr [ buf ] ]
+        words.push[ word ]
+    fclose[ f ]
+    return SaveIn [ words: words ]
+
+
+# 386 functions of one shape, by name
+func lam_name_0 [ f: lambda none [ Edict ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda actor_attack[] ] return 'actor_attack'
+    if [ f == lambda actor_dead[] ] return 'actor_dead'
+    if [ f == lambda actor_fire[] ] return 'actor_fire'
+    if [ f == lambda actor_run[] ] return 'actor_run'
+    if [ f == lambda actor_stand[] ] return 'actor_stand'
+    if [ f == lambda actor_walk[] ] return 'actor_walk'
+    if [ f == lambda angle_move_begin[] ] return 'angle_move_begin'
+    if [ f == lambda angle_move_done[] ] return 'angle_move_done'
+    if [ f == lambda angle_move_final[] ] return 'angle_move_final'
+    if [ f == lambda barrel_explode[] ] return 'barrel_explode'
+    if [ f == lambda berserk_attack_club[] ] return 'berserk_attack_club'
+    if [ f == lambda berserk_attack_spike[] ] return 'berserk_attack_spike'
+    if [ f == lambda berserk_dead[] ] return 'berserk_dead'
+    if [ f == lambda berserk_fidget[] ] return 'berserk_fidget'
+    if [ f == lambda berserk_melee[] ] return 'berserk_melee'
+    if [ f == lambda berserk_run[] ] return 'berserk_run'
+    if [ f == lambda berserk_search[] ] return 'berserk_search'
+    if [ f == lambda berserk_stand[] ] return 'berserk_stand'
+    if [ f == lambda berserk_strike[] ] return 'berserk_strike'
+    if [ f == lambda berserk_swing[] ] return 'berserk_swing'
+    if [ f == lambda berserk_walk[] ] return 'berserk_walk'
+    if [ f == lambda bfg_explode[] ] return 'bfg_explode'
+    if [ f == lambda bfg_think[] ] return 'bfg_think'
+    if [ f == lambda boss2_attack[] ] return 'boss2_attack'
+    if [ f == lambda boss2_attack_mg[] ] return 'boss2_attack_mg'
+    if [ f == lambda boss2_dead[] ] return 'boss2_dead'
+    if [ f == lambda boss2_machinegun[] ] return 'boss2_machinegun'
+    if [ f == lambda boss2_reattack_mg[] ] return 'boss2_reattack_mg'
+    if [ f == lambda boss2_rocket[] ] return 'boss2_rocket'
+    if [ f == lambda boss2_run[] ] return 'boss2_run'
+    if [ f == lambda boss2_search[] ] return 'boss2_search'
+    if [ f == lambda boss2_stand[] ] return 'boss2_stand'
+    if [ f == lambda boss2_walk[] ] return 'boss2_walk'
+    if [ f == lambda boss_explode[] ] return 'boss_explode'
+    if [ f == lambda brain_chest_closed[] ] return 'brain_chest_closed'
+    if [ f == lambda brain_chest_open[] ] return 'brain_chest_open'
+    if [ f == lambda brain_dead[] ] return 'brain_dead'
+    if [ f == lambda brain_duck_down[] ] return 'brain_duck_down'
+    if [ f == lambda brain_duck_hold[] ] return 'brain_duck_hold'
+    if [ f == lambda brain_duck_up[] ] return 'brain_duck_up'
+    if [ f == lambda brain_hit_left[] ] return 'brain_hit_left'
+    if [ f == lambda brain_hit_right[] ] return 'brain_hit_right'
+    if [ f == lambda brain_idle[] ] return 'brain_idle'
+    if [ f == lambda brain_melee[] ] return 'brain_melee'
+    if [ f == lambda brain_run[] ] return 'brain_run'
+    if [ f == lambda brain_search[] ] return 'brain_search'
+    if [ f == lambda brain_stand[] ] return 'brain_stand'
+    if [ f == lambda brain_swing_left[] ] return 'brain_swing_left'
+    if [ f == lambda brain_swing_right[] ] return 'brain_swing_right'
+    if [ f == lambda brain_tentacle_attack[] ] return 'brain_tentacle_attack'
+    if [ f == lambda brain_walk[] ] return 'brain_walk'
+    if [ f == lambda button_done[] ] return 'button_done'
+    if [ f == lambda button_return[] ] return 'button_return'
+    if [ f == lambda button_wait[] ] return 'button_wait'
+    if [ f == lambda chaingun_fire[] ] return 'chaingun_fire'
+    if [ f == lambda chick_attack[] ] return 'chick_attack'
+    if [ f == lambda chick_attack1[] ] return 'chick_attack1'
+    if [ f == lambda chick_dead[] ] return 'chick_dead'
+    if [ f == lambda chick_duck_down[] ] return 'chick_duck_down'
+    if [ f == lambda chick_duck_hold[] ] return 'chick_duck_hold'
+    if [ f == lambda chick_duck_up[] ] return 'chick_duck_up'
+    if [ f == lambda chick_fidget[] ] return 'chick_fidget'
+    if [ f == lambda chick_melee[] ] return 'chick_melee'
+    if [ f == lambda chick_moan[] ] return 'chick_moan'
+    if [ f == lambda chick_preattack1[] ] return 'chick_preattack1'
+    if [ f == lambda chick_reload[] ] return 'chick_reload'
+    if [ f == lambda chick_rerocket[] ] return 'chick_rerocket'
+    if [ f == lambda chick_reslash[] ] return 'chick_reslash'
+    if [ f == lambda chick_rocket[] ] return 'chick_rocket'
+    if [ f == lambda chick_run[] ] return 'chick_run'
+    if [ f == lambda chick_slash[] ] return 'chick_slash'
+    if [ f == lambda chick_slash_hit[] ] return 'chick_slash_hit'
+    if [ f == lambda chick_stand[] ] return 'chick_stand'
+    if [ f == lambda chick_walk[] ] return 'chick_walk'
+    if [ f == lambda commander_body_drop[] ] return 'commander_body_drop'
+    if [ f == lambda commander_body_think[] ] return 'commander_body_think'
+    if [ f == lambda do_respawn[] ] return 'do_respawn'
+    if [ f == lambda door_go_down[] ] return 'door_go_down'
+    if [ f == lambda door_hit_bottom[] ] return 'door_hit_bottom'
+    if [ f == lambda door_hit_top[] ] return 'door_hit_top'
+    if [ f == lambda door_secret_done[] ] return 'door_secret_done'
+    if [ f == lambda door_secret_move1[] ] return 'door_secret_move1'
+    if [ f == lambda door_secret_move2[] ] return 'door_secret_move2'
+    if [ f == lambda door_secret_move3[] ] return 'door_secret_move3'
+    if [ f == lambda door_secret_move4[] ] return 'door_secret_move4'
+    if [ f == lambda door_secret_move5[] ] return 'door_secret_move5'
+    if [ f == lambda door_secret_move6[] ] return 'door_secret_move6'
+    if [ f == lambda drop_make_touchable[] ] return 'drop_make_touchable'
+    if [ f == lambda droptofloor[] ] return 'droptofloor'
+    if [ f == lambda flipper_bite[] ] return 'flipper_bite'
+    if [ f == lambda flipper_dead[] ] return 'flipper_dead'
+    if [ f == lambda flipper_melee[] ] return 'flipper_melee'
+    if [ f == lambda flipper_preattack[] ] return 'flipper_preattack'
+    if [ f == lambda flipper_run[] ] return 'flipper_run'
+    if [ f == lambda flipper_run_loop[] ] return 'flipper_run_loop'
+    if [ f == lambda flipper_stand[] ] return 'flipper_stand'
+    if [ f == lambda flipper_start_run[] ] return 'flipper_start_run'
+    if [ f == lambda flipper_walk[] ] return 'flipper_walk'
+    if [ f == lambda floater_attack[] ] return 'floater_attack'
+    if [ f == lambda floater_dead[] ] return 'floater_dead'
+    if [ f == lambda floater_fire_blaster[] ] return 'floater_fire_blaster'
+    if [ f == lambda floater_idle[] ] return 'floater_idle'
+    if [ f == lambda floater_melee[] ] return 'floater_melee'
+    if [ f == lambda floater_run[] ] return 'floater_run'
+    if [ f == lambda floater_stand[] ] return 'floater_stand'
+    if [ f == lambda floater_walk[] ] return 'floater_walk'
+    if [ f == lambda floater_wham[] ] return 'floater_wham'
+    if [ f == lambda floater_zap[] ] return 'floater_zap'
+    if [ f == lambda flyer_attack[] ] return 'flyer_attack'
+    if [ f == lambda flyer_check_melee[] ] return 'flyer_check_melee'
+    if [ f == lambda flyer_fireleft[] ] return 'flyer_fireleft'
+    if [ f == lambda flyer_fireright[] ] return 'flyer_fireright'
+    if [ f == lambda flyer_idle[] ] return 'flyer_idle'
+    if [ f == lambda flyer_loop_melee[] ] return 'flyer_loop_melee'
+    if [ f == lambda flyer_melee[] ] return 'flyer_melee'
+    if [ f == lambda flyer_nextmove[] ] return 'flyer_nextmove'
+    if [ f == lambda flyer_pop_blades[] ] return 'flyer_pop_blades'
+    if [ f == lambda flyer_run[] ] return 'flyer_run'
+    if [ f == lambda flyer_slash_left[] ] return 'flyer_slash_left'
+    if [ f == lambda flyer_slash_right[] ] return 'flyer_slash_right'
+    if [ f == lambda flyer_stand[] ] return 'flyer_stand'
+    if [ f == lambda flyer_walk[] ] return 'flyer_walk'
+    if [ f == lambda flymonster_start_go[] ] return 'flymonster_start_go'
+    if [ f == lambda func_clock_think[] ] return 'func_clock_think'
+    if [ f == lambda func_object_release[] ] return 'func_object_release'
+    if [ f == lambda func_timer_think[] ] return 'func_timer_think'
+    if [ f == lambda func_train_find[] ] return 'func_train_find'
+    if [ f == lambda gib_think[] ] return 'gib_think'
+    if [ f == lambda gladiator_attack[] ] return 'gladiator_attack'
+    if [ f == lambda gladiator_cleaver[] ] return 'gladiator_cleaver'
+    if [ f == lambda gladiator_cleaver_swing[] ] return 'gladiator_cleaver_swing'
+    if [ f == lambda gladiator_dead[] ] return 'gladiator_dead'
+    if [ f == lambda gladiator_gun[] ] return 'gladiator_gun'
+    if [ f == lambda gladiator_idle[] ] return 'gladiator_idle'
+    if [ f == lambda gladiator_melee[] ] return 'gladiator_melee'
+    if [ f == lambda gladiator_run[] ] return 'gladiator_run'
+    if [ f == lambda gladiator_search[] ] return 'gladiator_search'
+    if [ f == lambda gladiator_stand[] ] return 'gladiator_stand'
+    if [ f == lambda gladiator_walk[] ] return 'gladiator_walk'
+    if [ f == lambda grenade_explode[] ] return 'grenade_explode'
+    if [ f == lambda gunner_attack[] ] return 'gunner_attack'
+    if [ f == lambda gunner_dead[] ] return 'gunner_dead'
+    if [ f == lambda gunner_duck_down[] ] return 'gunner_duck_down'
+    if [ f == lambda gunner_duck_hold[] ] return 'gunner_duck_hold'
+    if [ f == lambda gunner_duck_up[] ] return 'gunner_duck_up'
+    if [ f == lambda gunner_fidget[] ] return 'gunner_fidget'
+    if [ f == lambda gunner_fire[] ] return 'gunner_fire'
+    if [ f == lambda gunner_fire_chain[] ] return 'gunner_fire_chain'
+    if [ f == lambda gunner_grenade[] ] return 'gunner_grenade'
+    if [ f == lambda gunner_idlesound[] ] return 'gunner_idlesound'
+    if [ f == lambda gunner_opengun[] ] return 'gunner_opengun'
+    if [ f == lambda gunner_refire_chain[] ] return 'gunner_refire_chain'
+    if [ f == lambda gunner_run[] ] return 'gunner_run'
+    if [ f == lambda gunner_search[] ] return 'gunner_search'
+    if [ f == lambda gunner_stand[] ] return 'gunner_stand'
+    if [ f == lambda gunner_walk[] ] return 'gunner_walk'
+    if [ f == lambda hover_attack[] ] return 'hover_attack'
+    if [ f == lambda hover_dead[] ] return 'hover_dead'
+    if [ f == lambda hover_deadthink[] ] return 'hover_deadthink'
+    if [ f == lambda hover_fire_blaster[] ] return 'hover_fire_blaster'
+    if [ f == lambda hover_reattack[] ] return 'hover_reattack'
+    if [ f == lambda hover_run[] ] return 'hover_run'
+    if [ f == lambda hover_search[] ] return 'hover_search'
+    if [ f == lambda hover_stand[] ] return 'hover_stand'
+    if [ f == lambda hover_start_attack[] ] return 'hover_start_attack'
+    if [ f == lambda hover_walk[] ] return 'hover_walk'
+    if [ f == lambda infantry_attack[] ] return 'infantry_attack'
+    if [ f == lambda infantry_cock_gun[] ] return 'infantry_cock_gun'
+    if [ f == lambda infantry_dead[] ] return 'infantry_dead'
+    if [ f == lambda infantry_duck_down[] ] return 'infantry_duck_down'
+    if [ f == lambda infantry_duck_hold[] ] return 'infantry_duck_hold'
+    if [ f == lambda infantry_duck_up[] ] return 'infantry_duck_up'
+    if [ f == lambda infantry_fidget[] ] return 'infantry_fidget'
+    if [ f == lambda infantry_fire[] ] return 'infantry_fire'
+    if [ f == lambda infantry_machinegun[] ] return 'infantry_machinegun'
+    if [ f == lambda infantry_run[] ] return 'infantry_run'
+    if [ f == lambda infantry_smack[] ] return 'infantry_smack'
+    if [ f == lambda infantry_stand[] ] return 'infantry_stand'
+    if [ f == lambda infantry_swing[] ] return 'infantry_swing'
+    if [ f == lambda infantry_walk[] ] return 'infantry_walk'
+    if [ f == lambda insane_checkdown[] ] return 'insane_checkdown'
+    if [ f == lambda insane_checkup[] ] return 'insane_checkup'
+    if [ f == lambda insane_cross[] ] return 'insane_cross'
+    if [ f == lambda insane_dead[] ] return 'insane_dead'
+    if [ f == lambda insane_fist[] ] return 'insane_fist'
+    if [ f == lambda insane_moan[] ] return 'insane_moan'
+    if [ f == lambda insane_onground[] ] return 'insane_onground'
+    if [ f == lambda insane_run[] ] return 'insane_run'
+    if [ f == lambda insane_scream[] ] return 'insane_scream'
+    if [ f == lambda insane_shake[] ] return 'insane_shake'
+    if [ f == lambda insane_stand[] ] return 'insane_stand'
+    if [ f == lambda insane_walk[] ] return 'insane_walk'
+    if [ f == lambda jorg_attack[] ] return 'jorg_attack'
+    if [ f == lambda jorg_attack1[] ] return 'jorg_attack1'
+    if [ f == lambda jorg_bfg[] ] return 'jorg_bfg'
+    if [ f == lambda jorg_dead[] ] return 'jorg_dead'
+    if [ f == lambda jorg_firebullet[] ] return 'jorg_firebullet'
+    if [ f == lambda jorg_idle[] ] return 'jorg_idle'
+    if [ f == lambda jorg_reattack1[] ] return 'jorg_reattack1'
+    if [ f == lambda jorg_run[] ] return 'jorg_run'
+    if [ f == lambda jorg_search[] ] return 'jorg_search'
+    if [ f == lambda jorg_stand[] ] return 'jorg_stand'
+    if [ f == lambda jorg_step_left[] ] return 'jorg_step_left'
+    if [ f == lambda jorg_step_right[] ] return 'jorg_step_right'
+    if [ f == lambda jorg_walk[] ] return 'jorg_walk'
+    if [ f == lambda m_droptofloor[] ] return 'm_droptofloor'
+    if [ f == lambda m_flies_off[] ] return 'm_flies_off'
+    if [ f == lambda m_flies_on[] ] return 'm_flies_on'
+    if [ f == lambda machinegun_fire[] ] return 'machinegun_fire'
+    if [ f == lambda makron_attack[] ] return 'makron_attack'
+    if [ f == lambda makron_bfg[] ] return 'makron_bfg'
+    if [ f == lambda makron_brainsplorch[] ] return 'makron_brainsplorch'
+    if [ f == lambda makron_dead[] ] return 'makron_dead'
+    if [ f == lambda makron_hit[] ] return 'makron_hit'
+    if [ f == lambda makron_hyperblaster[] ] return 'makron_hyperblaster'
+    if [ f == lambda makron_popup[] ] return 'makron_popup'
+    if [ f == lambda makron_prerailgun[] ] return 'makron_prerailgun'
+    if [ f == lambda makron_railgun[] ] return 'makron_railgun'
+    if [ f == lambda makron_run[] ] return 'makron_run'
+    if [ f == lambda makron_saveloc[] ] return 'makron_saveloc'
+    if [ f == lambda makron_spawn[] ] return 'makron_spawn'
+    if [ f == lambda makron_stand[] ] return 'makron_stand'
+    if [ f == lambda makron_step_left[] ] return 'makron_step_left'
+    if [ f == lambda makron_step_right[] ] return 'makron_step_right'
+    if [ f == lambda makron_taunt[] ] return 'makron_taunt'
+    if [ f == lambda makron_torso_think[] ] return 'makron_torso_think'
+    if [ f == lambda makron_toss[] ] return 'makron_toss'
+    if [ f == lambda makron_walk[] ] return 'makron_walk'
+    if [ f == lambda medic_attack[] ] return 'medic_attack'
+    if [ f == lambda medic_cable_attack[] ] return 'medic_cable_attack'
+    if [ f == lambda medic_continue[] ] return 'medic_continue'
+    if [ f == lambda medic_dead[] ] return 'medic_dead'
+    if [ f == lambda medic_duck_down[] ] return 'medic_duck_down'
+    if [ f == lambda medic_duck_hold[] ] return 'medic_duck_hold'
+    if [ f == lambda medic_duck_up[] ] return 'medic_duck_up'
+    if [ f == lambda medic_fire_blaster[] ] return 'medic_fire_blaster'
+    if [ f == lambda medic_hook_launch[] ] return 'medic_hook_launch'
+    if [ f == lambda medic_hook_retract[] ] return 'medic_hook_retract'
+    if [ f == lambda medic_idle[] ] return 'medic_idle'
+    if [ f == lambda medic_run[] ] return 'medic_run'
+    if [ f == lambda medic_search[] ] return 'medic_search'
+    if [ f == lambda medic_stand[] ] return 'medic_stand'
+    if [ f == lambda medic_walk[] ] return 'medic_walk'
+    if [ f == lambda megahealth_think[] ] return 'megahealth_think'
+    if [ f == lambda misc_banner_think[] ] return 'misc_banner_think'
+    if [ f == lambda misc_blackhole_think[] ] return 'misc_blackhole_think'
+    if [ f == lambda misc_easterchick2_think[] ] return 'misc_easterchick2_think'
+    if [ f == lambda misc_easterchick_think[] ] return 'misc_easterchick_think'
+    if [ f == lambda misc_eastertank_think[] ] return 'misc_eastertank_think'
+    if [ f == lambda misc_satellite_dish_think[] ] return 'misc_satellite_dish_think'
+    if [ f == lambda misc_viper_bomb_prethink[] ] return 'misc_viper_bomb_prethink'
+    if [ f == lambda monster_think[] ] return 'monster_think'
+    if [ f == lambda monster_triggered_spawn[] ] return 'monster_triggered_spawn'
+    if [ f == lambda move_begin[] ] return 'move_begin'
+    if [ f == lambda move_done[] ] return 'move_done'
+    if [ f == lambda move_final[] ] return 'move_final'
+    if [ f == lambda multi_wait[] ] return 'multi_wait'
+    if [ f == lambda mutant_check_landing[] ] return 'mutant_check_landing'
+    if [ f == lambda mutant_check_refire[] ] return 'mutant_check_refire'
+    if [ f == lambda mutant_dead[] ] return 'mutant_dead'
+    if [ f == lambda mutant_hit_left[] ] return 'mutant_hit_left'
+    if [ f == lambda mutant_hit_right[] ] return 'mutant_hit_right'
+    if [ f == lambda mutant_idle[] ] return 'mutant_idle'
+    if [ f == lambda mutant_idle_loop[] ] return 'mutant_idle_loop'
+    if [ f == lambda mutant_jump[] ] return 'mutant_jump'
+    if [ f == lambda mutant_jump_takeoff[] ] return 'mutant_jump_takeoff'
+    if [ f == lambda mutant_melee[] ] return 'mutant_melee'
+    if [ f == lambda mutant_run[] ] return 'mutant_run'
+    if [ f == lambda mutant_search[] ] return 'mutant_search'
+    if [ f == lambda mutant_stand[] ] return 'mutant_stand'
+    if [ f == lambda mutant_step[] ] return 'mutant_step'
+    if [ f == lambda mutant_walk[] ] return 'mutant_walk'
+    if [ f == lambda mutant_walk_loop[] ] return 'mutant_walk_loop'
+    if [ f == lambda parasite_attack[] ] return 'parasite_attack'
+    if [ f == lambda parasite_dead[] ] return 'parasite_dead'
+    if [ f == lambda parasite_do_fidget[] ] return 'parasite_do_fidget'
+    if [ f == lambda parasite_drain_attack[] ] return 'parasite_drain_attack'
+    if [ f == lambda parasite_idle[] ] return 'parasite_idle'
+    if [ f == lambda parasite_launch[] ] return 'parasite_launch'
+    if [ f == lambda parasite_reel_in[] ] return 'parasite_reel_in'
+    if [ f == lambda parasite_refidget[] ] return 'parasite_refidget'
+    if [ f == lambda parasite_run[] ] return 'parasite_run'
+    if [ f == lambda parasite_scratch[] ] return 'parasite_scratch'
+    if [ f == lambda parasite_stand[] ] return 'parasite_stand'
+    if [ f == lambda parasite_start_run[] ] return 'parasite_start_run'
+    if [ f == lambda parasite_start_walk[] ] return 'parasite_start_walk'
+    if [ f == lambda parasite_tap[] ] return 'parasite_tap'
+    if [ f == lambda parasite_walk[] ] return 'parasite_walk'
+    if [ f == lambda plat_go_down[] ] return 'plat_go_down'
+    if [ f == lambda plat_hit_bottom[] ] return 'plat_hit_bottom'
+    if [ f == lambda plat_hit_top[] ] return 'plat_hit_top'
+    if [ f == lambda remove_edict[] ] return 'remove_edict'
+    if [ f == lambda soldier_attack[] ] return 'soldier_attack'
+    if [ f == lambda soldier_attack1_refire1[] ] return 'soldier_attack1_refire1'
+    if [ f == lambda soldier_attack1_refire2[] ] return 'soldier_attack1_refire2'
+    if [ f == lambda soldier_attack2_refire1[] ] return 'soldier_attack2_refire1'
+    if [ f == lambda soldier_attack2_refire2[] ] return 'soldier_attack2_refire2'
+    if [ f == lambda soldier_attack3_refire[] ] return 'soldier_attack3_refire'
+    if [ f == lambda soldier_attack6_refire[] ] return 'soldier_attack6_refire'
+    if [ f == lambda soldier_cock[] ] return 'soldier_cock'
+    if [ f == lambda soldier_dead[] ] return 'soldier_dead'
+    if [ f == lambda soldier_duck_down[] ] return 'soldier_duck_down'
+    if [ f == lambda soldier_duck_hold[] ] return 'soldier_duck_hold'
+    if [ f == lambda soldier_duck_up[] ] return 'soldier_duck_up'
+    if [ f == lambda soldier_fire1[] ] return 'soldier_fire1'
+    if [ f == lambda soldier_fire2[] ] return 'soldier_fire2'
+    if [ f == lambda soldier_fire3[] ] return 'soldier_fire3'
+    if [ f == lambda soldier_fire4[] ] return 'soldier_fire4'
+    if [ f == lambda soldier_fire6[] ] return 'soldier_fire6'
+    if [ f == lambda soldier_fire7[] ] return 'soldier_fire7'
+    if [ f == lambda soldier_fire8[] ] return 'soldier_fire8'
+    if [ f == lambda soldier_idle[] ] return 'soldier_idle'
+    if [ f == lambda soldier_run[] ] return 'soldier_run'
+    if [ f == lambda soldier_stand[] ] return 'soldier_stand'
+    if [ f == lambda soldier_walk[] ] return 'soldier_walk'
+    if [ f == lambda soldier_walk1_random[] ] return 'soldier_walk1_random'
+    if [ f == lambda supertank_attack[] ] return 'supertank_attack'
+    if [ f == lambda supertank_dead[] ] return 'supertank_dead'
+    if [ f == lambda supertank_machinegun[] ] return 'supertank_machinegun'
+    if [ f == lambda supertank_reattack1[] ] return 'supertank_reattack1'
+    if [ f == lambda supertank_rocket[] ] return 'supertank_rocket'
+    if [ f == lambda supertank_run[] ] return 'supertank_run'
+    if [ f == lambda supertank_search[] ] return 'supertank_search'
+    if [ f == lambda supertank_stand[] ] return 'supertank_stand'
+    if [ f == lambda supertank_tread[] ] return 'supertank_tread'
+    if [ f == lambda supertank_walk[] ] return 'supertank_walk'
+    if [ f == lambda swimmonster_start_go[] ] return 'swimmonster_start_go'
+    if [ f == lambda tank_attack[] ] return 'tank_attack'
+    if [ f == lambda tank_blaster[] ] return 'tank_blaster'
+    if [ f == lambda tank_dead[] ] return 'tank_dead'
+    if [ f == lambda tank_doattack_rocket[] ] return 'tank_doattack_rocket'
+    if [ f == lambda tank_footstep[] ] return 'tank_footstep'
+    if [ f == lambda tank_idle[] ] return 'tank_idle'
+    if [ f == lambda tank_machinegun[] ] return 'tank_machinegun'
+    if [ f == lambda tank_poststrike[] ] return 'tank_poststrike'
+    if [ f == lambda tank_reattack_blaster[] ] return 'tank_reattack_blaster'
+    if [ f == lambda tank_refire_rocket[] ] return 'tank_refire_rocket'
+    if [ f == lambda tank_rocket[] ] return 'tank_rocket'
+    if [ f == lambda tank_run[] ] return 'tank_run'
+    if [ f == lambda tank_stand[] ] return 'tank_stand'
+    if [ f == lambda tank_strike[] ] return 'tank_strike'
+    if [ f == lambda tank_thud[] ] return 'tank_thud'
+    if [ f == lambda tank_walk[] ] return 'tank_walk'
+    if [ f == lambda tank_windup[] ] return 'tank_windup'
+    if [ f == lambda target_crosslevel_target_think[] ] return 'target_crosslevel_target_think'
+    if [ f == lambda target_earthquake_think[] ] return 'target_earthquake_think'
+    if [ f == lambda target_explosion_explode[] ] return 'target_explosion_explode'
+    if [ f == lambda target_laser_start[] ] return 'target_laser_start'
+    if [ f == lambda target_laser_think[] ] return 'target_laser_think'
+    if [ f == lambda target_lightramp_think[] ] return 'target_lightramp_think'
+    if [ f == lambda th_viewthing[] ] return 'th_viewthing'
+    if [ f == lambda think_accel_move[] ] return 'think_accel_move'
+    if [ f == lambda think_boss3_stand[] ] return 'think_boss3_stand'
+    if [ f == lambda think_calc_move_speed[] ] return 'think_calc_move_speed'
+    if [ f == lambda think_delay[] ] return 'think_delay'
+    if [ f == lambda think_spawn_door_trigger[] ] return 'think_spawn_door_trigger'
+    if [ f == lambda train_next[] ] return 'train_next'
+    if [ f == lambda train_wait[] ] return 'train_wait'
+    if [ f == lambda trigger_elevator_init[] ] return 'trigger_elevator_init'
+    if [ f == lambda trigger_enable[] ] return 'trigger_enable'
+    if [ f == lambda turret_breach_finish_init[] ] return 'turret_breach_finish_init'
+    if [ f == lambda turret_breach_think[] ] return 'turret_breach_think'
+    if [ f == lambda turret_driver_link[] ] return 'turret_driver_link'
+    if [ f == lambda turret_driver_think[] ] return 'turret_driver_think'
+    if [ f == lambda use_areaportal[] ] return 'use_areaportal'
+    if [ f == lambda use_plat[] ] return 'use_plat'
+    if [ f == lambda walkmonster_start_go[] ] return 'walkmonster_start_go'
+    if [ f == lambda weapon_bfg[] ] return 'weapon_bfg'
+    if [ f == lambda weapon_bfg_fire[] ] return 'weapon_bfg_fire'
+    if [ f == lambda weapon_blaster[] ] return 'weapon_blaster'
+    if [ f == lambda weapon_blaster_fire[] ] return 'weapon_blaster_fire'
+    if [ f == lambda weapon_chaingun[] ] return 'weapon_chaingun'
+    if [ f == lambda weapon_grenade[] ] return 'weapon_grenade'
+    if [ f == lambda weapon_grenadelauncher[] ] return 'weapon_grenadelauncher'
+    if [ f == lambda weapon_grenadelauncher_fire[] ] return 'weapon_grenadelauncher_fire'
+    if [ f == lambda weapon_hyperblaster[] ] return 'weapon_hyperblaster'
+    if [ f == lambda weapon_hyperblaster_fire[] ] return 'weapon_hyperblaster_fire'
+    if [ f == lambda weapon_machinegun[] ] return 'weapon_machinegun'
+    if [ f == lambda weapon_railgun[] ] return 'weapon_railgun'
+    if [ f == lambda weapon_railgun_fire[] ] return 'weapon_railgun_fire'
+    if [ f == lambda weapon_rocketlauncher[] ] return 'weapon_rocketlauncher'
+    if [ f == lambda weapon_rocketlauncher_fire[] ] return 'weapon_rocketlauncher_fire'
+    if [ f == lambda weapon_shotgun[] ] return 'weapon_shotgun'
+    if [ f == lambda weapon_shotgun_fire[] ] return 'weapon_shotgun_fire'
+    if [ f == lambda weapon_supershotgun[] ] return 'weapon_supershotgun'
+    if [ f == lambda weapon_supershotgun_fire[] ] return 'weapon_supershotgun_fire'
+    return null
+
+func lam_find_0 [ n: string ] -> lambda none [ Edict ]
+    if [ !n ] return null
+    if [ n == 'actor_attack' ] return lambda actor_attack[]
+    if [ n == 'actor_dead' ] return lambda actor_dead[]
+    if [ n == 'actor_fire' ] return lambda actor_fire[]
+    if [ n == 'actor_run' ] return lambda actor_run[]
+    if [ n == 'actor_stand' ] return lambda actor_stand[]
+    if [ n == 'actor_walk' ] return lambda actor_walk[]
+    if [ n == 'angle_move_begin' ] return lambda angle_move_begin[]
+    if [ n == 'angle_move_done' ] return lambda angle_move_done[]
+    if [ n == 'angle_move_final' ] return lambda angle_move_final[]
+    if [ n == 'barrel_explode' ] return lambda barrel_explode[]
+    if [ n == 'berserk_attack_club' ] return lambda berserk_attack_club[]
+    if [ n == 'berserk_attack_spike' ] return lambda berserk_attack_spike[]
+    if [ n == 'berserk_dead' ] return lambda berserk_dead[]
+    if [ n == 'berserk_fidget' ] return lambda berserk_fidget[]
+    if [ n == 'berserk_melee' ] return lambda berserk_melee[]
+    if [ n == 'berserk_run' ] return lambda berserk_run[]
+    if [ n == 'berserk_search' ] return lambda berserk_search[]
+    if [ n == 'berserk_stand' ] return lambda berserk_stand[]
+    if [ n == 'berserk_strike' ] return lambda berserk_strike[]
+    if [ n == 'berserk_swing' ] return lambda berserk_swing[]
+    if [ n == 'berserk_walk' ] return lambda berserk_walk[]
+    if [ n == 'bfg_explode' ] return lambda bfg_explode[]
+    if [ n == 'bfg_think' ] return lambda bfg_think[]
+    if [ n == 'boss2_attack' ] return lambda boss2_attack[]
+    if [ n == 'boss2_attack_mg' ] return lambda boss2_attack_mg[]
+    if [ n == 'boss2_dead' ] return lambda boss2_dead[]
+    if [ n == 'boss2_machinegun' ] return lambda boss2_machinegun[]
+    if [ n == 'boss2_reattack_mg' ] return lambda boss2_reattack_mg[]
+    if [ n == 'boss2_rocket' ] return lambda boss2_rocket[]
+    if [ n == 'boss2_run' ] return lambda boss2_run[]
+    if [ n == 'boss2_search' ] return lambda boss2_search[]
+    if [ n == 'boss2_stand' ] return lambda boss2_stand[]
+    if [ n == 'boss2_walk' ] return lambda boss2_walk[]
+    if [ n == 'boss_explode' ] return lambda boss_explode[]
+    if [ n == 'brain_chest_closed' ] return lambda brain_chest_closed[]
+    if [ n == 'brain_chest_open' ] return lambda brain_chest_open[]
+    if [ n == 'brain_dead' ] return lambda brain_dead[]
+    if [ n == 'brain_duck_down' ] return lambda brain_duck_down[]
+    if [ n == 'brain_duck_hold' ] return lambda brain_duck_hold[]
+    if [ n == 'brain_duck_up' ] return lambda brain_duck_up[]
+    if [ n == 'brain_hit_left' ] return lambda brain_hit_left[]
+    if [ n == 'brain_hit_right' ] return lambda brain_hit_right[]
+    if [ n == 'brain_idle' ] return lambda brain_idle[]
+    if [ n == 'brain_melee' ] return lambda brain_melee[]
+    if [ n == 'brain_run' ] return lambda brain_run[]
+    if [ n == 'brain_search' ] return lambda brain_search[]
+    if [ n == 'brain_stand' ] return lambda brain_stand[]
+    if [ n == 'brain_swing_left' ] return lambda brain_swing_left[]
+    if [ n == 'brain_swing_right' ] return lambda brain_swing_right[]
+    if [ n == 'brain_tentacle_attack' ] return lambda brain_tentacle_attack[]
+    if [ n == 'brain_walk' ] return lambda brain_walk[]
+    if [ n == 'button_done' ] return lambda button_done[]
+    if [ n == 'button_return' ] return lambda button_return[]
+    if [ n == 'button_wait' ] return lambda button_wait[]
+    if [ n == 'chaingun_fire' ] return lambda chaingun_fire[]
+    if [ n == 'chick_attack' ] return lambda chick_attack[]
+    if [ n == 'chick_attack1' ] return lambda chick_attack1[]
+    if [ n == 'chick_dead' ] return lambda chick_dead[]
+    if [ n == 'chick_duck_down' ] return lambda chick_duck_down[]
+    if [ n == 'chick_duck_hold' ] return lambda chick_duck_hold[]
+    if [ n == 'chick_duck_up' ] return lambda chick_duck_up[]
+    if [ n == 'chick_fidget' ] return lambda chick_fidget[]
+    if [ n == 'chick_melee' ] return lambda chick_melee[]
+    if [ n == 'chick_moan' ] return lambda chick_moan[]
+    if [ n == 'chick_preattack1' ] return lambda chick_preattack1[]
+    if [ n == 'chick_reload' ] return lambda chick_reload[]
+    if [ n == 'chick_rerocket' ] return lambda chick_rerocket[]
+    if [ n == 'chick_reslash' ] return lambda chick_reslash[]
+    if [ n == 'chick_rocket' ] return lambda chick_rocket[]
+    if [ n == 'chick_run' ] return lambda chick_run[]
+    if [ n == 'chick_slash' ] return lambda chick_slash[]
+    if [ n == 'chick_slash_hit' ] return lambda chick_slash_hit[]
+    if [ n == 'chick_stand' ] return lambda chick_stand[]
+    if [ n == 'chick_walk' ] return lambda chick_walk[]
+    if [ n == 'commander_body_drop' ] return lambda commander_body_drop[]
+    if [ n == 'commander_body_think' ] return lambda commander_body_think[]
+    if [ n == 'do_respawn' ] return lambda do_respawn[]
+    if [ n == 'door_go_down' ] return lambda door_go_down[]
+    if [ n == 'door_hit_bottom' ] return lambda door_hit_bottom[]
+    if [ n == 'door_hit_top' ] return lambda door_hit_top[]
+    if [ n == 'door_secret_done' ] return lambda door_secret_done[]
+    if [ n == 'door_secret_move1' ] return lambda door_secret_move1[]
+    if [ n == 'door_secret_move2' ] return lambda door_secret_move2[]
+    if [ n == 'door_secret_move3' ] return lambda door_secret_move3[]
+    if [ n == 'door_secret_move4' ] return lambda door_secret_move4[]
+    if [ n == 'door_secret_move5' ] return lambda door_secret_move5[]
+    if [ n == 'door_secret_move6' ] return lambda door_secret_move6[]
+    if [ n == 'drop_make_touchable' ] return lambda drop_make_touchable[]
+    if [ n == 'droptofloor' ] return lambda droptofloor[]
+    if [ n == 'flipper_bite' ] return lambda flipper_bite[]
+    if [ n == 'flipper_dead' ] return lambda flipper_dead[]
+    if [ n == 'flipper_melee' ] return lambda flipper_melee[]
+    if [ n == 'flipper_preattack' ] return lambda flipper_preattack[]
+    if [ n == 'flipper_run' ] return lambda flipper_run[]
+    if [ n == 'flipper_run_loop' ] return lambda flipper_run_loop[]
+    if [ n == 'flipper_stand' ] return lambda flipper_stand[]
+    if [ n == 'flipper_start_run' ] return lambda flipper_start_run[]
+    if [ n == 'flipper_walk' ] return lambda flipper_walk[]
+    if [ n == 'floater_attack' ] return lambda floater_attack[]
+    if [ n == 'floater_dead' ] return lambda floater_dead[]
+    if [ n == 'floater_fire_blaster' ] return lambda floater_fire_blaster[]
+    if [ n == 'floater_idle' ] return lambda floater_idle[]
+    if [ n == 'floater_melee' ] return lambda floater_melee[]
+    if [ n == 'floater_run' ] return lambda floater_run[]
+    if [ n == 'floater_stand' ] return lambda floater_stand[]
+    if [ n == 'floater_walk' ] return lambda floater_walk[]
+    if [ n == 'floater_wham' ] return lambda floater_wham[]
+    if [ n == 'floater_zap' ] return lambda floater_zap[]
+    if [ n == 'flyer_attack' ] return lambda flyer_attack[]
+    if [ n == 'flyer_check_melee' ] return lambda flyer_check_melee[]
+    if [ n == 'flyer_fireleft' ] return lambda flyer_fireleft[]
+    if [ n == 'flyer_fireright' ] return lambda flyer_fireright[]
+    if [ n == 'flyer_idle' ] return lambda flyer_idle[]
+    if [ n == 'flyer_loop_melee' ] return lambda flyer_loop_melee[]
+    if [ n == 'flyer_melee' ] return lambda flyer_melee[]
+    if [ n == 'flyer_nextmove' ] return lambda flyer_nextmove[]
+    if [ n == 'flyer_pop_blades' ] return lambda flyer_pop_blades[]
+    if [ n == 'flyer_run' ] return lambda flyer_run[]
+    if [ n == 'flyer_slash_left' ] return lambda flyer_slash_left[]
+    if [ n == 'flyer_slash_right' ] return lambda flyer_slash_right[]
+    if [ n == 'flyer_stand' ] return lambda flyer_stand[]
+    if [ n == 'flyer_walk' ] return lambda flyer_walk[]
+    if [ n == 'flymonster_start_go' ] return lambda flymonster_start_go[]
+    if [ n == 'func_clock_think' ] return lambda func_clock_think[]
+    if [ n == 'func_object_release' ] return lambda func_object_release[]
+    if [ n == 'func_timer_think' ] return lambda func_timer_think[]
+    if [ n == 'func_train_find' ] return lambda func_train_find[]
+    if [ n == 'gib_think' ] return lambda gib_think[]
+    if [ n == 'gladiator_attack' ] return lambda gladiator_attack[]
+    if [ n == 'gladiator_cleaver' ] return lambda gladiator_cleaver[]
+    if [ n == 'gladiator_cleaver_swing' ] return lambda gladiator_cleaver_swing[]
+    if [ n == 'gladiator_dead' ] return lambda gladiator_dead[]
+    if [ n == 'gladiator_gun' ] return lambda gladiator_gun[]
+    if [ n == 'gladiator_idle' ] return lambda gladiator_idle[]
+    if [ n == 'gladiator_melee' ] return lambda gladiator_melee[]
+    if [ n == 'gladiator_run' ] return lambda gladiator_run[]
+    if [ n == 'gladiator_search' ] return lambda gladiator_search[]
+    if [ n == 'gladiator_stand' ] return lambda gladiator_stand[]
+    if [ n == 'gladiator_walk' ] return lambda gladiator_walk[]
+    if [ n == 'grenade_explode' ] return lambda grenade_explode[]
+    if [ n == 'gunner_attack' ] return lambda gunner_attack[]
+    if [ n == 'gunner_dead' ] return lambda gunner_dead[]
+    if [ n == 'gunner_duck_down' ] return lambda gunner_duck_down[]
+    if [ n == 'gunner_duck_hold' ] return lambda gunner_duck_hold[]
+    if [ n == 'gunner_duck_up' ] return lambda gunner_duck_up[]
+    if [ n == 'gunner_fidget' ] return lambda gunner_fidget[]
+    if [ n == 'gunner_fire' ] return lambda gunner_fire[]
+    if [ n == 'gunner_fire_chain' ] return lambda gunner_fire_chain[]
+    if [ n == 'gunner_grenade' ] return lambda gunner_grenade[]
+    if [ n == 'gunner_idlesound' ] return lambda gunner_idlesound[]
+    if [ n == 'gunner_opengun' ] return lambda gunner_opengun[]
+    if [ n == 'gunner_refire_chain' ] return lambda gunner_refire_chain[]
+    if [ n == 'gunner_run' ] return lambda gunner_run[]
+    if [ n == 'gunner_search' ] return lambda gunner_search[]
+    if [ n == 'gunner_stand' ] return lambda gunner_stand[]
+    if [ n == 'gunner_walk' ] return lambda gunner_walk[]
+    if [ n == 'hover_attack' ] return lambda hover_attack[]
+    if [ n == 'hover_dead' ] return lambda hover_dead[]
+    if [ n == 'hover_deadthink' ] return lambda hover_deadthink[]
+    if [ n == 'hover_fire_blaster' ] return lambda hover_fire_blaster[]
+    if [ n == 'hover_reattack' ] return lambda hover_reattack[]
+    if [ n == 'hover_run' ] return lambda hover_run[]
+    if [ n == 'hover_search' ] return lambda hover_search[]
+    if [ n == 'hover_stand' ] return lambda hover_stand[]
+    if [ n == 'hover_start_attack' ] return lambda hover_start_attack[]
+    if [ n == 'hover_walk' ] return lambda hover_walk[]
+    if [ n == 'infantry_attack' ] return lambda infantry_attack[]
+    if [ n == 'infantry_cock_gun' ] return lambda infantry_cock_gun[]
+    if [ n == 'infantry_dead' ] return lambda infantry_dead[]
+    if [ n == 'infantry_duck_down' ] return lambda infantry_duck_down[]
+    if [ n == 'infantry_duck_hold' ] return lambda infantry_duck_hold[]
+    if [ n == 'infantry_duck_up' ] return lambda infantry_duck_up[]
+    if [ n == 'infantry_fidget' ] return lambda infantry_fidget[]
+    if [ n == 'infantry_fire' ] return lambda infantry_fire[]
+    if [ n == 'infantry_machinegun' ] return lambda infantry_machinegun[]
+    if [ n == 'infantry_run' ] return lambda infantry_run[]
+    if [ n == 'infantry_smack' ] return lambda infantry_smack[]
+    if [ n == 'infantry_stand' ] return lambda infantry_stand[]
+    if [ n == 'infantry_swing' ] return lambda infantry_swing[]
+    if [ n == 'infantry_walk' ] return lambda infantry_walk[]
+    if [ n == 'insane_checkdown' ] return lambda insane_checkdown[]
+    if [ n == 'insane_checkup' ] return lambda insane_checkup[]
+    if [ n == 'insane_cross' ] return lambda insane_cross[]
+    if [ n == 'insane_dead' ] return lambda insane_dead[]
+    if [ n == 'insane_fist' ] return lambda insane_fist[]
+    if [ n == 'insane_moan' ] return lambda insane_moan[]
+    if [ n == 'insane_onground' ] return lambda insane_onground[]
+    if [ n == 'insane_run' ] return lambda insane_run[]
+    if [ n == 'insane_scream' ] return lambda insane_scream[]
+    if [ n == 'insane_shake' ] return lambda insane_shake[]
+    if [ n == 'insane_stand' ] return lambda insane_stand[]
+    if [ n == 'insane_walk' ] return lambda insane_walk[]
+    if [ n == 'jorg_attack' ] return lambda jorg_attack[]
+    if [ n == 'jorg_attack1' ] return lambda jorg_attack1[]
+    if [ n == 'jorg_bfg' ] return lambda jorg_bfg[]
+    if [ n == 'jorg_dead' ] return lambda jorg_dead[]
+    if [ n == 'jorg_firebullet' ] return lambda jorg_firebullet[]
+    if [ n == 'jorg_idle' ] return lambda jorg_idle[]
+    if [ n == 'jorg_reattack1' ] return lambda jorg_reattack1[]
+    if [ n == 'jorg_run' ] return lambda jorg_run[]
+    if [ n == 'jorg_search' ] return lambda jorg_search[]
+    if [ n == 'jorg_stand' ] return lambda jorg_stand[]
+    if [ n == 'jorg_step_left' ] return lambda jorg_step_left[]
+    if [ n == 'jorg_step_right' ] return lambda jorg_step_right[]
+    if [ n == 'jorg_walk' ] return lambda jorg_walk[]
+    if [ n == 'm_droptofloor' ] return lambda m_droptofloor[]
+    if [ n == 'm_flies_off' ] return lambda m_flies_off[]
+    if [ n == 'm_flies_on' ] return lambda m_flies_on[]
+    if [ n == 'machinegun_fire' ] return lambda machinegun_fire[]
+    if [ n == 'makron_attack' ] return lambda makron_attack[]
+    if [ n == 'makron_bfg' ] return lambda makron_bfg[]
+    if [ n == 'makron_brainsplorch' ] return lambda makron_brainsplorch[]
+    if [ n == 'makron_dead' ] return lambda makron_dead[]
+    if [ n == 'makron_hit' ] return lambda makron_hit[]
+    if [ n == 'makron_hyperblaster' ] return lambda makron_hyperblaster[]
+    if [ n == 'makron_popup' ] return lambda makron_popup[]
+    if [ n == 'makron_prerailgun' ] return lambda makron_prerailgun[]
+    if [ n == 'makron_railgun' ] return lambda makron_railgun[]
+    if [ n == 'makron_run' ] return lambda makron_run[]
+    if [ n == 'makron_saveloc' ] return lambda makron_saveloc[]
+    if [ n == 'makron_spawn' ] return lambda makron_spawn[]
+    if [ n == 'makron_stand' ] return lambda makron_stand[]
+    if [ n == 'makron_step_left' ] return lambda makron_step_left[]
+    if [ n == 'makron_step_right' ] return lambda makron_step_right[]
+    if [ n == 'makron_taunt' ] return lambda makron_taunt[]
+    if [ n == 'makron_torso_think' ] return lambda makron_torso_think[]
+    if [ n == 'makron_toss' ] return lambda makron_toss[]
+    if [ n == 'makron_walk' ] return lambda makron_walk[]
+    if [ n == 'medic_attack' ] return lambda medic_attack[]
+    if [ n == 'medic_cable_attack' ] return lambda medic_cable_attack[]
+    if [ n == 'medic_continue' ] return lambda medic_continue[]
+    if [ n == 'medic_dead' ] return lambda medic_dead[]
+    if [ n == 'medic_duck_down' ] return lambda medic_duck_down[]
+    if [ n == 'medic_duck_hold' ] return lambda medic_duck_hold[]
+    if [ n == 'medic_duck_up' ] return lambda medic_duck_up[]
+    if [ n == 'medic_fire_blaster' ] return lambda medic_fire_blaster[]
+    if [ n == 'medic_hook_launch' ] return lambda medic_hook_launch[]
+    if [ n == 'medic_hook_retract' ] return lambda medic_hook_retract[]
+    if [ n == 'medic_idle' ] return lambda medic_idle[]
+    if [ n == 'medic_run' ] return lambda medic_run[]
+    if [ n == 'medic_search' ] return lambda medic_search[]
+    if [ n == 'medic_stand' ] return lambda medic_stand[]
+    if [ n == 'medic_walk' ] return lambda medic_walk[]
+    if [ n == 'megahealth_think' ] return lambda megahealth_think[]
+    if [ n == 'misc_banner_think' ] return lambda misc_banner_think[]
+    if [ n == 'misc_blackhole_think' ] return lambda misc_blackhole_think[]
+    if [ n == 'misc_easterchick2_think' ] return lambda misc_easterchick2_think[]
+    if [ n == 'misc_easterchick_think' ] return lambda misc_easterchick_think[]
+    if [ n == 'misc_eastertank_think' ] return lambda misc_eastertank_think[]
+    if [ n == 'misc_satellite_dish_think' ] return lambda misc_satellite_dish_think[]
+    if [ n == 'misc_viper_bomb_prethink' ] return lambda misc_viper_bomb_prethink[]
+    if [ n == 'monster_think' ] return lambda monster_think[]
+    if [ n == 'monster_triggered_spawn' ] return lambda monster_triggered_spawn[]
+    if [ n == 'move_begin' ] return lambda move_begin[]
+    if [ n == 'move_done' ] return lambda move_done[]
+    if [ n == 'move_final' ] return lambda move_final[]
+    if [ n == 'multi_wait' ] return lambda multi_wait[]
+    if [ n == 'mutant_check_landing' ] return lambda mutant_check_landing[]
+    if [ n == 'mutant_check_refire' ] return lambda mutant_check_refire[]
+    if [ n == 'mutant_dead' ] return lambda mutant_dead[]
+    if [ n == 'mutant_hit_left' ] return lambda mutant_hit_left[]
+    if [ n == 'mutant_hit_right' ] return lambda mutant_hit_right[]
+    if [ n == 'mutant_idle' ] return lambda mutant_idle[]
+    if [ n == 'mutant_idle_loop' ] return lambda mutant_idle_loop[]
+    if [ n == 'mutant_jump' ] return lambda mutant_jump[]
+    if [ n == 'mutant_jump_takeoff' ] return lambda mutant_jump_takeoff[]
+    if [ n == 'mutant_melee' ] return lambda mutant_melee[]
+    if [ n == 'mutant_run' ] return lambda mutant_run[]
+    if [ n == 'mutant_search' ] return lambda mutant_search[]
+    if [ n == 'mutant_stand' ] return lambda mutant_stand[]
+    if [ n == 'mutant_step' ] return lambda mutant_step[]
+    if [ n == 'mutant_walk' ] return lambda mutant_walk[]
+    if [ n == 'mutant_walk_loop' ] return lambda mutant_walk_loop[]
+    if [ n == 'parasite_attack' ] return lambda parasite_attack[]
+    if [ n == 'parasite_dead' ] return lambda parasite_dead[]
+    if [ n == 'parasite_do_fidget' ] return lambda parasite_do_fidget[]
+    if [ n == 'parasite_drain_attack' ] return lambda parasite_drain_attack[]
+    if [ n == 'parasite_idle' ] return lambda parasite_idle[]
+    if [ n == 'parasite_launch' ] return lambda parasite_launch[]
+    if [ n == 'parasite_reel_in' ] return lambda parasite_reel_in[]
+    if [ n == 'parasite_refidget' ] return lambda parasite_refidget[]
+    if [ n == 'parasite_run' ] return lambda parasite_run[]
+    if [ n == 'parasite_scratch' ] return lambda parasite_scratch[]
+    if [ n == 'parasite_stand' ] return lambda parasite_stand[]
+    if [ n == 'parasite_start_run' ] return lambda parasite_start_run[]
+    if [ n == 'parasite_start_walk' ] return lambda parasite_start_walk[]
+    if [ n == 'parasite_tap' ] return lambda parasite_tap[]
+    if [ n == 'parasite_walk' ] return lambda parasite_walk[]
+    if [ n == 'plat_go_down' ] return lambda plat_go_down[]
+    if [ n == 'plat_hit_bottom' ] return lambda plat_hit_bottom[]
+    if [ n == 'plat_hit_top' ] return lambda plat_hit_top[]
+    if [ n == 'remove_edict' ] return lambda remove_edict[]
+    if [ n == 'soldier_attack' ] return lambda soldier_attack[]
+    if [ n == 'soldier_attack1_refire1' ] return lambda soldier_attack1_refire1[]
+    if [ n == 'soldier_attack1_refire2' ] return lambda soldier_attack1_refire2[]
+    if [ n == 'soldier_attack2_refire1' ] return lambda soldier_attack2_refire1[]
+    if [ n == 'soldier_attack2_refire2' ] return lambda soldier_attack2_refire2[]
+    if [ n == 'soldier_attack3_refire' ] return lambda soldier_attack3_refire[]
+    if [ n == 'soldier_attack6_refire' ] return lambda soldier_attack6_refire[]
+    if [ n == 'soldier_cock' ] return lambda soldier_cock[]
+    if [ n == 'soldier_dead' ] return lambda soldier_dead[]
+    if [ n == 'soldier_duck_down' ] return lambda soldier_duck_down[]
+    if [ n == 'soldier_duck_hold' ] return lambda soldier_duck_hold[]
+    if [ n == 'soldier_duck_up' ] return lambda soldier_duck_up[]
+    if [ n == 'soldier_fire1' ] return lambda soldier_fire1[]
+    if [ n == 'soldier_fire2' ] return lambda soldier_fire2[]
+    if [ n == 'soldier_fire3' ] return lambda soldier_fire3[]
+    if [ n == 'soldier_fire4' ] return lambda soldier_fire4[]
+    if [ n == 'soldier_fire6' ] return lambda soldier_fire6[]
+    if [ n == 'soldier_fire7' ] return lambda soldier_fire7[]
+    if [ n == 'soldier_fire8' ] return lambda soldier_fire8[]
+    if [ n == 'soldier_idle' ] return lambda soldier_idle[]
+    if [ n == 'soldier_run' ] return lambda soldier_run[]
+    if [ n == 'soldier_stand' ] return lambda soldier_stand[]
+    if [ n == 'soldier_walk' ] return lambda soldier_walk[]
+    if [ n == 'soldier_walk1_random' ] return lambda soldier_walk1_random[]
+    if [ n == 'supertank_attack' ] return lambda supertank_attack[]
+    if [ n == 'supertank_dead' ] return lambda supertank_dead[]
+    if [ n == 'supertank_machinegun' ] return lambda supertank_machinegun[]
+    if [ n == 'supertank_reattack1' ] return lambda supertank_reattack1[]
+    if [ n == 'supertank_rocket' ] return lambda supertank_rocket[]
+    if [ n == 'supertank_run' ] return lambda supertank_run[]
+    if [ n == 'supertank_search' ] return lambda supertank_search[]
+    if [ n == 'supertank_stand' ] return lambda supertank_stand[]
+    if [ n == 'supertank_tread' ] return lambda supertank_tread[]
+    if [ n == 'supertank_walk' ] return lambda supertank_walk[]
+    if [ n == 'swimmonster_start_go' ] return lambda swimmonster_start_go[]
+    if [ n == 'tank_attack' ] return lambda tank_attack[]
+    if [ n == 'tank_blaster' ] return lambda tank_blaster[]
+    if [ n == 'tank_dead' ] return lambda tank_dead[]
+    if [ n == 'tank_doattack_rocket' ] return lambda tank_doattack_rocket[]
+    if [ n == 'tank_footstep' ] return lambda tank_footstep[]
+    if [ n == 'tank_idle' ] return lambda tank_idle[]
+    if [ n == 'tank_machinegun' ] return lambda tank_machinegun[]
+    if [ n == 'tank_poststrike' ] return lambda tank_poststrike[]
+    if [ n == 'tank_reattack_blaster' ] return lambda tank_reattack_blaster[]
+    if [ n == 'tank_refire_rocket' ] return lambda tank_refire_rocket[]
+    if [ n == 'tank_rocket' ] return lambda tank_rocket[]
+    if [ n == 'tank_run' ] return lambda tank_run[]
+    if [ n == 'tank_stand' ] return lambda tank_stand[]
+    if [ n == 'tank_strike' ] return lambda tank_strike[]
+    if [ n == 'tank_thud' ] return lambda tank_thud[]
+    if [ n == 'tank_walk' ] return lambda tank_walk[]
+    if [ n == 'tank_windup' ] return lambda tank_windup[]
+    if [ n == 'target_crosslevel_target_think' ] return lambda target_crosslevel_target_think[]
+    if [ n == 'target_earthquake_think' ] return lambda target_earthquake_think[]
+    if [ n == 'target_explosion_explode' ] return lambda target_explosion_explode[]
+    if [ n == 'target_laser_start' ] return lambda target_laser_start[]
+    if [ n == 'target_laser_think' ] return lambda target_laser_think[]
+    if [ n == 'target_lightramp_think' ] return lambda target_lightramp_think[]
+    if [ n == 'th_viewthing' ] return lambda th_viewthing[]
+    if [ n == 'think_accel_move' ] return lambda think_accel_move[]
+    if [ n == 'think_boss3_stand' ] return lambda think_boss3_stand[]
+    if [ n == 'think_calc_move_speed' ] return lambda think_calc_move_speed[]
+    if [ n == 'think_delay' ] return lambda think_delay[]
+    if [ n == 'think_spawn_door_trigger' ] return lambda think_spawn_door_trigger[]
+    if [ n == 'train_next' ] return lambda train_next[]
+    if [ n == 'train_wait' ] return lambda train_wait[]
+    if [ n == 'trigger_elevator_init' ] return lambda trigger_elevator_init[]
+    if [ n == 'trigger_enable' ] return lambda trigger_enable[]
+    if [ n == 'turret_breach_finish_init' ] return lambda turret_breach_finish_init[]
+    if [ n == 'turret_breach_think' ] return lambda turret_breach_think[]
+    if [ n == 'turret_driver_link' ] return lambda turret_driver_link[]
+    if [ n == 'turret_driver_think' ] return lambda turret_driver_think[]
+    if [ n == 'use_areaportal' ] return lambda use_areaportal[]
+    if [ n == 'use_plat' ] return lambda use_plat[]
+    if [ n == 'walkmonster_start_go' ] return lambda walkmonster_start_go[]
+    if [ n == 'weapon_bfg' ] return lambda weapon_bfg[]
+    if [ n == 'weapon_bfg_fire' ] return lambda weapon_bfg_fire[]
+    if [ n == 'weapon_blaster' ] return lambda weapon_blaster[]
+    if [ n == 'weapon_blaster_fire' ] return lambda weapon_blaster_fire[]
+    if [ n == 'weapon_chaingun' ] return lambda weapon_chaingun[]
+    if [ n == 'weapon_grenade' ] return lambda weapon_grenade[]
+    if [ n == 'weapon_grenadelauncher' ] return lambda weapon_grenadelauncher[]
+    if [ n == 'weapon_grenadelauncher_fire' ] return lambda weapon_grenadelauncher_fire[]
+    if [ n == 'weapon_hyperblaster' ] return lambda weapon_hyperblaster[]
+    if [ n == 'weapon_hyperblaster_fire' ] return lambda weapon_hyperblaster_fire[]
+    if [ n == 'weapon_machinegun' ] return lambda weapon_machinegun[]
+    if [ n == 'weapon_railgun' ] return lambda weapon_railgun[]
+    if [ n == 'weapon_railgun_fire' ] return lambda weapon_railgun_fire[]
+    if [ n == 'weapon_rocketlauncher' ] return lambda weapon_rocketlauncher[]
+    if [ n == 'weapon_rocketlauncher_fire' ] return lambda weapon_rocketlauncher_fire[]
+    if [ n == 'weapon_shotgun' ] return lambda weapon_shotgun[]
+    if [ n == 'weapon_shotgun_fire' ] return lambda weapon_shotgun_fire[]
+    if [ n == 'weapon_supershotgun' ] return lambda weapon_supershotgun[]
+    if [ n == 'weapon_supershotgun_fire' ] return lambda weapon_supershotgun_fire[]
+    return null
+
+# 6 functions of one shape, by name
+func lam_name_1 [ f: lambda none [ Edict, Edict, f32 ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda brain_dodge[] ] return 'brain_dodge'
+    if [ f == lambda chick_dodge[] ] return 'chick_dodge'
+    if [ f == lambda gunner_dodge[] ] return 'gunner_dodge'
+    if [ f == lambda infantry_dodge[] ] return 'infantry_dodge'
+    if [ f == lambda medic_dodge[] ] return 'medic_dodge'
+    if [ f == lambda soldier_dodge[] ] return 'soldier_dodge'
+    return null
+
+func lam_find_1 [ n: string ] -> lambda none [ Edict, Edict, f32 ]
+    if [ !n ] return null
+    if [ n == 'brain_dodge' ] return lambda brain_dodge[]
+    if [ n == 'chick_dodge' ] return lambda chick_dodge[]
+    if [ n == 'gunner_dodge' ] return lambda gunner_dodge[]
+    if [ n == 'infantry_dodge' ] return lambda infantry_dodge[]
+    if [ n == 'medic_dodge' ] return lambda medic_dodge[]
+    if [ n == 'soldier_dodge' ] return lambda soldier_dodge[]
+    return null
+
+# 50 functions of one shape, by name
+func lam_name_2 [ f: lambda none [ Edict, Edict ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda barrel_touch[] ] return 'barrel_touch'
+    if [ f == lambda berserk_sight[] ] return 'berserk_sight'
+    if [ f == lambda bfg_touch[] ] return 'bfg_touch'
+    if [ f == lambda blaster_touch[] ] return 'blaster_touch'
+    if [ f == lambda brain_sight[] ] return 'brain_sight'
+    if [ f == lambda button_killed[] ] return 'button_killed'
+    if [ f == lambda button_touch[] ] return 'button_touch'
+    if [ f == lambda chick_sight[] ] return 'chick_sight'
+    if [ f == lambda door_blocked[] ] return 'door_blocked'
+    if [ f == lambda door_killed[] ] return 'door_killed'
+    if [ f == lambda door_secret_blocked[] ] return 'door_secret_blocked'
+    if [ f == lambda door_secret_die[] ] return 'door_secret_die'
+    if [ f == lambda door_touch[] ] return 'door_touch'
+    if [ f == lambda drop_temp_touch[] ] return 'drop_temp_touch'
+    if [ f == lambda flipper_sight[] ] return 'flipper_sight'
+    if [ f == lambda floater_sight[] ] return 'floater_sight'
+    if [ f == lambda flyer_sight[] ] return 'flyer_sight'
+    if [ f == lambda func_object_touch[] ] return 'func_object_touch'
+    if [ f == lambda gib_touch[] ] return 'gib_touch'
+    if [ f == lambda gladiator_sight[] ] return 'gladiator_sight'
+    if [ f == lambda grenade_touch[] ] return 'grenade_touch'
+    if [ f == lambda gunner_sight[] ] return 'gunner_sight'
+    if [ f == lambda hover_sight[] ] return 'hover_sight'
+    if [ f == lambda hurt_touch[] ] return 'hurt_touch'
+    if [ f == lambda infantry_sight[] ] return 'infantry_sight'
+    if [ f == lambda makron_sight[] ] return 'makron_sight'
+    if [ f == lambda medic_sight[] ] return 'medic_sight'
+    if [ f == lambda misc_viper_bomb_touch[] ] return 'misc_viper_bomb_touch'
+    if [ f == lambda mutant_jump_touch[] ] return 'mutant_jump_touch'
+    if [ f == lambda mutant_sight[] ] return 'mutant_sight'
+    if [ f == lambda parasite_sight[] ] return 'parasite_sight'
+    if [ f == lambda path_corner_touch[] ] return 'path_corner_touch'
+    if [ f == lambda plat_blocked[] ] return 'plat_blocked'
+    if [ f == lambda point_combat_touch[] ] return 'point_combat_touch'
+    if [ f == lambda rocket_touch[] ] return 'rocket_touch'
+    if [ f == lambda rotating_blocked[] ] return 'rotating_blocked'
+    if [ f == lambda rotating_touch[] ] return 'rotating_touch'
+    if [ f == lambda soldier_sight[] ] return 'soldier_sight'
+    if [ f == lambda tank_sight[] ] return 'tank_sight'
+    if [ f == lambda target_actor_touch[] ] return 'target_actor_touch'
+    if [ f == lambda teleporter_touch[] ] return 'teleporter_touch'
+    if [ f == lambda touch_door_trigger[] ] return 'touch_door_trigger'
+    if [ f == lambda touch_item[] ] return 'touch_item'
+    if [ f == lambda touch_multi[] ] return 'touch_multi'
+    if [ f == lambda touch_plat_center[] ] return 'touch_plat_center'
+    if [ f == lambda train_blocked[] ] return 'train_blocked'
+    if [ f == lambda trigger_gravity_touch[] ] return 'trigger_gravity_touch'
+    if [ f == lambda trigger_monsterjump_touch[] ] return 'trigger_monsterjump_touch'
+    if [ f == lambda trigger_push_touch[] ] return 'trigger_push_touch'
+    if [ f == lambda turret_blocked[] ] return 'turret_blocked'
+    return null
+
+func lam_find_2 [ n: string ] -> lambda none [ Edict, Edict ]
+    if [ !n ] return null
+    if [ n == 'barrel_touch' ] return lambda barrel_touch[]
+    if [ n == 'berserk_sight' ] return lambda berserk_sight[]
+    if [ n == 'bfg_touch' ] return lambda bfg_touch[]
+    if [ n == 'blaster_touch' ] return lambda blaster_touch[]
+    if [ n == 'brain_sight' ] return lambda brain_sight[]
+    if [ n == 'button_killed' ] return lambda button_killed[]
+    if [ n == 'button_touch' ] return lambda button_touch[]
+    if [ n == 'chick_sight' ] return lambda chick_sight[]
+    if [ n == 'door_blocked' ] return lambda door_blocked[]
+    if [ n == 'door_killed' ] return lambda door_killed[]
+    if [ n == 'door_secret_blocked' ] return lambda door_secret_blocked[]
+    if [ n == 'door_secret_die' ] return lambda door_secret_die[]
+    if [ n == 'door_touch' ] return lambda door_touch[]
+    if [ n == 'drop_temp_touch' ] return lambda drop_temp_touch[]
+    if [ n == 'flipper_sight' ] return lambda flipper_sight[]
+    if [ n == 'floater_sight' ] return lambda floater_sight[]
+    if [ n == 'flyer_sight' ] return lambda flyer_sight[]
+    if [ n == 'func_object_touch' ] return lambda func_object_touch[]
+    if [ n == 'gib_touch' ] return lambda gib_touch[]
+    if [ n == 'gladiator_sight' ] return lambda gladiator_sight[]
+    if [ n == 'grenade_touch' ] return lambda grenade_touch[]
+    if [ n == 'gunner_sight' ] return lambda gunner_sight[]
+    if [ n == 'hover_sight' ] return lambda hover_sight[]
+    if [ n == 'hurt_touch' ] return lambda hurt_touch[]
+    if [ n == 'infantry_sight' ] return lambda infantry_sight[]
+    if [ n == 'makron_sight' ] return lambda makron_sight[]
+    if [ n == 'medic_sight' ] return lambda medic_sight[]
+    if [ n == 'misc_viper_bomb_touch' ] return lambda misc_viper_bomb_touch[]
+    if [ n == 'mutant_jump_touch' ] return lambda mutant_jump_touch[]
+    if [ n == 'mutant_sight' ] return lambda mutant_sight[]
+    if [ n == 'parasite_sight' ] return lambda parasite_sight[]
+    if [ n == 'path_corner_touch' ] return lambda path_corner_touch[]
+    if [ n == 'plat_blocked' ] return lambda plat_blocked[]
+    if [ n == 'point_combat_touch' ] return lambda point_combat_touch[]
+    if [ n == 'rocket_touch' ] return lambda rocket_touch[]
+    if [ n == 'rotating_blocked' ] return lambda rotating_blocked[]
+    if [ n == 'rotating_touch' ] return lambda rotating_touch[]
+    if [ n == 'soldier_sight' ] return lambda soldier_sight[]
+    if [ n == 'tank_sight' ] return lambda tank_sight[]
+    if [ n == 'target_actor_touch' ] return lambda target_actor_touch[]
+    if [ n == 'teleporter_touch' ] return lambda teleporter_touch[]
+    if [ n == 'touch_door_trigger' ] return lambda touch_door_trigger[]
+    if [ n == 'touch_item' ] return lambda touch_item[]
+    if [ n == 'touch_multi' ] return lambda touch_multi[]
+    if [ n == 'touch_plat_center' ] return lambda touch_plat_center[]
+    if [ n == 'train_blocked' ] return lambda train_blocked[]
+    if [ n == 'trigger_gravity_touch' ] return lambda trigger_gravity_touch[]
+    if [ n == 'trigger_monsterjump_touch' ] return lambda trigger_monsterjump_touch[]
+    if [ n == 'trigger_push_touch' ] return lambda trigger_push_touch[]
+    if [ n == 'turret_blocked' ] return lambda turret_blocked[]
+    return null
+
+# 5 functions of one shape, by name
+func lam_name_3 [ f: lambda bool [ Edict ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda boss2_checkattack[] ] return 'boss2_checkattack'
+    if [ f == lambda m_check_attack[] ] return 'm_check_attack'
+    if [ f == lambda makron_checkattack[] ] return 'makron_checkattack'
+    if [ f == lambda medic_checkattack[] ] return 'medic_checkattack'
+    if [ f == lambda mutant_checkattack[] ] return 'mutant_checkattack'
+    return null
+
+func lam_find_3 [ n: string ] -> lambda bool [ Edict ]
+    if [ !n ] return null
+    if [ n == 'boss2_checkattack' ] return lambda boss2_checkattack[]
+    if [ n == 'm_check_attack' ] return lambda m_check_attack[]
+    if [ n == 'makron_checkattack' ] return lambda makron_checkattack[]
+    if [ n == 'medic_checkattack' ] return lambda medic_checkattack[]
+    if [ n == 'mutant_checkattack' ] return lambda mutant_checkattack[]
+    return null
+
+# 22 functions of one shape, by name
+func lam_name_4 [ f: lambda none [ Edict, Edict, f32, i32 ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda actor_pain[] ] return 'actor_pain'
+    if [ f == lambda berserk_pain[] ] return 'berserk_pain'
+    if [ f == lambda boss2_pain[] ] return 'boss2_pain'
+    if [ f == lambda brain_pain[] ] return 'brain_pain'
+    if [ f == lambda chick_pain[] ] return 'chick_pain'
+    if [ f == lambda flipper_pain[] ] return 'flipper_pain'
+    if [ f == lambda floater_pain[] ] return 'floater_pain'
+    if [ f == lambda flyer_pain[] ] return 'flyer_pain'
+    if [ f == lambda gladiator_pain[] ] return 'gladiator_pain'
+    if [ f == lambda gunner_pain[] ] return 'gunner_pain'
+    if [ f == lambda hover_pain[] ] return 'hover_pain'
+    if [ f == lambda infantry_pain[] ] return 'infantry_pain'
+    if [ f == lambda insane_pain[] ] return 'insane_pain'
+    if [ f == lambda jorg_pain[] ] return 'jorg_pain'
+    if [ f == lambda makron_pain[] ] return 'makron_pain'
+    if [ f == lambda medic_pain[] ] return 'medic_pain'
+    if [ f == lambda mutant_pain[] ] return 'mutant_pain'
+    if [ f == lambda parasite_pain[] ] return 'parasite_pain'
+    if [ f == lambda player_pain[] ] return 'player_pain'
+    if [ f == lambda soldier_pain[] ] return 'soldier_pain'
+    if [ f == lambda supertank_pain[] ] return 'supertank_pain'
+    if [ f == lambda tank_pain[] ] return 'tank_pain'
+    return null
+
+func lam_find_4 [ n: string ] -> lambda none [ Edict, Edict, f32, i32 ]
+    if [ !n ] return null
+    if [ n == 'actor_pain' ] return lambda actor_pain[]
+    if [ n == 'berserk_pain' ] return lambda berserk_pain[]
+    if [ n == 'boss2_pain' ] return lambda boss2_pain[]
+    if [ n == 'brain_pain' ] return lambda brain_pain[]
+    if [ n == 'chick_pain' ] return lambda chick_pain[]
+    if [ n == 'flipper_pain' ] return lambda flipper_pain[]
+    if [ n == 'floater_pain' ] return lambda floater_pain[]
+    if [ n == 'flyer_pain' ] return lambda flyer_pain[]
+    if [ n == 'gladiator_pain' ] return lambda gladiator_pain[]
+    if [ n == 'gunner_pain' ] return lambda gunner_pain[]
+    if [ n == 'hover_pain' ] return lambda hover_pain[]
+    if [ n == 'infantry_pain' ] return lambda infantry_pain[]
+    if [ n == 'insane_pain' ] return lambda insane_pain[]
+    if [ n == 'jorg_pain' ] return lambda jorg_pain[]
+    if [ n == 'makron_pain' ] return lambda makron_pain[]
+    if [ n == 'medic_pain' ] return lambda medic_pain[]
+    if [ n == 'mutant_pain' ] return lambda mutant_pain[]
+    if [ n == 'parasite_pain' ] return lambda parasite_pain[]
+    if [ n == 'player_pain' ] return lambda player_pain[]
+    if [ n == 'soldier_pain' ] return lambda soldier_pain[]
+    if [ n == 'supertank_pain' ] return lambda supertank_pain[]
+    if [ n == 'tank_pain' ] return lambda tank_pain[]
+    return null
+
+# 46 functions of one shape, by name
+func lam_name_5 [ f: lambda none [ Edict, Edict, Edict ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda actor_use[] ] return 'actor_use'
+    if [ f == lambda button_use[] ] return 'button_use'
+    if [ f == lambda commander_body_use[] ] return 'commander_body_use'
+    if [ f == lambda crosslevel_trigger_use[] ] return 'crosslevel_trigger_use'
+    if [ f == lambda door_secret_use[] ] return 'door_secret_use'
+    if [ f == lambda door_use[] ] return 'door_use'
+    if [ f == lambda func_clock_use[] ] return 'func_clock_use'
+    if [ f == lambda func_conveyor_use[] ] return 'func_conveyor_use'
+    if [ f == lambda func_explosive_explode[] ] return 'func_explosive_explode'
+    if [ f == lambda func_explosive_spawn[] ] return 'func_explosive_spawn'
+    if [ f == lambda func_explosive_use[] ] return 'func_explosive_use'
+    if [ f == lambda func_object_use[] ] return 'func_object_use'
+    if [ f == lambda func_timer_use[] ] return 'func_timer_use'
+    if [ f == lambda func_wall_use[] ] return 'func_wall_use'
+    if [ f == lambda hurt_use[] ] return 'hurt_use'
+    if [ f == lambda light_use[] ] return 'light_use'
+    if [ f == lambda misc_blackhole_use[] ] return 'misc_blackhole_use'
+    if [ f == lambda misc_flyby_use[] ] return 'misc_flyby_use'
+    if [ f == lambda misc_satellite_dish_use[] ] return 'misc_satellite_dish_use'
+    if [ f == lambda misc_viper_bomb_use[] ] return 'misc_viper_bomb_use'
+    if [ f == lambda monster_triggered_spawn_use[] ] return 'monster_triggered_spawn_use'
+    if [ f == lambda monster_use[] ] return 'monster_use'
+    if [ f == lambda rotating_use[] ] return 'rotating_use'
+    if [ f == lambda target_earthquake_use[] ] return 'target_earthquake_use'
+    if [ f == lambda target_laser_use[] ] return 'target_laser_use'
+    if [ f == lambda target_lightramp_use[] ] return 'target_lightramp_use'
+    if [ f == lambda target_string_use[] ] return 'target_string_use'
+    if [ f == lambda train_use[] ] return 'train_use'
+    if [ f == lambda trigger_counter_use[] ] return 'trigger_counter_use'
+    if [ f == lambda trigger_elevator_use[] ] return 'trigger_elevator_use'
+    if [ f == lambda trigger_key_use[] ] return 'trigger_key_use'
+    if [ f == lambda trigger_relay_use[] ] return 'trigger_relay_use'
+    if [ f == lambda use_boss3[] ] return 'use_boss3'
+    if [ f == lambda use_item[] ] return 'use_item'
+    if [ f == lambda use_killbox[] ] return 'use_killbox'
+    if [ f == lambda use_multi[] ] return 'use_multi'
+    if [ f == lambda use_target_blaster[] ] return 'use_target_blaster'
+    if [ f == lambda use_target_changelevel[] ] return 'use_target_changelevel'
+    if [ f == lambda use_target_explosion[] ] return 'use_target_explosion'
+    if [ f == lambda use_target_goal[] ] return 'use_target_goal'
+    if [ f == lambda use_target_help[] ] return 'use_target_help'
+    if [ f == lambda use_target_secret[] ] return 'use_target_secret'
+    if [ f == lambda use_target_spawner[] ] return 'use_target_spawner'
+    if [ f == lambda use_target_speaker[] ] return 'use_target_speaker'
+    if [ f == lambda use_target_splash[] ] return 'use_target_splash'
+    if [ f == lambda use_target_tent[] ] return 'use_target_tent'
+    return null
+
+func lam_find_5 [ n: string ] -> lambda none [ Edict, Edict, Edict ]
+    if [ !n ] return null
+    if [ n == 'actor_use' ] return lambda actor_use[]
+    if [ n == 'button_use' ] return lambda button_use[]
+    if [ n == 'commander_body_use' ] return lambda commander_body_use[]
+    if [ n == 'crosslevel_trigger_use' ] return lambda crosslevel_trigger_use[]
+    if [ n == 'door_secret_use' ] return lambda door_secret_use[]
+    if [ n == 'door_use' ] return lambda door_use[]
+    if [ n == 'func_clock_use' ] return lambda func_clock_use[]
+    if [ n == 'func_conveyor_use' ] return lambda func_conveyor_use[]
+    if [ n == 'func_explosive_explode' ] return lambda func_explosive_explode[]
+    if [ n == 'func_explosive_spawn' ] return lambda func_explosive_spawn[]
+    if [ n == 'func_explosive_use' ] return lambda func_explosive_use[]
+    if [ n == 'func_object_use' ] return lambda func_object_use[]
+    if [ n == 'func_timer_use' ] return lambda func_timer_use[]
+    if [ n == 'func_wall_use' ] return lambda func_wall_use[]
+    if [ n == 'hurt_use' ] return lambda hurt_use[]
+    if [ n == 'light_use' ] return lambda light_use[]
+    if [ n == 'misc_blackhole_use' ] return lambda misc_blackhole_use[]
+    if [ n == 'misc_flyby_use' ] return lambda misc_flyby_use[]
+    if [ n == 'misc_satellite_dish_use' ] return lambda misc_satellite_dish_use[]
+    if [ n == 'misc_viper_bomb_use' ] return lambda misc_viper_bomb_use[]
+    if [ n == 'monster_triggered_spawn_use' ] return lambda monster_triggered_spawn_use[]
+    if [ n == 'monster_use' ] return lambda monster_use[]
+    if [ n == 'rotating_use' ] return lambda rotating_use[]
+    if [ n == 'target_earthquake_use' ] return lambda target_earthquake_use[]
+    if [ n == 'target_laser_use' ] return lambda target_laser_use[]
+    if [ n == 'target_lightramp_use' ] return lambda target_lightramp_use[]
+    if [ n == 'target_string_use' ] return lambda target_string_use[]
+    if [ n == 'train_use' ] return lambda train_use[]
+    if [ n == 'trigger_counter_use' ] return lambda trigger_counter_use[]
+    if [ n == 'trigger_elevator_use' ] return lambda trigger_elevator_use[]
+    if [ n == 'trigger_key_use' ] return lambda trigger_key_use[]
+    if [ n == 'trigger_relay_use' ] return lambda trigger_relay_use[]
+    if [ n == 'use_boss3' ] return lambda use_boss3[]
+    if [ n == 'use_item' ] return lambda use_item[]
+    if [ n == 'use_killbox' ] return lambda use_killbox[]
+    if [ n == 'use_multi' ] return lambda use_multi[]
+    if [ n == 'use_target_blaster' ] return lambda use_target_blaster[]
+    if [ n == 'use_target_changelevel' ] return lambda use_target_changelevel[]
+    if [ n == 'use_target_explosion' ] return lambda use_target_explosion[]
+    if [ n == 'use_target_goal' ] return lambda use_target_goal[]
+    if [ n == 'use_target_help' ] return lambda use_target_help[]
+    if [ n == 'use_target_secret' ] return lambda use_target_secret[]
+    if [ n == 'use_target_spawner' ] return lambda use_target_spawner[]
+    if [ n == 'use_target_speaker' ] return lambda use_target_speaker[]
+    if [ n == 'use_target_splash' ] return lambda use_target_splash[]
+    if [ n == 'use_target_tent' ] return lambda use_target_tent[]
+    return null
+
+# 28 functions of one shape, by name
+func lam_name_6 [ f: lambda none [ Edict, Edict, Edict, i32, vec3f ] ] -> string
+    if [ !f ] return null
+    if [ f == lambda actor_die[] ] return 'actor_die'
+    if [ f == lambda barrel_delay[] ] return 'barrel_delay'
+    if [ f == lambda berserk_die[] ] return 'berserk_die'
+    if [ f == lambda body_die[] ] return 'body_die'
+    if [ f == lambda boss2_die[] ] return 'boss2_die'
+    if [ f == lambda brain_die[] ] return 'brain_die'
+    if [ f == lambda chick_die[] ] return 'chick_die'
+    if [ f == lambda debris_die[] ] return 'debris_die'
+    if [ f == lambda flipper_die[] ] return 'flipper_die'
+    if [ f == lambda floater_die[] ] return 'floater_die'
+    if [ f == lambda flyer_die[] ] return 'flyer_die'
+    if [ f == lambda gib_die[] ] return 'gib_die'
+    if [ f == lambda gladiator_die[] ] return 'gladiator_die'
+    if [ f == lambda gunner_die[] ] return 'gunner_die'
+    if [ f == lambda hover_die[] ] return 'hover_die'
+    if [ f == lambda infantry_die[] ] return 'infantry_die'
+    if [ f == lambda insane_die[] ] return 'insane_die'
+    if [ f == lambda jorg_die[] ] return 'jorg_die'
+    if [ f == lambda makron_die[] ] return 'makron_die'
+    if [ f == lambda medic_die[] ] return 'medic_die'
+    if [ f == lambda misc_deadsoldier_die[] ] return 'misc_deadsoldier_die'
+    if [ f == lambda mutant_die[] ] return 'mutant_die'
+    if [ f == lambda parasite_die[] ] return 'parasite_die'
+    if [ f == lambda player_die[] ] return 'player_die'
+    if [ f == lambda soldier_die[] ] return 'soldier_die'
+    if [ f == lambda supertank_die[] ] return 'supertank_die'
+    if [ f == lambda tank_die[] ] return 'tank_die'
+    if [ f == lambda turret_driver_die[] ] return 'turret_driver_die'
+    return null
+
+func lam_find_6 [ n: string ] -> lambda none [ Edict, Edict, Edict, i32, vec3f ]
+    if [ !n ] return null
+    if [ n == 'actor_die' ] return lambda actor_die[]
+    if [ n == 'barrel_delay' ] return lambda barrel_delay[]
+    if [ n == 'berserk_die' ] return lambda berserk_die[]
+    if [ n == 'body_die' ] return lambda body_die[]
+    if [ n == 'boss2_die' ] return lambda boss2_die[]
+    if [ n == 'brain_die' ] return lambda brain_die[]
+    if [ n == 'chick_die' ] return lambda chick_die[]
+    if [ n == 'debris_die' ] return lambda debris_die[]
+    if [ n == 'flipper_die' ] return lambda flipper_die[]
+    if [ n == 'floater_die' ] return lambda floater_die[]
+    if [ n == 'flyer_die' ] return lambda flyer_die[]
+    if [ n == 'gib_die' ] return lambda gib_die[]
+    if [ n == 'gladiator_die' ] return lambda gladiator_die[]
+    if [ n == 'gunner_die' ] return lambda gunner_die[]
+    if [ n == 'hover_die' ] return lambda hover_die[]
+    if [ n == 'infantry_die' ] return lambda infantry_die[]
+    if [ n == 'insane_die' ] return lambda insane_die[]
+    if [ n == 'jorg_die' ] return lambda jorg_die[]
+    if [ n == 'makron_die' ] return lambda makron_die[]
+    if [ n == 'medic_die' ] return lambda medic_die[]
+    if [ n == 'misc_deadsoldier_die' ] return lambda misc_deadsoldier_die[]
+    if [ n == 'mutant_die' ] return lambda mutant_die[]
+    if [ n == 'parasite_die' ] return lambda parasite_die[]
+    if [ n == 'player_die' ] return lambda player_die[]
+    if [ n == 'soldier_die' ] return lambda soldier_die[]
+    if [ n == 'supertank_die' ] return lambda supertank_die[]
+    if [ n == 'tank_die' ] return lambda tank_die[]
+    if [ n == 'turret_driver_die' ] return lambda turret_driver_die[]
+    return null
+
+func save_move_name [ m: MMove ] -> string
+    if [ !m ] return null
+    if [ m == actor_move_stand ] return 'actor_move_stand'
+    if [ m == actor_move_walk ] return 'actor_move_walk'
+    if [ m == actor_move_run ] return 'actor_move_run'
+    if [ m == actor_move_pain1 ] return 'actor_move_pain1'
+    if [ m == actor_move_pain2 ] return 'actor_move_pain2'
+    if [ m == actor_move_pain3 ] return 'actor_move_pain3'
+    if [ m == actor_move_flipoff ] return 'actor_move_flipoff'
+    if [ m == actor_move_taunt ] return 'actor_move_taunt'
+    if [ m == actor_move_death1 ] return 'actor_move_death1'
+    if [ m == actor_move_death2 ] return 'actor_move_death2'
+    if [ m == actor_move_attack ] return 'actor_move_attack'
+    if [ m == berserk_move_stand ] return 'berserk_move_stand'
+    if [ m == berserk_move_stand_fidget ] return 'berserk_move_stand_fidget'
+    if [ m == berserk_move_walk ] return 'berserk_move_walk'
+    if [ m == berserk_move_run1 ] return 'berserk_move_run1'
+    if [ m == berserk_move_attack_spike ] return 'berserk_move_attack_spike'
+    if [ m == berserk_move_attack_club ] return 'berserk_move_attack_club'
+    if [ m == berserk_move_attack_strike ] return 'berserk_move_attack_strike'
+    if [ m == berserk_move_pain1 ] return 'berserk_move_pain1'
+    if [ m == berserk_move_pain2 ] return 'berserk_move_pain2'
+    if [ m == berserk_move_death1 ] return 'berserk_move_death1'
+    if [ m == berserk_move_death2 ] return 'berserk_move_death2'
+    if [ m == boss2_move_stand ] return 'boss2_move_stand'
+    if [ m == boss2_move_fidget ] return 'boss2_move_fidget'
+    if [ m == boss2_move_walk ] return 'boss2_move_walk'
+    if [ m == boss2_move_run ] return 'boss2_move_run'
+    if [ m == boss2_move_attack_pre_mg ] return 'boss2_move_attack_pre_mg'
+    if [ m == boss2_move_attack_mg ] return 'boss2_move_attack_mg'
+    if [ m == boss2_move_attack_post_mg ] return 'boss2_move_attack_post_mg'
+    if [ m == boss2_move_attack_rocket ] return 'boss2_move_attack_rocket'
+    if [ m == boss2_move_pain_heavy ] return 'boss2_move_pain_heavy'
+    if [ m == boss2_move_pain_light ] return 'boss2_move_pain_light'
+    if [ m == boss2_move_death ] return 'boss2_move_death'
+    if [ m == brain_move_stand ] return 'brain_move_stand'
+    if [ m == brain_move_idle ] return 'brain_move_idle'
+    if [ m == brain_move_walk1 ] return 'brain_move_walk1'
+    if [ m == brain_move_defense ] return 'brain_move_defense'
+    if [ m == brain_move_pain3 ] return 'brain_move_pain3'
+    if [ m == brain_move_pain2 ] return 'brain_move_pain2'
+    if [ m == brain_move_pain1 ] return 'brain_move_pain1'
+    if [ m == brain_move_duck ] return 'brain_move_duck'
+    if [ m == brain_move_death2 ] return 'brain_move_death2'
+    if [ m == brain_move_death1 ] return 'brain_move_death1'
+    if [ m == brain_move_attack1 ] return 'brain_move_attack1'
+    if [ m == brain_move_attack2 ] return 'brain_move_attack2'
+    if [ m == brain_move_run ] return 'brain_move_run'
+    if [ m == chick_move_fidget ] return 'chick_move_fidget'
+    if [ m == chick_move_stand ] return 'chick_move_stand'
+    if [ m == chick_move_start_run ] return 'chick_move_start_run'
+    if [ m == chick_move_run ] return 'chick_move_run'
+    if [ m == chick_move_walk ] return 'chick_move_walk'
+    if [ m == chick_move_pain1 ] return 'chick_move_pain1'
+    if [ m == chick_move_pain2 ] return 'chick_move_pain2'
+    if [ m == chick_move_pain3 ] return 'chick_move_pain3'
+    if [ m == chick_move_death2 ] return 'chick_move_death2'
+    if [ m == chick_move_death1 ] return 'chick_move_death1'
+    if [ m == chick_move_duck ] return 'chick_move_duck'
+    if [ m == chick_move_start_attack1 ] return 'chick_move_start_attack1'
+    if [ m == chick_move_attack1 ] return 'chick_move_attack1'
+    if [ m == chick_move_end_attack1 ] return 'chick_move_end_attack1'
+    if [ m == chick_move_slash ] return 'chick_move_slash'
+    if [ m == chick_move_end_slash ] return 'chick_move_end_slash'
+    if [ m == chick_move_start_slash ] return 'chick_move_start_slash'
+    if [ m == flipper_move_stand ] return 'flipper_move_stand'
+    if [ m == flipper_move_run_loop ] return 'flipper_move_run_loop'
+    if [ m == flipper_move_run_start ] return 'flipper_move_run_start'
+    if [ m == flipper_move_walk ] return 'flipper_move_walk'
+    if [ m == flipper_move_start_run ] return 'flipper_move_start_run'
+    if [ m == flipper_move_pain2 ] return 'flipper_move_pain2'
+    if [ m == flipper_move_pain1 ] return 'flipper_move_pain1'
+    if [ m == flipper_move_attack ] return 'flipper_move_attack'
+    if [ m == flipper_move_death ] return 'flipper_move_death'
+    if [ m == floater_move_stand1 ] return 'floater_move_stand1'
+    if [ m == floater_move_stand2 ] return 'floater_move_stand2'
+    if [ m == floater_move_activate ] return 'floater_move_activate'
+    if [ m == floater_move_attack1 ] return 'floater_move_attack1'
+    if [ m == floater_move_attack2 ] return 'floater_move_attack2'
+    if [ m == floater_move_attack3 ] return 'floater_move_attack3'
+    if [ m == floater_move_death ] return 'floater_move_death'
+    if [ m == floater_move_pain1 ] return 'floater_move_pain1'
+    if [ m == floater_move_pain2 ] return 'floater_move_pain2'
+    if [ m == floater_move_pain3 ] return 'floater_move_pain3'
+    if [ m == floater_move_walk ] return 'floater_move_walk'
+    if [ m == floater_move_run ] return 'floater_move_run'
+    if [ m == flyer_move_stand ] return 'flyer_move_stand'
+    if [ m == flyer_move_walk ] return 'flyer_move_walk'
+    if [ m == flyer_move_run ] return 'flyer_move_run'
+    if [ m == flyer_move_start ] return 'flyer_move_start'
+    if [ m == flyer_move_stop ] return 'flyer_move_stop'
+    if [ m == flyer_move_rollright ] return 'flyer_move_rollright'
+    if [ m == flyer_move_rollleft ] return 'flyer_move_rollleft'
+    if [ m == flyer_move_pain3 ] return 'flyer_move_pain3'
+    if [ m == flyer_move_pain2 ] return 'flyer_move_pain2'
+    if [ m == flyer_move_pain1 ] return 'flyer_move_pain1'
+    if [ m == flyer_move_defense ] return 'flyer_move_defense'
+    if [ m == flyer_move_bankright ] return 'flyer_move_bankright'
+    if [ m == flyer_move_bankleft ] return 'flyer_move_bankleft'
+    if [ m == flyer_move_attack2 ] return 'flyer_move_attack2'
+    if [ m == flyer_move_start_melee ] return 'flyer_move_start_melee'
+    if [ m == flyer_move_end_melee ] return 'flyer_move_end_melee'
+    if [ m == flyer_move_loop_melee ] return 'flyer_move_loop_melee'
+    if [ m == gladiator_move_stand ] return 'gladiator_move_stand'
+    if [ m == gladiator_move_walk ] return 'gladiator_move_walk'
+    if [ m == gladiator_move_run ] return 'gladiator_move_run'
+    if [ m == gladiator_move_attack_melee ] return 'gladiator_move_attack_melee'
+    if [ m == gladiator_move_attack_gun ] return 'gladiator_move_attack_gun'
+    if [ m == gladiator_move_pain ] return 'gladiator_move_pain'
+    if [ m == gladiator_move_pain_air ] return 'gladiator_move_pain_air'
+    if [ m == gladiator_move_death ] return 'gladiator_move_death'
+    if [ m == gunner_move_fidget ] return 'gunner_move_fidget'
+    if [ m == gunner_move_stand ] return 'gunner_move_stand'
+    if [ m == gunner_move_walk ] return 'gunner_move_walk'
+    if [ m == gunner_move_run ] return 'gunner_move_run'
+    if [ m == gunner_move_runandshoot ] return 'gunner_move_runandshoot'
+    if [ m == gunner_move_pain3 ] return 'gunner_move_pain3'
+    if [ m == gunner_move_pain2 ] return 'gunner_move_pain2'
+    if [ m == gunner_move_pain1 ] return 'gunner_move_pain1'
+    if [ m == gunner_move_death ] return 'gunner_move_death'
+    if [ m == gunner_move_duck ] return 'gunner_move_duck'
+    if [ m == gunner_move_attack_chain ] return 'gunner_move_attack_chain'
+    if [ m == gunner_move_fire_chain ] return 'gunner_move_fire_chain'
+    if [ m == gunner_move_endfire_chain ] return 'gunner_move_endfire_chain'
+    if [ m == gunner_move_attack_grenade ] return 'gunner_move_attack_grenade'
+    if [ m == hover_move_stand ] return 'hover_move_stand'
+    if [ m == hover_move_stop1 ] return 'hover_move_stop1'
+    if [ m == hover_move_stop2 ] return 'hover_move_stop2'
+    if [ m == hover_move_takeoff ] return 'hover_move_takeoff'
+    if [ m == hover_move_pain3 ] return 'hover_move_pain3'
+    if [ m == hover_move_pain2 ] return 'hover_move_pain2'
+    if [ m == hover_move_pain1 ] return 'hover_move_pain1'
+    if [ m == hover_move_land ] return 'hover_move_land'
+    if [ m == hover_move_forward ] return 'hover_move_forward'
+    if [ m == hover_move_walk ] return 'hover_move_walk'
+    if [ m == hover_move_run ] return 'hover_move_run'
+    if [ m == hover_move_death1 ] return 'hover_move_death1'
+    if [ m == hover_move_backward ] return 'hover_move_backward'
+    if [ m == hover_move_start_attack ] return 'hover_move_start_attack'
+    if [ m == hover_move_attack1 ] return 'hover_move_attack1'
+    if [ m == hover_move_end_attack ] return 'hover_move_end_attack'
+    if [ m == infantry_move_stand ] return 'infantry_move_stand'
+    if [ m == infantry_move_fidget ] return 'infantry_move_fidget'
+    if [ m == infantry_move_walk ] return 'infantry_move_walk'
+    if [ m == infantry_move_run ] return 'infantry_move_run'
+    if [ m == infantry_move_pain1 ] return 'infantry_move_pain1'
+    if [ m == infantry_move_pain2 ] return 'infantry_move_pain2'
+    if [ m == infantry_move_death1 ] return 'infantry_move_death1'
+    if [ m == infantry_move_death2 ] return 'infantry_move_death2'
+    if [ m == infantry_move_death3 ] return 'infantry_move_death3'
+    if [ m == infantry_move_duck ] return 'infantry_move_duck'
+    if [ m == infantry_move_attack1 ] return 'infantry_move_attack1'
+    if [ m == infantry_move_attack2 ] return 'infantry_move_attack2'
+    if [ m == insane_move_stand_normal ] return 'insane_move_stand_normal'
+    if [ m == insane_move_stand_insane ] return 'insane_move_stand_insane'
+    if [ m == insane_move_uptodown ] return 'insane_move_uptodown'
+    if [ m == insane_move_downtoup ] return 'insane_move_downtoup'
+    if [ m == insane_move_jumpdown ] return 'insane_move_jumpdown'
+    if [ m == insane_move_down ] return 'insane_move_down'
+    if [ m == insane_move_walk_normal ] return 'insane_move_walk_normal'
+    if [ m == insane_move_run_normal ] return 'insane_move_run_normal'
+    if [ m == insane_move_walk_insane ] return 'insane_move_walk_insane'
+    if [ m == insane_move_run_insane ] return 'insane_move_run_insane'
+    if [ m == insane_move_stand_pain ] return 'insane_move_stand_pain'
+    if [ m == insane_move_stand_death ] return 'insane_move_stand_death'
+    if [ m == insane_move_crawl ] return 'insane_move_crawl'
+    if [ m == insane_move_runcrawl ] return 'insane_move_runcrawl'
+    if [ m == insane_move_crawl_pain ] return 'insane_move_crawl_pain'
+    if [ m == insane_move_crawl_death ] return 'insane_move_crawl_death'
+    if [ m == insane_move_cross ] return 'insane_move_cross'
+    if [ m == insane_move_struggle_cross ] return 'insane_move_struggle_cross'
+    if [ m == jorg_move_stand ] return 'jorg_move_stand'
+    if [ m == jorg_move_run ] return 'jorg_move_run'
+    if [ m == jorg_move_start_walk ] return 'jorg_move_start_walk'
+    if [ m == jorg_move_walk ] return 'jorg_move_walk'
+    if [ m == jorg_move_end_walk ] return 'jorg_move_end_walk'
+    if [ m == jorg_move_pain3 ] return 'jorg_move_pain3'
+    if [ m == jorg_move_pain2 ] return 'jorg_move_pain2'
+    if [ m == jorg_move_pain1 ] return 'jorg_move_pain1'
+    if [ m == jorg_move_death ] return 'jorg_move_death'
+    if [ m == jorg_move_attack2 ] return 'jorg_move_attack2'
+    if [ m == jorg_move_start_attack1 ] return 'jorg_move_start_attack1'
+    if [ m == jorg_move_attack1 ] return 'jorg_move_attack1'
+    if [ m == jorg_move_end_attack1 ] return 'jorg_move_end_attack1'
+    if [ m == makron_move_stand ] return 'makron_move_stand'
+    if [ m == makron_move_run ] return 'makron_move_run'
+    if [ m == makron_move_walk ] return 'makron_move_walk'
+    if [ m == makron_move_pain6 ] return 'makron_move_pain6'
+    if [ m == makron_move_pain5 ] return 'makron_move_pain5'
+    if [ m == makron_move_pain4 ] return 'makron_move_pain4'
+    if [ m == makron_move_death2 ] return 'makron_move_death2'
+    if [ m == makron_move_death3 ] return 'makron_move_death3'
+    if [ m == makron_move_sight ] return 'makron_move_sight'
+    if [ m == makron_move_attack3 ] return 'makron_move_attack3'
+    if [ m == makron_move_attack4 ] return 'makron_move_attack4'
+    if [ m == makron_move_attack5 ] return 'makron_move_attack5'
+    if [ m == medic_move_stand ] return 'medic_move_stand'
+    if [ m == medic_move_walk ] return 'medic_move_walk'
+    if [ m == medic_move_run ] return 'medic_move_run'
+    if [ m == medic_move_pain1 ] return 'medic_move_pain1'
+    if [ m == medic_move_pain2 ] return 'medic_move_pain2'
+    if [ m == medic_move_death ] return 'medic_move_death'
+    if [ m == medic_move_duck ] return 'medic_move_duck'
+    if [ m == medic_move_attackHyperBlaster ] return 'medic_move_attackHyperBlaster'
+    if [ m == medic_move_attackBlaster ] return 'medic_move_attackBlaster'
+    if [ m == medic_move_attackCable ] return 'medic_move_attackCable'
+    if [ m == mutant_move_stand ] return 'mutant_move_stand'
+    if [ m == mutant_move_idle ] return 'mutant_move_idle'
+    if [ m == mutant_move_walk ] return 'mutant_move_walk'
+    if [ m == mutant_move_start_walk ] return 'mutant_move_start_walk'
+    if [ m == mutant_move_run ] return 'mutant_move_run'
+    if [ m == mutant_move_attack ] return 'mutant_move_attack'
+    if [ m == mutant_move_jump ] return 'mutant_move_jump'
+    if [ m == mutant_move_pain1 ] return 'mutant_move_pain1'
+    if [ m == mutant_move_pain2 ] return 'mutant_move_pain2'
+    if [ m == mutant_move_pain3 ] return 'mutant_move_pain3'
+    if [ m == mutant_move_death1 ] return 'mutant_move_death1'
+    if [ m == mutant_move_death2 ] return 'mutant_move_death2'
+    if [ m == parasite_move_start_fidget ] return 'parasite_move_start_fidget'
+    if [ m == parasite_move_fidget ] return 'parasite_move_fidget'
+    if [ m == parasite_move_end_fidget ] return 'parasite_move_end_fidget'
+    if [ m == parasite_move_stand ] return 'parasite_move_stand'
+    if [ m == parasite_move_run ] return 'parasite_move_run'
+    if [ m == parasite_move_start_run ] return 'parasite_move_start_run'
+    if [ m == parasite_move_stop_run ] return 'parasite_move_stop_run'
+    if [ m == parasite_move_walk ] return 'parasite_move_walk'
+    if [ m == parasite_move_start_walk ] return 'parasite_move_start_walk'
+    if [ m == parasite_move_stop_walk ] return 'parasite_move_stop_walk'
+    if [ m == parasite_move_pain1 ] return 'parasite_move_pain1'
+    if [ m == parasite_move_drain ] return 'parasite_move_drain'
+    if [ m == parasite_move_break ] return 'parasite_move_break'
+    if [ m == parasite_move_death ] return 'parasite_move_death'
+    if [ m == soldier_move_stand1 ] return 'soldier_move_stand1'
+    if [ m == soldier_move_stand3 ] return 'soldier_move_stand3'
+    if [ m == soldier_move_walk1 ] return 'soldier_move_walk1'
+    if [ m == soldier_move_walk2 ] return 'soldier_move_walk2'
+    if [ m == soldier_move_start_run ] return 'soldier_move_start_run'
+    if [ m == soldier_move_run ] return 'soldier_move_run'
+    if [ m == soldier_move_pain1 ] return 'soldier_move_pain1'
+    if [ m == soldier_move_pain2 ] return 'soldier_move_pain2'
+    if [ m == soldier_move_pain3 ] return 'soldier_move_pain3'
+    if [ m == soldier_move_pain4 ] return 'soldier_move_pain4'
+    if [ m == soldier_move_attack1 ] return 'soldier_move_attack1'
+    if [ m == soldier_move_attack2 ] return 'soldier_move_attack2'
+    if [ m == soldier_move_attack3 ] return 'soldier_move_attack3'
+    if [ m == soldier_move_attack4 ] return 'soldier_move_attack4'
+    if [ m == soldier_move_attack6 ] return 'soldier_move_attack6'
+    if [ m == soldier_move_duck ] return 'soldier_move_duck'
+    if [ m == soldier_move_death1 ] return 'soldier_move_death1'
+    if [ m == soldier_move_death2 ] return 'soldier_move_death2'
+    if [ m == soldier_move_death3 ] return 'soldier_move_death3'
+    if [ m == soldier_move_death4 ] return 'soldier_move_death4'
+    if [ m == soldier_move_death5 ] return 'soldier_move_death5'
+    if [ m == soldier_move_death6 ] return 'soldier_move_death6'
+    if [ m == supertank_move_stand ] return 'supertank_move_stand'
+    if [ m == supertank_move_run ] return 'supertank_move_run'
+    if [ m == supertank_move_forward ] return 'supertank_move_forward'
+    if [ m == supertank_move_turn_right ] return 'supertank_move_turn_right'
+    if [ m == supertank_move_turn_left ] return 'supertank_move_turn_left'
+    if [ m == supertank_move_pain3 ] return 'supertank_move_pain3'
+    if [ m == supertank_move_pain2 ] return 'supertank_move_pain2'
+    if [ m == supertank_move_pain1 ] return 'supertank_move_pain1'
+    if [ m == supertank_move_death ] return 'supertank_move_death'
+    if [ m == supertank_move_backward ] return 'supertank_move_backward'
+    if [ m == supertank_move_attack4 ] return 'supertank_move_attack4'
+    if [ m == supertank_move_attack3 ] return 'supertank_move_attack3'
+    if [ m == supertank_move_attack2 ] return 'supertank_move_attack2'
+    if [ m == supertank_move_attack1 ] return 'supertank_move_attack1'
+    if [ m == supertank_move_end_attack1 ] return 'supertank_move_end_attack1'
+    if [ m == tank_move_stand ] return 'tank_move_stand'
+    if [ m == tank_move_start_walk ] return 'tank_move_start_walk'
+    if [ m == tank_move_walk ] return 'tank_move_walk'
+    if [ m == tank_move_stop_walk ] return 'tank_move_stop_walk'
+    if [ m == tank_move_start_run ] return 'tank_move_start_run'
+    if [ m == tank_move_run ] return 'tank_move_run'
+    if [ m == tank_move_stop_run ] return 'tank_move_stop_run'
+    if [ m == tank_move_pain1 ] return 'tank_move_pain1'
+    if [ m == tank_move_pain2 ] return 'tank_move_pain2'
+    if [ m == tank_move_pain3 ] return 'tank_move_pain3'
+    if [ m == tank_move_attack_blast ] return 'tank_move_attack_blast'
+    if [ m == tank_move_reattack_blast ] return 'tank_move_reattack_blast'
+    if [ m == tank_move_attack_post_blast ] return 'tank_move_attack_post_blast'
+    if [ m == tank_move_attack_strike ] return 'tank_move_attack_strike'
+    if [ m == tank_move_attack_pre_rocket ] return 'tank_move_attack_pre_rocket'
+    if [ m == tank_move_attack_fire_rocket ] return 'tank_move_attack_fire_rocket'
+    if [ m == tank_move_attack_post_rocket ] return 'tank_move_attack_post_rocket'
+    if [ m == tank_move_attack_chain ] return 'tank_move_attack_chain'
+    if [ m == tank_move_death ] return 'tank_move_death'
+    return null
+
+func save_move [ n: string ] -> MMove
+    if [ !n ] return null
+    if [ n == 'actor_move_stand' ] return actor_move_stand
+    if [ n == 'actor_move_walk' ] return actor_move_walk
+    if [ n == 'actor_move_run' ] return actor_move_run
+    if [ n == 'actor_move_pain1' ] return actor_move_pain1
+    if [ n == 'actor_move_pain2' ] return actor_move_pain2
+    if [ n == 'actor_move_pain3' ] return actor_move_pain3
+    if [ n == 'actor_move_flipoff' ] return actor_move_flipoff
+    if [ n == 'actor_move_taunt' ] return actor_move_taunt
+    if [ n == 'actor_move_death1' ] return actor_move_death1
+    if [ n == 'actor_move_death2' ] return actor_move_death2
+    if [ n == 'actor_move_attack' ] return actor_move_attack
+    if [ n == 'berserk_move_stand' ] return berserk_move_stand
+    if [ n == 'berserk_move_stand_fidget' ] return berserk_move_stand_fidget
+    if [ n == 'berserk_move_walk' ] return berserk_move_walk
+    if [ n == 'berserk_move_run1' ] return berserk_move_run1
+    if [ n == 'berserk_move_attack_spike' ] return berserk_move_attack_spike
+    if [ n == 'berserk_move_attack_club' ] return berserk_move_attack_club
+    if [ n == 'berserk_move_attack_strike' ] return berserk_move_attack_strike
+    if [ n == 'berserk_move_pain1' ] return berserk_move_pain1
+    if [ n == 'berserk_move_pain2' ] return berserk_move_pain2
+    if [ n == 'berserk_move_death1' ] return berserk_move_death1
+    if [ n == 'berserk_move_death2' ] return berserk_move_death2
+    if [ n == 'boss2_move_stand' ] return boss2_move_stand
+    if [ n == 'boss2_move_fidget' ] return boss2_move_fidget
+    if [ n == 'boss2_move_walk' ] return boss2_move_walk
+    if [ n == 'boss2_move_run' ] return boss2_move_run
+    if [ n == 'boss2_move_attack_pre_mg' ] return boss2_move_attack_pre_mg
+    if [ n == 'boss2_move_attack_mg' ] return boss2_move_attack_mg
+    if [ n == 'boss2_move_attack_post_mg' ] return boss2_move_attack_post_mg
+    if [ n == 'boss2_move_attack_rocket' ] return boss2_move_attack_rocket
+    if [ n == 'boss2_move_pain_heavy' ] return boss2_move_pain_heavy
+    if [ n == 'boss2_move_pain_light' ] return boss2_move_pain_light
+    if [ n == 'boss2_move_death' ] return boss2_move_death
+    if [ n == 'brain_move_stand' ] return brain_move_stand
+    if [ n == 'brain_move_idle' ] return brain_move_idle
+    if [ n == 'brain_move_walk1' ] return brain_move_walk1
+    if [ n == 'brain_move_defense' ] return brain_move_defense
+    if [ n == 'brain_move_pain3' ] return brain_move_pain3
+    if [ n == 'brain_move_pain2' ] return brain_move_pain2
+    if [ n == 'brain_move_pain1' ] return brain_move_pain1
+    if [ n == 'brain_move_duck' ] return brain_move_duck
+    if [ n == 'brain_move_death2' ] return brain_move_death2
+    if [ n == 'brain_move_death1' ] return brain_move_death1
+    if [ n == 'brain_move_attack1' ] return brain_move_attack1
+    if [ n == 'brain_move_attack2' ] return brain_move_attack2
+    if [ n == 'brain_move_run' ] return brain_move_run
+    if [ n == 'chick_move_fidget' ] return chick_move_fidget
+    if [ n == 'chick_move_stand' ] return chick_move_stand
+    if [ n == 'chick_move_start_run' ] return chick_move_start_run
+    if [ n == 'chick_move_run' ] return chick_move_run
+    if [ n == 'chick_move_walk' ] return chick_move_walk
+    if [ n == 'chick_move_pain1' ] return chick_move_pain1
+    if [ n == 'chick_move_pain2' ] return chick_move_pain2
+    if [ n == 'chick_move_pain3' ] return chick_move_pain3
+    if [ n == 'chick_move_death2' ] return chick_move_death2
+    if [ n == 'chick_move_death1' ] return chick_move_death1
+    if [ n == 'chick_move_duck' ] return chick_move_duck
+    if [ n == 'chick_move_start_attack1' ] return chick_move_start_attack1
+    if [ n == 'chick_move_attack1' ] return chick_move_attack1
+    if [ n == 'chick_move_end_attack1' ] return chick_move_end_attack1
+    if [ n == 'chick_move_slash' ] return chick_move_slash
+    if [ n == 'chick_move_end_slash' ] return chick_move_end_slash
+    if [ n == 'chick_move_start_slash' ] return chick_move_start_slash
+    if [ n == 'flipper_move_stand' ] return flipper_move_stand
+    if [ n == 'flipper_move_run_loop' ] return flipper_move_run_loop
+    if [ n == 'flipper_move_run_start' ] return flipper_move_run_start
+    if [ n == 'flipper_move_walk' ] return flipper_move_walk
+    if [ n == 'flipper_move_start_run' ] return flipper_move_start_run
+    if [ n == 'flipper_move_pain2' ] return flipper_move_pain2
+    if [ n == 'flipper_move_pain1' ] return flipper_move_pain1
+    if [ n == 'flipper_move_attack' ] return flipper_move_attack
+    if [ n == 'flipper_move_death' ] return flipper_move_death
+    if [ n == 'floater_move_stand1' ] return floater_move_stand1
+    if [ n == 'floater_move_stand2' ] return floater_move_stand2
+    if [ n == 'floater_move_activate' ] return floater_move_activate
+    if [ n == 'floater_move_attack1' ] return floater_move_attack1
+    if [ n == 'floater_move_attack2' ] return floater_move_attack2
+    if [ n == 'floater_move_attack3' ] return floater_move_attack3
+    if [ n == 'floater_move_death' ] return floater_move_death
+    if [ n == 'floater_move_pain1' ] return floater_move_pain1
+    if [ n == 'floater_move_pain2' ] return floater_move_pain2
+    if [ n == 'floater_move_pain3' ] return floater_move_pain3
+    if [ n == 'floater_move_walk' ] return floater_move_walk
+    if [ n == 'floater_move_run' ] return floater_move_run
+    if [ n == 'flyer_move_stand' ] return flyer_move_stand
+    if [ n == 'flyer_move_walk' ] return flyer_move_walk
+    if [ n == 'flyer_move_run' ] return flyer_move_run
+    if [ n == 'flyer_move_start' ] return flyer_move_start
+    if [ n == 'flyer_move_stop' ] return flyer_move_stop
+    if [ n == 'flyer_move_rollright' ] return flyer_move_rollright
+    if [ n == 'flyer_move_rollleft' ] return flyer_move_rollleft
+    if [ n == 'flyer_move_pain3' ] return flyer_move_pain3
+    if [ n == 'flyer_move_pain2' ] return flyer_move_pain2
+    if [ n == 'flyer_move_pain1' ] return flyer_move_pain1
+    if [ n == 'flyer_move_defense' ] return flyer_move_defense
+    if [ n == 'flyer_move_bankright' ] return flyer_move_bankright
+    if [ n == 'flyer_move_bankleft' ] return flyer_move_bankleft
+    if [ n == 'flyer_move_attack2' ] return flyer_move_attack2
+    if [ n == 'flyer_move_start_melee' ] return flyer_move_start_melee
+    if [ n == 'flyer_move_end_melee' ] return flyer_move_end_melee
+    if [ n == 'flyer_move_loop_melee' ] return flyer_move_loop_melee
+    if [ n == 'gladiator_move_stand' ] return gladiator_move_stand
+    if [ n == 'gladiator_move_walk' ] return gladiator_move_walk
+    if [ n == 'gladiator_move_run' ] return gladiator_move_run
+    if [ n == 'gladiator_move_attack_melee' ] return gladiator_move_attack_melee
+    if [ n == 'gladiator_move_attack_gun' ] return gladiator_move_attack_gun
+    if [ n == 'gladiator_move_pain' ] return gladiator_move_pain
+    if [ n == 'gladiator_move_pain_air' ] return gladiator_move_pain_air
+    if [ n == 'gladiator_move_death' ] return gladiator_move_death
+    if [ n == 'gunner_move_fidget' ] return gunner_move_fidget
+    if [ n == 'gunner_move_stand' ] return gunner_move_stand
+    if [ n == 'gunner_move_walk' ] return gunner_move_walk
+    if [ n == 'gunner_move_run' ] return gunner_move_run
+    if [ n == 'gunner_move_runandshoot' ] return gunner_move_runandshoot
+    if [ n == 'gunner_move_pain3' ] return gunner_move_pain3
+    if [ n == 'gunner_move_pain2' ] return gunner_move_pain2
+    if [ n == 'gunner_move_pain1' ] return gunner_move_pain1
+    if [ n == 'gunner_move_death' ] return gunner_move_death
+    if [ n == 'gunner_move_duck' ] return gunner_move_duck
+    if [ n == 'gunner_move_attack_chain' ] return gunner_move_attack_chain
+    if [ n == 'gunner_move_fire_chain' ] return gunner_move_fire_chain
+    if [ n == 'gunner_move_endfire_chain' ] return gunner_move_endfire_chain
+    if [ n == 'gunner_move_attack_grenade' ] return gunner_move_attack_grenade
+    if [ n == 'hover_move_stand' ] return hover_move_stand
+    if [ n == 'hover_move_stop1' ] return hover_move_stop1
+    if [ n == 'hover_move_stop2' ] return hover_move_stop2
+    if [ n == 'hover_move_takeoff' ] return hover_move_takeoff
+    if [ n == 'hover_move_pain3' ] return hover_move_pain3
+    if [ n == 'hover_move_pain2' ] return hover_move_pain2
+    if [ n == 'hover_move_pain1' ] return hover_move_pain1
+    if [ n == 'hover_move_land' ] return hover_move_land
+    if [ n == 'hover_move_forward' ] return hover_move_forward
+    if [ n == 'hover_move_walk' ] return hover_move_walk
+    if [ n == 'hover_move_run' ] return hover_move_run
+    if [ n == 'hover_move_death1' ] return hover_move_death1
+    if [ n == 'hover_move_backward' ] return hover_move_backward
+    if [ n == 'hover_move_start_attack' ] return hover_move_start_attack
+    if [ n == 'hover_move_attack1' ] return hover_move_attack1
+    if [ n == 'hover_move_end_attack' ] return hover_move_end_attack
+    if [ n == 'infantry_move_stand' ] return infantry_move_stand
+    if [ n == 'infantry_move_fidget' ] return infantry_move_fidget
+    if [ n == 'infantry_move_walk' ] return infantry_move_walk
+    if [ n == 'infantry_move_run' ] return infantry_move_run
+    if [ n == 'infantry_move_pain1' ] return infantry_move_pain1
+    if [ n == 'infantry_move_pain2' ] return infantry_move_pain2
+    if [ n == 'infantry_move_death1' ] return infantry_move_death1
+    if [ n == 'infantry_move_death2' ] return infantry_move_death2
+    if [ n == 'infantry_move_death3' ] return infantry_move_death3
+    if [ n == 'infantry_move_duck' ] return infantry_move_duck
+    if [ n == 'infantry_move_attack1' ] return infantry_move_attack1
+    if [ n == 'infantry_move_attack2' ] return infantry_move_attack2
+    if [ n == 'insane_move_stand_normal' ] return insane_move_stand_normal
+    if [ n == 'insane_move_stand_insane' ] return insane_move_stand_insane
+    if [ n == 'insane_move_uptodown' ] return insane_move_uptodown
+    if [ n == 'insane_move_downtoup' ] return insane_move_downtoup
+    if [ n == 'insane_move_jumpdown' ] return insane_move_jumpdown
+    if [ n == 'insane_move_down' ] return insane_move_down
+    if [ n == 'insane_move_walk_normal' ] return insane_move_walk_normal
+    if [ n == 'insane_move_run_normal' ] return insane_move_run_normal
+    if [ n == 'insane_move_walk_insane' ] return insane_move_walk_insane
+    if [ n == 'insane_move_run_insane' ] return insane_move_run_insane
+    if [ n == 'insane_move_stand_pain' ] return insane_move_stand_pain
+    if [ n == 'insane_move_stand_death' ] return insane_move_stand_death
+    if [ n == 'insane_move_crawl' ] return insane_move_crawl
+    if [ n == 'insane_move_runcrawl' ] return insane_move_runcrawl
+    if [ n == 'insane_move_crawl_pain' ] return insane_move_crawl_pain
+    if [ n == 'insane_move_crawl_death' ] return insane_move_crawl_death
+    if [ n == 'insane_move_cross' ] return insane_move_cross
+    if [ n == 'insane_move_struggle_cross' ] return insane_move_struggle_cross
+    if [ n == 'jorg_move_stand' ] return jorg_move_stand
+    if [ n == 'jorg_move_run' ] return jorg_move_run
+    if [ n == 'jorg_move_start_walk' ] return jorg_move_start_walk
+    if [ n == 'jorg_move_walk' ] return jorg_move_walk
+    if [ n == 'jorg_move_end_walk' ] return jorg_move_end_walk
+    if [ n == 'jorg_move_pain3' ] return jorg_move_pain3
+    if [ n == 'jorg_move_pain2' ] return jorg_move_pain2
+    if [ n == 'jorg_move_pain1' ] return jorg_move_pain1
+    if [ n == 'jorg_move_death' ] return jorg_move_death
+    if [ n == 'jorg_move_attack2' ] return jorg_move_attack2
+    if [ n == 'jorg_move_start_attack1' ] return jorg_move_start_attack1
+    if [ n == 'jorg_move_attack1' ] return jorg_move_attack1
+    if [ n == 'jorg_move_end_attack1' ] return jorg_move_end_attack1
+    if [ n == 'makron_move_stand' ] return makron_move_stand
+    if [ n == 'makron_move_run' ] return makron_move_run
+    if [ n == 'makron_move_walk' ] return makron_move_walk
+    if [ n == 'makron_move_pain6' ] return makron_move_pain6
+    if [ n == 'makron_move_pain5' ] return makron_move_pain5
+    if [ n == 'makron_move_pain4' ] return makron_move_pain4
+    if [ n == 'makron_move_death2' ] return makron_move_death2
+    if [ n == 'makron_move_death3' ] return makron_move_death3
+    if [ n == 'makron_move_sight' ] return makron_move_sight
+    if [ n == 'makron_move_attack3' ] return makron_move_attack3
+    if [ n == 'makron_move_attack4' ] return makron_move_attack4
+    if [ n == 'makron_move_attack5' ] return makron_move_attack5
+    if [ n == 'medic_move_stand' ] return medic_move_stand
+    if [ n == 'medic_move_walk' ] return medic_move_walk
+    if [ n == 'medic_move_run' ] return medic_move_run
+    if [ n == 'medic_move_pain1' ] return medic_move_pain1
+    if [ n == 'medic_move_pain2' ] return medic_move_pain2
+    if [ n == 'medic_move_death' ] return medic_move_death
+    if [ n == 'medic_move_duck' ] return medic_move_duck
+    if [ n == 'medic_move_attackHyperBlaster' ] return medic_move_attackHyperBlaster
+    if [ n == 'medic_move_attackBlaster' ] return medic_move_attackBlaster
+    if [ n == 'medic_move_attackCable' ] return medic_move_attackCable
+    if [ n == 'mutant_move_stand' ] return mutant_move_stand
+    if [ n == 'mutant_move_idle' ] return mutant_move_idle
+    if [ n == 'mutant_move_walk' ] return mutant_move_walk
+    if [ n == 'mutant_move_start_walk' ] return mutant_move_start_walk
+    if [ n == 'mutant_move_run' ] return mutant_move_run
+    if [ n == 'mutant_move_attack' ] return mutant_move_attack
+    if [ n == 'mutant_move_jump' ] return mutant_move_jump
+    if [ n == 'mutant_move_pain1' ] return mutant_move_pain1
+    if [ n == 'mutant_move_pain2' ] return mutant_move_pain2
+    if [ n == 'mutant_move_pain3' ] return mutant_move_pain3
+    if [ n == 'mutant_move_death1' ] return mutant_move_death1
+    if [ n == 'mutant_move_death2' ] return mutant_move_death2
+    if [ n == 'parasite_move_start_fidget' ] return parasite_move_start_fidget
+    if [ n == 'parasite_move_fidget' ] return parasite_move_fidget
+    if [ n == 'parasite_move_end_fidget' ] return parasite_move_end_fidget
+    if [ n == 'parasite_move_stand' ] return parasite_move_stand
+    if [ n == 'parasite_move_run' ] return parasite_move_run
+    if [ n == 'parasite_move_start_run' ] return parasite_move_start_run
+    if [ n == 'parasite_move_stop_run' ] return parasite_move_stop_run
+    if [ n == 'parasite_move_walk' ] return parasite_move_walk
+    if [ n == 'parasite_move_start_walk' ] return parasite_move_start_walk
+    if [ n == 'parasite_move_stop_walk' ] return parasite_move_stop_walk
+    if [ n == 'parasite_move_pain1' ] return parasite_move_pain1
+    if [ n == 'parasite_move_drain' ] return parasite_move_drain
+    if [ n == 'parasite_move_break' ] return parasite_move_break
+    if [ n == 'parasite_move_death' ] return parasite_move_death
+    if [ n == 'soldier_move_stand1' ] return soldier_move_stand1
+    if [ n == 'soldier_move_stand3' ] return soldier_move_stand3
+    if [ n == 'soldier_move_walk1' ] return soldier_move_walk1
+    if [ n == 'soldier_move_walk2' ] return soldier_move_walk2
+    if [ n == 'soldier_move_start_run' ] return soldier_move_start_run
+    if [ n == 'soldier_move_run' ] return soldier_move_run
+    if [ n == 'soldier_move_pain1' ] return soldier_move_pain1
+    if [ n == 'soldier_move_pain2' ] return soldier_move_pain2
+    if [ n == 'soldier_move_pain3' ] return soldier_move_pain3
+    if [ n == 'soldier_move_pain4' ] return soldier_move_pain4
+    if [ n == 'soldier_move_attack1' ] return soldier_move_attack1
+    if [ n == 'soldier_move_attack2' ] return soldier_move_attack2
+    if [ n == 'soldier_move_attack3' ] return soldier_move_attack3
+    if [ n == 'soldier_move_attack4' ] return soldier_move_attack4
+    if [ n == 'soldier_move_attack6' ] return soldier_move_attack6
+    if [ n == 'soldier_move_duck' ] return soldier_move_duck
+    if [ n == 'soldier_move_death1' ] return soldier_move_death1
+    if [ n == 'soldier_move_death2' ] return soldier_move_death2
+    if [ n == 'soldier_move_death3' ] return soldier_move_death3
+    if [ n == 'soldier_move_death4' ] return soldier_move_death4
+    if [ n == 'soldier_move_death5' ] return soldier_move_death5
+    if [ n == 'soldier_move_death6' ] return soldier_move_death6
+    if [ n == 'supertank_move_stand' ] return supertank_move_stand
+    if [ n == 'supertank_move_run' ] return supertank_move_run
+    if [ n == 'supertank_move_forward' ] return supertank_move_forward
+    if [ n == 'supertank_move_turn_right' ] return supertank_move_turn_right
+    if [ n == 'supertank_move_turn_left' ] return supertank_move_turn_left
+    if [ n == 'supertank_move_pain3' ] return supertank_move_pain3
+    if [ n == 'supertank_move_pain2' ] return supertank_move_pain2
+    if [ n == 'supertank_move_pain1' ] return supertank_move_pain1
+    if [ n == 'supertank_move_death' ] return supertank_move_death
+    if [ n == 'supertank_move_backward' ] return supertank_move_backward
+    if [ n == 'supertank_move_attack4' ] return supertank_move_attack4
+    if [ n == 'supertank_move_attack3' ] return supertank_move_attack3
+    if [ n == 'supertank_move_attack2' ] return supertank_move_attack2
+    if [ n == 'supertank_move_attack1' ] return supertank_move_attack1
+    if [ n == 'supertank_move_end_attack1' ] return supertank_move_end_attack1
+    if [ n == 'tank_move_stand' ] return tank_move_stand
+    if [ n == 'tank_move_start_walk' ] return tank_move_start_walk
+    if [ n == 'tank_move_walk' ] return tank_move_walk
+    if [ n == 'tank_move_stop_walk' ] return tank_move_stop_walk
+    if [ n == 'tank_move_start_run' ] return tank_move_start_run
+    if [ n == 'tank_move_run' ] return tank_move_run
+    if [ n == 'tank_move_stop_run' ] return tank_move_stop_run
+    if [ n == 'tank_move_pain1' ] return tank_move_pain1
+    if [ n == 'tank_move_pain2' ] return tank_move_pain2
+    if [ n == 'tank_move_pain3' ] return tank_move_pain3
+    if [ n == 'tank_move_attack_blast' ] return tank_move_attack_blast
+    if [ n == 'tank_move_reattack_blast' ] return tank_move_reattack_blast
+    if [ n == 'tank_move_attack_post_blast' ] return tank_move_attack_post_blast
+    if [ n == 'tank_move_attack_strike' ] return tank_move_attack_strike
+    if [ n == 'tank_move_attack_pre_rocket' ] return tank_move_attack_pre_rocket
+    if [ n == 'tank_move_attack_fire_rocket' ] return tank_move_attack_fire_rocket
+    if [ n == 'tank_move_attack_post_rocket' ] return tank_move_attack_post_rocket
+    if [ n == 'tank_move_attack_chain' ] return tank_move_attack_chain
+    if [ n == 'tank_move_death' ] return tank_move_death
+    return null
+
+func save_MoveInfo [ s: SaveOut, o: MoveInfo ]
+    s.put_v[ o.start_origin ]
+    s.put_v[ o.start_angles ]
+    s.put_v[ o.end_origin ]
+    s.put_v[ o.end_angles ]
+    s.put_i[ o.sound_start ]
+    s.put_i[ o.sound_middle ]
+    s.put_i[ o.sound_end ]
+    s.put_f[ o.accel ]
+    s.put_f[ o.speed ]
+    s.put_f[ o.decel ]
+    s.put_f[ o.distance ]
+    s.put_f[ o.wait ]
+    s.put_i[ o.state ]
+    s.put_v[ o.dir ]
+    s.put_f[ o.current_speed ]
+    s.put_f[ o.move_speed ]
+    s.put_f[ o.next_speed ]
+    s.put_f[ o.remaining_distance ]
+    s.put_f[ o.decel_distance ]
+    s.put_s[ lam_name_0[ o.endfunc ] ]
+
+func load_MoveInfo [ s: SaveIn, o: MoveInfo ]
+    o.start_origin = s.get_v[]
+    o.start_angles = s.get_v[]
+    o.end_origin = s.get_v[]
+    o.end_angles = s.get_v[]
+    o.sound_start = s.get_i[]
+    o.sound_middle = s.get_i[]
+    o.sound_end = s.get_i[]
+    o.accel = s.get_f[]
+    o.speed = s.get_f[]
+    o.decel = s.get_f[]
+    o.distance = s.get_f[]
+    o.wait = s.get_f[]
+    o.state = s.get_i[]
+    o.dir = s.get_v[]
+    o.current_speed = s.get_f[]
+    o.move_speed = s.get_f[]
+    o.next_speed = s.get_f[]
+    o.remaining_distance = s.get_f[]
+    o.decel_distance = s.get_f[]
+    o.endfunc = lam_find_0[ s.get_s[] ]
+
+func save_PlayerState [ s: SaveOut, o: PlayerState ]
+    s.put_i[ o.pm_type ]
+    s.put_i[ o.pm_flags ]
+    s.put_i[ o.pm_time ]
+    s.put_i[ o.gravity ]
+    s.put_v[ o.delta_angles ]
+    s.put_v[ o.viewangles ]
+    s.put_v[ o.viewoffset ]
+    s.put_v[ o.kick_angles ]
+    s.put_v[ o.gunangles ]
+    s.put_v[ o.gunoffset ]
+    s.put_i[ o.gunindex ]
+    s.put_i[ o.gunframe ]
+    s.put_q[ o.blend ]
+    s.put_f[ o.fov ]
+    s.put_i[ o.rdflags ]
+    s.put_ints[ o.stats ]
+
+func load_PlayerState [ s: SaveIn, o: PlayerState ]
+    o.pm_type = s.get_i[]
+    o.pm_flags = s.get_i[]
+    o.pm_time = s.get_i[]
+    o.gravity = s.get_i[]
+    o.delta_angles = s.get_v[]
+    o.viewangles = s.get_v[]
+    o.viewoffset = s.get_v[]
+    o.kick_angles = s.get_v[]
+    o.gunangles = s.get_v[]
+    o.gunoffset = s.get_v[]
+    o.gunindex = s.get_i[]
+    o.gunframe = s.get_i[]
+    o.blend = s.get_q[]
+    o.fov = s.get_f[]
+    o.rdflags = s.get_i[]
+    o.stats = s.get_ints[]
+
+func save_ClientPersistant [ s: SaveOut, o: ClientPersistant ]
+    s.put_s[ o.netname ]
+    s.put_i[ o.hand ]
+    s.put_i[ (o.connected) ? 1 : 0 ]
+    s.put_i[ o.health ]
+    s.put_i[ o.max_health ]
+    s.put_i[ o.savedFlags ]
+    s.put_i[ o.selected_item ]
+    s.put_ints[ o.inventory ]
+    s.put_i[ o.max_bullets ]
+    s.put_i[ o.max_shells ]
+    s.put_i[ o.max_rockets ]
+    s.put_i[ o.max_grenades ]
+    s.put_i[ o.max_cells ]
+    s.put_i[ o.max_slugs ]
+    s.put_i[ save_item_no[ o.weapon ] ]
+    s.put_i[ save_item_no[ o.lastweapon ] ]
+    s.put_i[ o.power_cubes ]
+    s.put_i[ o.score ]
+    s.put_i[ o.game_helpchanged ]
+    s.put_i[ o.helpchanged ]
+    s.put_i[ (o.spectator) ? 1 : 0 ]
+
+func load_ClientPersistant [ s: SaveIn, o: ClientPersistant ]
+    o.netname = s.get_s[]
+    o.hand = s.get_i[]
+    o.connected = s.get_i[] != 0
+    o.health = s.get_i[]
+    o.max_health = s.get_i[]
+    o.savedFlags = s.get_i[]
+    o.selected_item = s.get_i[]
+    o.inventory = s.get_ints[]
+    o.max_bullets = s.get_i[]
+    o.max_shells = s.get_i[]
+    o.max_rockets = s.get_i[]
+    o.max_grenades = s.get_i[]
+    o.max_cells = s.get_i[]
+    o.max_slugs = s.get_i[]
+    o.weapon = save_item[ s.get_i[] ]
+    o.lastweapon = save_item[ s.get_i[] ]
+    o.power_cubes = s.get_i[]
+    o.score = s.get_i[]
+    o.game_helpchanged = s.get_i[]
+    o.helpchanged = s.get_i[]
+    o.spectator = s.get_i[] != 0
+
+func save_ClientRespawn [ s: SaveOut, o: ClientRespawn ]
+    s.put_i[ (o.coop_respawn) ? 1 : 0 ]
+    if [ o.coop_respawn ] save_ClientPersistant[ s, o.coop_respawn ]
+    s.put_i[ o.enterframe ]
+    s.put_i[ o.score ]
+    s.put_v[ o.cmd_angles ]
+    s.put_i[ (o.spectator) ? 1 : 0 ]
+
+func load_ClientRespawn [ s: SaveIn, o: ClientRespawn ]
+    if [ s.get_i[] != 0 ]
+        if [ !o.coop_respawn ] o.coop_respawn = ClientPersistant [ ]
+        load_ClientPersistant[ s, o.coop_respawn ]
+    el
+        o.coop_respawn = null
+    o.enterframe = s.get_i[]
+    o.score = s.get_i[]
+    o.cmd_angles = s.get_v[]
+    o.spectator = s.get_i[] != 0
+
+func save_Client [ s: SaveOut, o: Client ]
+    s.put_i[ (o.ps) ? 1 : 0 ]
+    if [ o.ps ] save_PlayerState[ s, o.ps ]
+    s.put_i[ o.ping ]
+    s.put_i[ (o.pers) ? 1 : 0 ]
+    if [ o.pers ] save_ClientPersistant[ s, o.pers ]
+    s.put_i[ (o.resp) ? 1 : 0 ]
+    if [ o.resp ] save_ClientRespawn[ s, o.resp ]
+    s.put_i[ (o.showscores) ? 1 : 0 ]
+    s.put_i[ (o.showinventory) ? 1 : 0 ]
+    s.put_i[ (o.showhelp) ? 1 : 0 ]
+    s.put_i[ (o.showhelpicon) ? 1 : 0 ]
+    s.put_i[ o.ammo_index ]
+    s.put_i[ o.buttons ]
+    s.put_i[ o.oldbuttons ]
+    s.put_i[ o.latched_buttons ]
+    s.put_i[ (o.weapon_thunk) ? 1 : 0 ]
+    s.put_i[ save_item_no[ o.newweapon ] ]
+    s.put_i[ o.damage_armor ]
+    s.put_i[ o.damage_parmor ]
+    s.put_i[ o.damage_blood ]
+    s.put_i[ o.damage_knockback ]
+    s.put_v[ o.damage_from ]
+    s.put_f[ o.killer_yaw ]
+    s.put_i[ o.weaponstate ]
+    s.put_v[ o.kick_angles ]
+    s.put_v[ o.kick_origin ]
+    s.put_f[ o.v_dmg_roll ]
+    s.put_f[ o.v_dmg_pitch ]
+    s.put_f[ o.v_dmg_time ]
+    s.put_f[ o.fall_time ]
+    s.put_f[ o.fall_value ]
+    s.put_f[ o.damage_alpha ]
+    s.put_f[ o.bonus_alpha ]
+    s.put_v[ o.damage_blend ]
+    s.put_v[ o.v_angle ]
+    s.put_f[ o.bobtime ]
+    s.put_v[ o.oldviewangles ]
+    s.put_v[ o.oldvelocity ]
+    s.put_f[ o.next_drown_time ]
+    s.put_i[ o.old_waterlevel ]
+    s.put_i[ o.breather_sound ]
+    s.put_i[ o.machinegun_shots ]
+    s.put_i[ o.anim_end ]
+    s.put_i[ o.anim_priority ]
+    s.put_i[ (o.anim_duck) ? 1 : 0 ]
+    s.put_i[ (o.anim_run) ? 1 : 0 ]
+    s.put_f[ o.quad_framenum ]
+    s.put_f[ o.invincible_framenum ]
+    s.put_f[ o.breather_framenum ]
+    s.put_f[ o.enviro_framenum ]
+    s.put_i[ (o.grenade_blew_up) ? 1 : 0 ]
+    s.put_f[ o.grenade_time ]
+    s.put_i[ o.silencer_shots ]
+    s.put_i[ o.weapon_sound ]
+    s.put_f[ o.pickup_msg_time ]
+    s.put_f[ o.respawn_time ]
+    s.put_i[ (o.chase_target) ? o.chase_target.number : 0 - 1 ]
+    s.put_i[ (o.update_chase) ? 1 : 0 ]
+    s.put_s[ o.centerprint ]
+    s.put_f[ o.centerprint_time ]
+
+func load_Client [ s: SaveIn, o: Client ]
+    if [ s.get_i[] != 0 ]
+        if [ !o.ps ] o.ps = PlayerState [ ]
+        load_PlayerState[ s, o.ps ]
+    el
+        o.ps = null
+    o.ping = s.get_i[]
+    if [ s.get_i[] != 0 ]
+        if [ !o.pers ] o.pers = ClientPersistant [ ]
+        load_ClientPersistant[ s, o.pers ]
+    el
+        o.pers = null
+    if [ s.get_i[] != 0 ]
+        if [ !o.resp ] o.resp = ClientRespawn [ ]
+        load_ClientRespawn[ s, o.resp ]
+    el
+        o.resp = null
+    o.showscores = s.get_i[] != 0
+    o.showinventory = s.get_i[] != 0
+    o.showhelp = s.get_i[] != 0
+    o.showhelpicon = s.get_i[] != 0
+    o.ammo_index = s.get_i[]
+    o.buttons = s.get_i[]
+    o.oldbuttons = s.get_i[]
+    o.latched_buttons = s.get_i[]
+    o.weapon_thunk = s.get_i[] != 0
+    o.newweapon = save_item[ s.get_i[] ]
+    o.damage_armor = s.get_i[]
+    o.damage_parmor = s.get_i[]
+    o.damage_blood = s.get_i[]
+    o.damage_knockback = s.get_i[]
+    o.damage_from = s.get_v[]
+    o.killer_yaw = s.get_f[]
+    o.weaponstate = s.get_i[]
+    o.kick_angles = s.get_v[]
+    o.kick_origin = s.get_v[]
+    o.v_dmg_roll = s.get_f[]
+    o.v_dmg_pitch = s.get_f[]
+    o.v_dmg_time = s.get_f[]
+    o.fall_time = s.get_f[]
+    o.fall_value = s.get_f[]
+    o.damage_alpha = s.get_f[]
+    o.bonus_alpha = s.get_f[]
+    o.damage_blend = s.get_v[]
+    o.v_angle = s.get_v[]
+    o.bobtime = s.get_f[]
+    o.oldviewangles = s.get_v[]
+    o.oldvelocity = s.get_v[]
+    o.next_drown_time = s.get_f[]
+    o.old_waterlevel = s.get_i[]
+    o.breather_sound = s.get_i[]
+    o.machinegun_shots = s.get_i[]
+    o.anim_end = s.get_i[]
+    o.anim_priority = s.get_i[]
+    o.anim_duck = s.get_i[] != 0
+    o.anim_run = s.get_i[] != 0
+    o.quad_framenum = s.get_f[]
+    o.invincible_framenum = s.get_f[]
+    o.breather_framenum = s.get_f[]
+    o.enviro_framenum = s.get_f[]
+    o.grenade_blew_up = s.get_i[] != 0
+    o.grenade_time = s.get_f[]
+    o.silencer_shots = s.get_i[]
+    o.weapon_sound = s.get_i[]
+    o.pickup_msg_time = s.get_f[]
+    o.respawn_time = s.get_f[]
+    o.chase_target = save_edict[ s.get_i[] ]
+    o.update_chase = s.get_i[] != 0
+    o.centerprint = s.get_s[]
+    o.centerprint_time = s.get_f[]
+
+func save_MonsterInfo [ s: SaveOut, o: MonsterInfo ]
+    s.put_s[ save_move_name[ o.currentmove ] ]
+    s.put_i[ o.aiflags ]
+    s.put_i[ o.nextframe ]
+    s.put_f[ o.scale ]
+    s.put_s[ lam_name_0[ o.stand ] ]
+    s.put_s[ lam_name_0[ o.idle ] ]
+    s.put_s[ lam_name_0[ o.search ] ]
+    s.put_s[ lam_name_0[ o.walk ] ]
+    s.put_s[ lam_name_0[ o.run ] ]
+    s.put_s[ lam_name_1[ o.dodge ] ]
+    s.put_s[ lam_name_0[ o.attack ] ]
+    s.put_s[ lam_name_0[ o.melee ] ]
+    s.put_s[ lam_name_2[ o.sight ] ]
+    s.put_s[ lam_name_3[ o.checkattack ] ]
+    s.put_f[ o.pausetime ]
+    s.put_f[ o.attack_finished ]
+    s.put_v[ o.saved_goal ]
+    s.put_f[ o.search_time ]
+    s.put_f[ o.trail_time ]
+    s.put_v[ o.last_sighting ]
+    s.put_i[ o.attack_state ]
+    s.put_i[ o.lefty ]
+    s.put_f[ o.idle_time ]
+    s.put_i[ o.linkcount ]
+    s.put_i[ o.power_armor_type ]
+    s.put_i[ o.power_armor_power ]
+
+func load_MonsterInfo [ s: SaveIn, o: MonsterInfo ]
+    o.currentmove = save_move[ s.get_s[] ]
+    o.aiflags = s.get_i[]
+    o.nextframe = s.get_i[]
+    o.scale = s.get_f[]
+    o.stand = lam_find_0[ s.get_s[] ]
+    o.idle = lam_find_0[ s.get_s[] ]
+    o.search = lam_find_0[ s.get_s[] ]
+    o.walk = lam_find_0[ s.get_s[] ]
+    o.run = lam_find_0[ s.get_s[] ]
+    o.dodge = lam_find_1[ s.get_s[] ]
+    o.attack = lam_find_0[ s.get_s[] ]
+    o.melee = lam_find_0[ s.get_s[] ]
+    o.sight = lam_find_2[ s.get_s[] ]
+    o.checkattack = lam_find_3[ s.get_s[] ]
+    o.pausetime = s.get_f[]
+    o.attack_finished = s.get_f[]
+    o.saved_goal = s.get_v[]
+    o.search_time = s.get_f[]
+    o.trail_time = s.get_f[]
+    o.last_sighting = s.get_v[]
+    o.attack_state = s.get_i[]
+    o.lefty = s.get_i[]
+    o.idle_time = s.get_f[]
+    o.linkcount = s.get_i[]
+    o.power_armor_type = s.get_i[]
+    o.power_armor_power = s.get_i[]
+
+func save_Edict [ s: SaveOut, o: Edict ]
+    s.put_i[ o.number ]
+    s.put_v[ o.origin ]
+    s.put_v[ o.angles ]
+    s.put_v[ o.old_origin ]
+    s.put_i[ o.modelindex ]
+    s.put_i[ o.modelindex2 ]
+    s.put_i[ o.modelindex3 ]
+    s.put_i[ o.frame ]
+    s.put_i[ o.effects ]
+    s.put_i[ o.event ]
+    s.put_i[ o.skinnum ]
+    s.put_i[ o.renderfx ]
+    s.put_i[ o.solid_bits ]
+    s.put_i[ o.sound ]
+    s.put_i[ (o.client) ? 1 : 0 ]
+    if [ o.client ] save_Client[ s, o.client ]
+    s.put_i[ (o.inuse) ? 1 : 0 ]
+    s.put_i[ o.linkcount ]
+    s.put_i[ (o.linked) ? 1 : 0 ]
+    s.put_i[ o.svflags ]
+    s.put_v[ o.mins ]
+    s.put_v[ o.maxs ]
+    s.put_v[ o.absmin ]
+    s.put_v[ o.absmax ]
+    s.put_v[ o.size ]
+    s.put_i[ o.solid ]
+    s.put_i[ o.clipmask ]
+    s.put_i[ (o.owner) ? o.owner.number : 0 - 1 ]
+    s.put_i[ o.movetype ]
+    s.put_i[ o.flags ]
+    s.put_s[ o.model ]
+    s.put_f[ o.freetime ]
+    s.put_s[ o.message ]
+    s.put_s[ o.classname ]
+    s.put_i[ o.spawnflags ]
+    s.put_f[ o.timestamp ]
+    s.put_f[ o.angle ]
+    s.put_s[ o.target ]
+    s.put_s[ o.targetname ]
+    s.put_s[ o.killtarget ]
+    s.put_s[ o.team ]
+    s.put_s[ o.pathtarget ]
+    s.put_s[ o.deathtarget ]
+    s.put_s[ o.combattarget ]
+    s.put_i[ (o.target_ent) ? o.target_ent.number : 0 - 1 ]
+    s.put_f[ o.speed ]
+    s.put_f[ o.accel ]
+    s.put_f[ o.decel ]
+    s.put_v[ o.movedir ]
+    s.put_v[ o.pos1 ]
+    s.put_v[ o.pos2 ]
+    s.put_v[ o.velocity ]
+    s.put_v[ o.avelocity ]
+    s.put_i[ o.mass ]
+    s.put_f[ o.air_finished ]
+    s.put_f[ o.gravity ]
+    s.put_f[ o.yaw_speed ]
+    s.put_s[ lam_name_4[ o.pain ] ]
+    s.put_f[ o.pain_debounce_time ]
+    s.put_f[ o.damage_debounce_time ]
+    s.put_i[ o.gib_health ]
+    s.put_f[ o.show_hostile ]
+    s.put_f[ o.powerarmor_time ]
+    s.put_i[ o.radius_dmg ]
+    s.put_f[ o.dmg_radius ]
+    s.put_i[ (o.oldenemy) ? o.oldenemy.number : 0 - 1 ]
+    s.put_i[ (o.mynoise) ? o.mynoise.number : 0 - 1 ]
+    s.put_i[ (o.mynoise2) ? o.mynoise2.number : 0 - 1 ]
+    s.put_i[ o.noise_index2 ]
+    s.put_f[ o.teleport_time ]
+    s.put_i[ o.light_level ]
+    s.put_i[ (o.monsterinfo) ? 1 : 0 ]
+    if [ o.monsterinfo ] save_MonsterInfo[ s, o.monsterinfo ]
+    s.put_f[ o.nextthink ]
+    s.put_s[ lam_name_0[ o.prethink ] ]
+    s.put_s[ lam_name_0[ o.think ] ]
+    s.put_s[ lam_name_2[ o.blocked ] ]
+    s.put_s[ lam_name_2[ o.touch ] ]
+    s.put_s[ lam_name_5[ o.use ] ]
+    s.put_s[ lam_name_6[ o.die ] ]
+    s.put_f[ o.touch_debounce_time ]
+    s.put_i[ o.health ]
+    s.put_i[ o.max_health ]
+    s.put_i[ o.deadflag ]
+    s.put_s[ o.map ]
+    s.put_i[ o.viewheight ]
+    s.put_i[ o.takedamage ]
+    s.put_i[ o.dmg ]
+    s.put_i[ o.sounds ]
+    s.put_i[ o.count ]
+    s.put_i[ (o.chain) ? o.chain.number : 0 - 1 ]
+    s.put_i[ (o.enemy) ? o.enemy.number : 0 - 1 ]
+    s.put_i[ (o.movetarget) ? o.movetarget.number : 0 - 1 ]
+    s.put_i[ (o.goalentity) ? o.goalentity.number : 0 - 1 ]
+    s.put_f[ o.ideal_yaw ]
+    s.put_i[ save_item_no[ o.item ] ]
+    s.put_f[ o.last_move_time ]
+    s.put_f[ o.fly_sound_debounce_time ]
+    s.put_i[ (o.activator) ? o.activator.number : 0 - 1 ]
+    s.put_i[ (o.groundentity) ? o.groundentity.number : 0 - 1 ]
+    s.put_i[ o.groundentity_linkcount ]
+    s.put_i[ (o.teamchain) ? o.teamchain.number : 0 - 1 ]
+    s.put_i[ (o.teammaster) ? o.teammaster.number : 0 - 1 ]
+    s.put_i[ o.noise_index ]
+    s.put_f[ o.volume ]
+    s.put_f[ o.attenuation ]
+    s.put_f[ o.wait ]
+    s.put_f[ o.delay ]
+    s.put_f[ o.random ]
+    s.put_i[ o.watertype ]
+    s.put_i[ o.waterlevel ]
+    s.put_v[ o.move_origin ]
+    s.put_v[ o.move_angles ]
+    s.put_i[ o.style ]
+    s.put_i[ (o.moveinfo) ? 1 : 0 ]
+    if [ o.moveinfo ] save_MoveInfo[ s, o.moveinfo ]
+
+func load_Edict [ s: SaveIn, o: Edict ]
+    o.number = s.get_i[]
+    o.origin = s.get_v[]
+    o.angles = s.get_v[]
+    o.old_origin = s.get_v[]
+    o.modelindex = s.get_i[]
+    o.modelindex2 = s.get_i[]
+    o.modelindex3 = s.get_i[]
+    o.frame = s.get_i[]
+    o.effects = s.get_i[]
+    o.event = s.get_i[]
+    o.skinnum = s.get_i[]
+    o.renderfx = s.get_i[]
+    o.solid_bits = s.get_i[]
+    o.sound = s.get_i[]
+    if [ s.get_i[] != 0 ]
+        if [ !o.client ] o.client = Client [ ]
+        load_Client[ s, o.client ]
+    el
+        o.client = null
+    o.inuse = s.get_i[] != 0
+    o.linkcount = s.get_i[]
+    o.linked = s.get_i[] != 0
+    o.svflags = s.get_i[]
+    o.mins = s.get_v[]
+    o.maxs = s.get_v[]
+    o.absmin = s.get_v[]
+    o.absmax = s.get_v[]
+    o.size = s.get_v[]
+    o.solid = s.get_i[]
+    o.clipmask = s.get_i[]
+    o.owner = save_edict[ s.get_i[] ]
+    o.movetype = s.get_i[]
+    o.flags = s.get_i[]
+    o.model = s.get_s[]
+    o.freetime = s.get_f[]
+    o.message = s.get_s[]
+    o.classname = s.get_s[]
+    o.spawnflags = s.get_i[]
+    o.timestamp = s.get_f[]
+    o.angle = s.get_f[]
+    o.target = s.get_s[]
+    o.targetname = s.get_s[]
+    o.killtarget = s.get_s[]
+    o.team = s.get_s[]
+    o.pathtarget = s.get_s[]
+    o.deathtarget = s.get_s[]
+    o.combattarget = s.get_s[]
+    o.target_ent = save_edict[ s.get_i[] ]
+    o.speed = s.get_f[]
+    o.accel = s.get_f[]
+    o.decel = s.get_f[]
+    o.movedir = s.get_v[]
+    o.pos1 = s.get_v[]
+    o.pos2 = s.get_v[]
+    o.velocity = s.get_v[]
+    o.avelocity = s.get_v[]
+    o.mass = s.get_i[]
+    o.air_finished = s.get_f[]
+    o.gravity = s.get_f[]
+    o.yaw_speed = s.get_f[]
+    o.pain = lam_find_4[ s.get_s[] ]
+    o.pain_debounce_time = s.get_f[]
+    o.damage_debounce_time = s.get_f[]
+    o.gib_health = s.get_i[]
+    o.show_hostile = s.get_f[]
+    o.powerarmor_time = s.get_f[]
+    o.radius_dmg = s.get_i[]
+    o.dmg_radius = s.get_f[]
+    o.oldenemy = save_edict[ s.get_i[] ]
+    o.mynoise = save_edict[ s.get_i[] ]
+    o.mynoise2 = save_edict[ s.get_i[] ]
+    o.noise_index2 = s.get_i[]
+    o.teleport_time = s.get_f[]
+    o.light_level = s.get_i[]
+    if [ s.get_i[] != 0 ]
+        if [ !o.monsterinfo ] o.monsterinfo = MonsterInfo [ ]
+        load_MonsterInfo[ s, o.monsterinfo ]
+    el
+        o.monsterinfo = null
+    o.nextthink = s.get_f[]
+    o.prethink = lam_find_0[ s.get_s[] ]
+    o.think = lam_find_0[ s.get_s[] ]
+    o.blocked = lam_find_2[ s.get_s[] ]
+    o.touch = lam_find_2[ s.get_s[] ]
+    o.use = lam_find_5[ s.get_s[] ]
+    o.die = lam_find_6[ s.get_s[] ]
+    o.touch_debounce_time = s.get_f[]
+    o.health = s.get_i[]
+    o.max_health = s.get_i[]
+    o.deadflag = s.get_i[]
+    o.map = s.get_s[]
+    o.viewheight = s.get_i[]
+    o.takedamage = s.get_i[]
+    o.dmg = s.get_i[]
+    o.sounds = s.get_i[]
+    o.count = s.get_i[]
+    o.chain = save_edict[ s.get_i[] ]
+    o.enemy = save_edict[ s.get_i[] ]
+    o.movetarget = save_edict[ s.get_i[] ]
+    o.goalentity = save_edict[ s.get_i[] ]
+    o.ideal_yaw = s.get_f[]
+    o.item = save_item[ s.get_i[] ]
+    o.last_move_time = s.get_f[]
+    o.fly_sound_debounce_time = s.get_f[]
+    o.activator = save_edict[ s.get_i[] ]
+    o.groundentity = save_edict[ s.get_i[] ]
+    o.groundentity_linkcount = s.get_i[]
+    o.teamchain = save_edict[ s.get_i[] ]
+    o.teammaster = save_edict[ s.get_i[] ]
+    o.noise_index = s.get_i[]
+    o.volume = s.get_f[]
+    o.attenuation = s.get_f[]
+    o.wait = s.get_f[]
+    o.delay = s.get_f[]
+    o.random = s.get_f[]
+    o.watertype = s.get_i[]
+    o.waterlevel = s.get_i[]
+    o.move_origin = s.get_v[]
+    o.move_angles = s.get_v[]
+    o.style = s.get_i[]
+    if [ s.get_i[] != 0 ]
+        if [ !o.moveinfo ] o.moveinfo = MoveInfo [ ]
+        load_MoveInfo[ s, o.moveinfo ]
+    el
+        o.moveinfo = null
+
+func save_Level [ s: SaveOut, o: Level ]
+    s.put_i[ o.framenum ]
+    s.put_f[ o.time ]
+    s.put_s[ o.level_name ]
+    s.put_s[ o.mapname ]
+    s.put_s[ o.nextmap ]
+    s.put_s[ o.changemap ]
+    s.put_i[ (o.current_entity) ? o.current_entity.number : 0 - 1 ]
+    s.put_i[ o.found_secrets ]
+    s.put_i[ o.total_secrets ]
+    s.put_i[ o.found_goals ]
+    s.put_i[ o.total_goals ]
+    s.put_f[ o.intermissiontime ]
+    s.put_i[ (o.exitintermission) ? 1 : 0 ]
+    s.put_v[ o.intermission_origin ]
+    s.put_v[ o.intermission_angle ]
+    s.put_i[ (o.sight_client) ? o.sight_client.number : 0 - 1 ]
+    s.put_i[ (o.sight_entity) ? o.sight_entity.number : 0 - 1 ]
+    s.put_i[ o.sight_entity_framenum ]
+    s.put_i[ (o.sound_entity) ? o.sound_entity.number : 0 - 1 ]
+    s.put_i[ o.sound_entity_framenum ]
+    s.put_i[ (o.sound2_entity) ? o.sound2_entity.number : 0 - 1 ]
+    s.put_i[ o.sound2_entity_framenum ]
+    s.put_i[ o.pic_health ]
+    s.put_i[ o.total_monsters ]
+    s.put_i[ o.killed_monsters ]
+    s.put_i[ o.body_que ]
+    s.put_i[ o.power_cubes ]
+
+func load_Level [ s: SaveIn, o: Level ]
+    o.framenum = s.get_i[]
+    o.time = s.get_f[]
+    o.level_name = s.get_s[]
+    o.mapname = s.get_s[]
+    o.nextmap = s.get_s[]
+    o.changemap = s.get_s[]
+    o.current_entity = save_edict[ s.get_i[] ]
+    o.found_secrets = s.get_i[]
+    o.total_secrets = s.get_i[]
+    o.found_goals = s.get_i[]
+    o.total_goals = s.get_i[]
+    o.intermissiontime = s.get_f[]
+    o.exitintermission = s.get_i[] != 0
+    o.intermission_origin = s.get_v[]
+    o.intermission_angle = s.get_v[]
+    o.sight_client = save_edict[ s.get_i[] ]
+    o.sight_entity = save_edict[ s.get_i[] ]
+    o.sight_entity_framenum = s.get_i[]
+    o.sound_entity = save_edict[ s.get_i[] ]
+    o.sound_entity_framenum = s.get_i[]
+    o.sound2_entity = save_edict[ s.get_i[] ]
+    o.sound2_entity_framenum = s.get_i[]
+    o.pic_health = s.get_i[]
+    o.total_monsters = s.get_i[]
+    o.killed_monsters = s.get_i[]
+    o.body_que = s.get_i[]
+    o.power_cubes = s.get_i[]

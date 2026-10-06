@@ -1,0 +1,269 @@
+# m_boss2.c: the hornet (twin machineguns, four rockets)
+extend quake2
+
+boss2_sound_pain1 : i32
+boss2_sound_pain2 : i32
+boss2_sound_pain3 : i32
+boss2_sound_death : i32
+boss2_sound_search1 : i32
+boss2_move_stand : MMove
+boss2_move_fidget : MMove
+boss2_move_walk : MMove
+boss2_move_run : MMove
+boss2_move_attack_pre_mg : MMove
+boss2_move_attack_mg : MMove
+boss2_move_attack_post_mg : MMove
+boss2_move_attack_rocket : MMove
+boss2_move_pain_heavy : MMove
+boss2_move_pain_light : MMove
+boss2_move_death : MMove
+
+func boss2_search [ e: Edict ]
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, boss2_sound_search1, 1.0, ATTN_NONE ]
+
+func boss2_rocket_at [ e: Edict, flash: i32 ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash ], ax.forward,
+                            ax.right ]
+    aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_norm[ v_sub[ aim, start ] ]
+    monster_fire_rocket[ e, start, dir, 50, 500, flash ]
+
+func boss2_rocket [ e: Edict ]
+    boss2_rocket_at[ e, MZ2_BOSS2_ROCKET_1 ]
+    boss2_rocket_at[ e, MZ2_BOSS2_ROCKET_2 ]
+    boss2_rocket_at[ e, MZ2_BOSS2_ROCKET_3 ]
+    boss2_rocket_at[ e, MZ2_BOSS2_ROCKET_4 ]
+
+func boss2_firebullet [ e: Edict, flash: i32 ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash ], ax.forward,
+                            ax.right ]
+    target : v_ma[ e.enemy.origin, -0.2, e.enemy.velocity ]
+    target = vec3f [ target.x, target.y,
+                     target.z + f32[ e.enemy.viewheight ] ]
+    forward : v_norm[ v_sub[ target, start ] ]
+    monster_fire_bullet[ e, start, forward, 6, 4,
+                         DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                         flash ]
+
+func boss2_firebullet_right [ e: Edict ]
+    boss2_firebullet[ e, MZ2_BOSS2_MACHINEGUN_R1 ]
+
+func boss2_firebullet_left [ e: Edict ]
+    boss2_firebullet[ e, MZ2_BOSS2_MACHINEGUN_L1 ]
+
+func boss2_machinegun [ e: Edict ]
+    boss2_firebullet_left[ e ]
+    boss2_firebullet_right[ e ]
+
+func boss2_stand [ e: Edict ]
+    e.monsterinfo.currentmove = boss2_move_stand
+
+func boss2_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = boss2_move_stand
+    el
+        e.monsterinfo.currentmove = boss2_move_run
+
+func boss2_walk [ e: Edict ]
+    e.monsterinfo.currentmove = boss2_move_walk
+
+func boss2_attack [ e: Edict ]
+    range : f32 [ v_len[ v_sub[ e.enemy.origin, e.origin ] ] ]
+    mi : e.monsterinfo
+    if [ range <= 125.0 ]
+        mi.currentmove = boss2_move_attack_pre_mg
+    el
+        if [ frand[] <= 0.6 ]
+            mi.currentmove = boss2_move_attack_pre_mg
+        el
+            mi.currentmove = boss2_move_attack_rocket
+
+func boss2_attack_mg [ e: Edict ]
+    e.monsterinfo.currentmove = boss2_move_attack_mg
+
+func boss2_reattack_mg [ e: Edict ]
+    if [ infront[ e, e.enemy ] && frand[] <= 0.7 ]
+        e.monsterinfo.currentmove = boss2_move_attack_mg
+    el
+        e.monsterinfo.currentmove = boss2_move_attack_post_mg
+
+func boss2_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # American wanted these at no attenuation
+    if [ damage < 10 ]
+        g.sound[ e, CHAN_VOICE, boss2_sound_pain3, 1.0, ATTN_NONE ]
+        e.monsterinfo.currentmove = boss2_move_pain_light
+    el [ damage < 30 ]
+        g.sound[ e, CHAN_VOICE, boss2_sound_pain1, 1.0, ATTN_NONE ]
+        e.monsterinfo.currentmove = boss2_move_pain_light
+    el
+        g.sound[ e, CHAN_VOICE, boss2_sound_pain2, 1.0, ATTN_NONE ]
+        e.monsterinfo.currentmove = boss2_move_pain_heavy
+
+func boss2_dead [ e: Edict ]
+    e.mins = vec3f [ -56.0, -56.0, 0.0 ]
+    e.maxs = vec3f [ 56.0, 56.0, 80.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func boss2_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    g.sound[ e, CHAN_VOICE, boss2_sound_death, 1.0, ATTN_NONE ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_NO
+    e.count = 0
+    e.monsterinfo.currentmove = boss2_move_death
+
+func boss2_checkattack [ e: Edict ] -> bool
+    mi : e.monsterinfo
+    if [ e.enemy.health > 0 ]
+        # see if any entities are in the way of the shot
+        spot1 : vec3f [ e.origin.x, e.origin.y,
+                        e.origin.z + f32[ e.viewheight ] ]
+        spot2 : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                        e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        tr : g.world.trace[ spot1, zero, zero, spot2, e,
+                            CONTENTS_SOLID | CONTENTS_MONSTER |
+                            CONTENTS_SLIME | CONTENTS_LAVA ]
+        # do we have a clear shot?
+        if [ tr.ent != e.enemy ] return false
+    enemy_range : i32 [ ai_range[ e, e.enemy ] ]
+    e.ideal_yaw = vectoyaw[ v_sub[ e.enemy.origin, e.origin ] ]
+    # melee attack
+    if [ enemy_range == RANGE_MELEE ]
+        if [ mi.melee ] mi.attack_state = AS_MELEE
+        el              mi.attack_state = AS_MISSILE
+        return true
+    # missile attack
+    if [ !mi.attack ] return false
+    if [ g.level.time < mi.attack_finished ] return false
+    if [ enemy_range == RANGE_FAR ] return false
+    chance : f32 [ 0.8 ]
+    if [ mi.aiflags & AI_STAND_GROUND ] chance = 0.4
+    if [ frand[] < chance ]
+        mi.attack_state = AS_MISSILE
+        mi.attack_finished = g.level.time + 2.0 * frand[]
+        return true
+    if [ e.flags & FL_FLY ]
+        if [ frand[] < 0.3 ] mi.attack_state = AS_SLIDING
+        el                   mi.attack_state = AS_STRAIGHT
+    return false
+
+func sp_monster_boss2 [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    boss2_moves[]
+    boss2_sound_pain1   = g.soundindex[ 'bosshovr/bhvpain1.wav' ]
+    boss2_sound_pain2   = g.soundindex[ 'bosshovr/bhvpain2.wav' ]
+    boss2_sound_pain3   = g.soundindex[ 'bosshovr/bhvpain3.wav' ]
+    boss2_sound_death   = g.soundindex[ 'bosshovr/bhvdeth1.wav' ]
+    boss2_sound_search1 = g.soundindex[ 'bosshovr/bhvunqv1.wav' ]
+    e.sound = g.soundindex[ 'bosshovr/bhvengn1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/boss2/tris.md2' ]
+    e.mins = vec3f [ -56.0, -56.0, 0.0 ]
+    e.maxs = vec3f [ 56.0, 56.0, 80.0 ]
+    e.health = 2000
+    e.gib_health = -200
+    e.mass = 1000
+    e.flags = e.flags | FL_IMMUNE_LASER
+    e.pain = lambda boss2_pain[]
+    e.die  = lambda boss2_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda boss2_stand[]
+    mi.walk   = lambda boss2_walk[]
+    mi.run    = lambda boss2_run[]
+    mi.attack = lambda boss2_attack[]
+    mi.search = lambda boss2_search[]
+    mi.checkattack = lambda boss2_checkattack[]
+    g.world.link[ e ]
+    mi.currentmove = boss2_move_stand
+    mi.scale = 1.0
+    flymonster_start[ e ]
+
+# the moves, built once: frame numbers from m_boss2.h
+func boss2_moves []
+    if [ boss2_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 21, lambda ai_stand[], 0.0, null ]
+    # stand30 .. stand50
+    boss2_move_stand = MMove [
+        firstframe: 0, lastframe: 20, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 30, lambda ai_stand[], 0.0, null ]
+    # stand1 .. stand30
+    boss2_move_fidget = MMove [
+        firstframe: 21, lastframe: 0, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 20, lambda ai_walk[], 8.0, null ]
+    # walk1 .. walk20
+    boss2_move_walk = MMove [
+        firstframe: 50, lastframe: 69, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 20, lambda ai_run[], 8.0, null ]
+    # walk1 .. walk20
+    boss2_move_run = MMove [
+        firstframe: 50, lastframe: 69, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, lambda boss2_attack_mg[] ]
+    # attack1 .. attack9
+    boss2_move_attack_pre_mg = MMove [
+        firstframe: 70, lastframe: 78, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_charge[], 1.0, lambda boss2_machinegun[] ]
+    mf[ v, 1, lambda ai_charge[], 1.0, lambda boss2_reattack_mg[] ]
+    # attack10 .. attack15
+    boss2_move_attack_mg = MMove [
+        firstframe: 79, lastframe: 84, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 1.0, null ]
+    # attack16 .. attack19
+    boss2_move_attack_post_mg = MMove [
+        firstframe: 85, lastframe: 88, frames: v,
+        endfunc: lambda boss2_run[] ]
+    v = vec MFrame []
+    mf[ v, 12, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -20.0, lambda boss2_rocket[] ]
+    mf[ v, 8, lambda ai_charge[], 1.0, null ]
+    # attack20 .. attack40
+    boss2_move_attack_rocket = MMove [
+        firstframe: 89, lastframe: 109, frames: v,
+        endfunc: lambda boss2_run[] ]
+    v = vec MFrame []
+    mf[ v, 18, lambda ai_move[], 0.0, null ]
+    # pain2 .. pain19
+    boss2_move_pain_heavy = MMove [
+        firstframe: 110, lastframe: 127, frames: v,
+        endfunc: lambda boss2_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain20 .. pain23
+    boss2_move_pain_light = MMove [
+        firstframe: 128, lastframe: 131, frames: v,
+        endfunc: lambda boss2_run[] ]
+    v = vec MFrame []
+    mf[ v, 48, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda boss_explode[] ]
+    # death2 .. death50
+    boss2_move_death = MMove [
+        firstframe: 132, lastframe: 180, frames: v,
+        endfunc: lambda boss2_dead[] ]
+

@@ -1,0 +1,1544 @@
+# p_client.c, p_view.c, p_hud.c, g_cmds.c, p_trail.c: the player
+extend quake2
+
+# ---- p_trail.c
+TRAIL_LENGTH : i32 [ 8 ]
+
+func trail_next [ n: i32 ] -> i32
+    return (n + 1) & (TRAIL_LENGTH - 1)
+
+func trail_prev [ n: i32 ] -> i32
+    return (n - 1) & (TRAIL_LENGTH - 1)
+
+func player_trail_init []
+    if [ g.deathmatch ] return
+    g.trail = vec Edict []
+    for [ n: i32 0, n < TRAIL_LENGTH, n += 1 ]
+        t : g.spawn[]
+        t.classname = 'player_trail'
+        g.trail.push[ t ]
+    g.trail_head = 0
+    g.trail_active = true
+
+func player_trail_add [ spot: vec3f ]
+    if [ !g.trail_active ] return
+    t : g.trail[ g.trail_head ]
+    t.origin = spot
+    t.timestamp = g.level.time
+    temp : v_sub[ spot, g.trail[ trail_prev[ g.trail_head ] ].origin ]
+    t.angles = vec3f [ t.angles.x, vectoyaw[ temp ], t.angles.z ]
+    g.trail_head = trail_next[ g.trail_head ]
+
+func player_trail_new [ spot: vec3f ]
+    if [ !g.trail_active ] return
+    player_trail_init[]
+    player_trail_add[ spot ]
+
+func player_trail_pick_first [ e: Edict ] -> Edict
+    if [ !g.trail_active ] return null
+    marker : i32 [ g.trail_head ]
+    for [ n: i32 TRAIL_LENGTH, n > 0, n = n - 1 ]
+        if [ g.trail[ marker ].timestamp <= e.monsterinfo.trail_time ]
+            marker = trail_next[ marker ]
+        el
+            break
+    if [ visible[ e, g.trail[ marker ] ] ] return g.trail[ marker ]
+    if [ visible[ e, g.trail[ trail_prev[ marker ] ] ] ]
+        return g.trail[ trail_prev[ marker ] ]
+    return g.trail[ marker ]
+
+func player_trail_pick_next [ e: Edict ] -> Edict
+    if [ !g.trail_active ] return null
+    marker : i32 [ g.trail_head ]
+    for [ n: i32 TRAIL_LENGTH, n > 0, n = n - 1 ]
+        if [ g.trail[ marker ].timestamp <= e.monsterinfo.trail_time ]
+            marker = trail_next[ marker ]
+        el
+            break
+    return g.trail[ marker ]
+
+func player_trail_last_spot [] -> Edict
+    if [ !g.trail_active ] return null
+    return g.trail[ trail_prev[ g.trail_head ] ]
+
+# ---- p_client.c
+func sp_info_player_start [ e: Edict ]
+    # coop spots for 'security': the coop port's
+    return
+
+func sp_info_player_deathmatch [ e: Edict ]
+    if [ !g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    sp_misc_teleporter_dest[ e ]
+
+func sp_info_player_coop [ e: Edict ]
+    if [ !g.coop ]
+        g.free_edict[ e ]
+        return
+
+func player_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    # player pain is handled at the end of the frame in P_DamageFeedback
+    return
+
+func client_obituary [ e: Edict, inflictor: Edict,
+                       attacker: Edict ]
+    name : string [ e.client.pers.netname ]
+    g.bprintf[ '{name} died.' ]
+    if [ g.deathmatch ] e.client.resp.score -= 1
+
+func toss_client_weapon [ e: Edict ]
+    if [ !g.deathmatch ] return
+    cl : e.client
+    item : cl.pers.weapon
+    if [ inv_get[ e, cl.ammo_index ] == 0 ] item = null
+    if [ item && item.pickup_name == 'Blaster' ] item = null
+    quad : bool [ false ]
+    if [ g.dmflags & 16384 ]
+        quad = cl.quad_framenum > f32[ g.level.framenum + 10 ]
+    spread : f32 [ (item && quad) ? 22.5 : 0.0 ]
+    if [ item ]
+        cl.v_angle = vec3f [ cl.v_angle.x, cl.v_angle.y - spread, cl.v_angle.z ]
+        drop : drop_item[ e, item ]
+        cl.v_angle = vec3f [ cl.v_angle.x, cl.v_angle.y + spread, cl.v_angle.z ]
+        drop.spawnflags = DROPPED_PLAYER_ITEM
+    if [ quad ]
+        cl.v_angle = vec3f [ cl.v_angle.x, cl.v_angle.y + spread, cl.v_angle.z ]
+        drop : drop_item[ e, find_item_by_classname[ 'item_quad' ] ]
+        cl.v_angle = vec3f [ cl.v_angle.x, cl.v_angle.y - spread, cl.v_angle.z ]
+        drop.spawnflags = drop.spawnflags | DROPPED_PLAYER_ITEM
+        drop.touch = lambda touch_item[]
+        drop.nextthink = g.level.time
+            + (cl.quad_framenum - f32[ g.level.framenum ]) * FRAMETIME
+        drop.think = lambda remove_edict[]
+
+func look_at_killer [ e: Edict, inflictor: Edict, attacker: Edict ]
+    world : g.edicts[ 0 ]
+    dir : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ attacker && attacker != world && attacker != e ]
+        dir = v_sub[ attacker.origin, e.origin ]
+    el [ inflictor && inflictor != world && inflictor != e ]
+        dir = v_sub[ inflictor.origin, e.origin ]
+    el
+        e.client.killer_yaw = e.angles.y
+        return
+    if [ dir.x != 0.0 ]
+        e.client.killer_yaw = 180.0 / 3.14159265358979 * atan2[ dir.y, dir.x ]
+    el
+        e.client.killer_yaw = 0.0
+        if [ dir.y > 0.0 ]      e.client.killer_yaw = 90.0
+        el [ dir.y < 0.0 ]      e.client.killer_yaw = -90.0
+    if [ e.client.killer_yaw < 0.0 ] e.client.killer_yaw += 360.0
+
+func player_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                  damage: i32, point: vec3f ]
+    cl : e.client
+    e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
+    e.takedamage = DAMAGE_YES
+    e.movetype = MOVETYPE_TOSS
+    e.modelindex2 = 0
+    e.angles = vec3f [ 0.0, e.angles.y, 0.0 ]
+    e.sound = 0
+    cl.weapon_sound = 0
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, -8.0 ]
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    if [ e.deadflag == 0 ]
+        cl.respawn_time = g.level.time + 1.0
+        look_at_killer[ e, inflictor, attacker ]
+        cl.ps.pm_type = PM_DEAD
+        client_obituary[ e, inflictor, attacker ]
+        toss_client_weapon[ e ]
+        if [ g.deathmatch ] cmd_help[ e ]
+        # clear inventory; this is kind of ugly, but it's how we want to
+        # handle keys in coop
+        for [ n: i32 0, n < g.num_items, n += 1 ]
+            if [ g.coop && (g.items[ n ].flags & IT_KEY) != 0 ]
+                cl.resp.coop_respawn.inventory[ n ] = cl.pers.inventory[ n ]
+            cl.pers.inventory[ n ] = 0
+    # remove powerups
+    cl.quad_framenum = 0.0
+    cl.invincible_framenum = 0.0
+    cl.breather_framenum = 0.0
+    cl.enviro_framenum = 0.0
+    e.flags = e.flags & ~FL_POWER_ARMOR
+    if [ e.health < -40 ]
+        # gib
+        g.sound[ e, CHAN_BODY, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                       GIB_ORGANIC ]
+        throw_client_head[ e, damage ]
+        e.takedamage = DAMAGE_NO
+    el
+        # normal death
+        if [ e.deadflag == 0 ]
+            g.death_anim = (g.death_anim + 1) % 3
+            cl.anim_priority = ANIM_DEATH
+            if [ cl.ps.pm_flags & PMF_DUCKED ]
+                e.frame = FRAME_crdeath1 - 1
+                cl.anim_end = FRAME_crdeath5
+            el [ g.death_anim == 0 ]
+                e.frame = FRAME_death101 - 1
+                cl.anim_end = FRAME_death106
+            el [ g.death_anim == 1 ]
+                e.frame = FRAME_death201 - 1
+                cl.anim_end = FRAME_death206
+            el
+                e.frame = FRAME_death301 - 1
+                cl.anim_end = FRAME_death308
+            n : i32 [ (rand[] % 4) + 1 ]
+            g.sound[ e, CHAN_VOICE, g.soundindex[ 'player/male/death{n}.wav' ],
+                     1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    g.world.link[ e ]
+
+# InitClientPersistant: only when the game first initializes in single
+# player, but after each death and level change in deathmatch
+func init_client_persistant [ client: Client ]
+    pers : ClientPersistant [ ]
+    pers.inventory = vec i32 [ MAX_ITEMS ]
+    client.pers = pers
+    item : find_item[ 'Blaster' ]
+    pers.selected_item = item.index
+    pers.inventory[ pers.selected_item ] = 1
+    pers.weapon = item
+    pers.health = 100
+    pers.max_health = 100
+    pers.max_bullets = 200
+    pers.max_shells = 100
+    pers.max_rockets = 50
+    pers.max_grenades = 50
+    pers.max_cells = 200
+    pers.max_slugs = 50
+    pers.connected = true
+    pers.netname = 'player'
+
+# a copy of the persistant data: the inventory is its own vec
+func clone_pers [ p: ClientPersistant ] -> ClientPersistant
+    c : ClientPersistant [ netname: p.netname, hand: p.hand,
+        connected: p.connected, health: p.health,
+        max_health: p.max_health, savedFlags: p.savedFlags,
+        selected_item: p.selected_item, max_bullets: p.max_bullets,
+        max_shells: p.max_shells, max_rockets: p.max_rockets,
+        max_grenades: p.max_grenades, max_cells: p.max_cells,
+        max_slugs: p.max_slugs, weapon: p.weapon,
+        lastweapon: p.lastweapon, power_cubes: p.power_cubes,
+        score: p.score, game_helpchanged: p.game_helpchanged,
+        helpchanged: p.helpchanged, spectator: p.spectator ]
+    c.inventory = vec i32 [ MAX_ITEMS ]
+    for [ i: i32 0, i < MAX_ITEMS, i += 1 ]
+        c.inventory[ i ] = p.inventory[ i ]
+    return c
+
+func init_client_resp [ client: Client ]
+    resp : ClientRespawn [ ]
+    resp.enterframe = g.level.framenum
+    resp.coop_respawn = client.pers
+    client.resp = resp
+
+# SaveClientData: health and the like live on the edict; mirror them
+# before the edicts are wiped
+func save_client_data []
+    for [ i: i32 0, i < g.maxclients, i += 1 ]
+        ent : g.edicts[ 1 + i ]
+        if [ !ent.inuse ] continue
+        ent.client.pers.health = ent.health
+        ent.client.pers.max_health = ent.max_health
+        ent.client.pers.savedFlags =
+            ent.flags & (FL_GODMODE | FL_NOTARGET | FL_POWER_ARMOR)
+        if [ g.coop ] ent.client.pers.score = ent.client.resp.score
+
+func fetch_client_ent_data [ ent: Edict ]
+    ent.health = ent.client.pers.health
+    ent.max_health = ent.client.pers.max_health
+    ent.flags = ent.flags | ent.client.pers.savedFlags
+    if [ g.coop ] ent.client.resp.score = ent.client.pers.score
+
+# SelectSpawnPoint: the start whose targetname is the spawnpoint
+func select_spawn_point [ ent: Edict ] -> Edict
+    spot : Edict [ null ]
+    while [ true ]
+        spot = g.find[ spot, EField.classname, 'info_player_start' ]
+        if [ !spot ] break
+        if [ g.spawnpoint.count == 0 && !spot.targetname ] break
+        if [ g.spawnpoint.count == 0 || !spot.targetname ] continue
+        if [ strcasecmp[ g.spawnpoint.chars, spot.targetname.chars ] == 0 ]
+            break
+    if [ !spot ]
+        if [ g.spawnpoint.count == 0 ]
+            # there wasn't a spawnpoint without a target, so use any
+            spot = g.find[ null, EField.classname, 'info_player_start' ]
+        if [ !spot ] g.dprintf[ 'Could not find spawn point {g.spawnpoint}' ]
+    return spot
+
+func init_body_que []
+    g.level.body_que = 0
+    for [ i: i32 0, i < BODY_QUEUE_SIZE, i += 1 ]
+        ent : g.spawn[]
+        ent.classname = 'bodyque'
+
+func body_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                damage: i32, point: vec3f ]
+    if [ e.health < -40 ]
+        g.sound[ e, CHAN_BODY, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                       GIB_ORGANIC ]
+        e.origin = vec3f [ e.origin.x, e.origin.y, e.origin.z - 48.0 ]
+        throw_client_head[ e, damage ]
+        e.takedamage = DAMAGE_NO
+
+func copy_to_body_que [ ent: Edict ]
+    body : g.edicts[ g.maxclients + g.level.body_que + 1 ]
+    g.level.body_que = (g.level.body_que + 1) % BODY_QUEUE_SIZE
+    g.world.unlink[ ent ]
+    g.world.unlink[ body ]
+    body.origin = ent.origin
+    body.angles = ent.angles
+    body.old_origin = ent.old_origin
+    body.modelindex = ent.modelindex
+    body.frame = ent.frame
+    body.skinnum = ent.skinnum
+    body.effects = ent.effects
+    body.renderfx = ent.renderfx
+    body.svflags = ent.svflags
+    body.mins = ent.mins
+    body.maxs = ent.maxs
+    body.absmin = ent.absmin
+    body.absmax = ent.absmax
+    body.size = ent.size
+    body.solid = ent.solid
+    body.clipmask = ent.clipmask
+    body.owner = ent.owner
+    body.movetype = ent.movetype
+    body.die = lambda body_die[]
+    body.takedamage = DAMAGE_YES
+    g.world.link[ body ]
+
+func respawn [ e: Edict ]
+    if [ g.deathmatch || g.coop ]
+        # spectator's don't leave bodies
+        if [ e.movetype != MOVETYPE_NOCLIP ] copy_to_body_que[ e ]
+        e.svflags = e.svflags & ~SVF_NOCLIENT
+        put_client_in_server[ e ]
+        e.event = EV_PLAYER_TELEPORT
+        e.client.ps.pm_flags = PMF_TIME_TELEPORT
+        e.client.ps.pm_time = 14
+        e.client.respawn_time = g.level.time
+        return
+    # single player: the menu would offer a load; the level restarts
+    g.restart = true
+
+# PutClientInServer: a player connects, or respawns in deathmatch
+func put_client_in_server [ ent: Edict ]
+    client : ent.client
+    spot : select_spawn_point[ ent ]
+    spawn_origin : vec3f [ 0.0, 0.0, 0.0 ]
+    spawn_angles : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ spot ]
+        spawn_origin = vec3f [ spot.origin.x, spot.origin.y,
+                               spot.origin.z + 9.0 ]
+        spawn_angles = spot.angles
+    # deathmatch wipes most client data every spawn
+    resp : ClientRespawn [ ]
+    if [ g.deathmatch ]
+        resp = client.resp
+        init_client_persistant[ client ]
+    el [ g.coop ]
+        resp = client.resp
+        resp.coop_respawn.game_helpchanged = client.pers.game_helpchanged
+        resp.coop_respawn.helpchanged = client.pers.helpchanged
+        client.pers = resp.coop_respawn
+        if [ resp.score > client.pers.score ] client.pers.score = resp.score
+    # clear everything but the persistant data
+    saved : client.pers
+    fresh : Client [ ]
+    fresh.ps = PlayerState [ ]
+    fresh.ps.stats = vec i32 [ 32 ]
+    fresh.pers = saved
+    fresh.centerprint = client.centerprint
+    ent.client = fresh
+    client = fresh
+    if [ client.pers.health <= 0 ] init_client_persistant[ client ]
+    client.resp = resp
+    # copy some data from the client to the entity
+    fetch_client_ent_data[ ent ]
+    # clear entity values
+    ent.groundentity = null
+    ent.takedamage = DAMAGE_AIM
+    ent.movetype = MOVETYPE_WALK
+    ent.viewheight = 22
+    ent.inuse = true
+    ent.classname = 'player'
+    ent.mass = 200
+    ent.solid = SOLID_BBOX
+    ent.deadflag = DEAD_NO
+    ent.air_finished = g.level.time + 12.0
+    ent.clipmask = MASK_PLAYERSOLID
+    ent.model = 'players/male/tris.md2'
+    ent.pain = lambda player_pain[]
+    ent.die = lambda player_die[]
+    ent.waterlevel = 0
+    ent.watertype = 0
+    ent.flags = ent.flags & ~FL_NO_KNOCKBACK
+    ent.svflags = ent.svflags & ~SVF_DEADMONSTER
+    ent.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    ent.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    ent.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+    ent.health = client.pers.health
+    ent.max_health = client.pers.max_health
+    ent.gravity = 1.0
+    ent.monsterinfo = MonsterInfo [ ]
+    # clear playerstate values
+    client.ps.fov = 90.0
+    client.ps.gunindex = g.modelindex[ client.pers.weapon.view_model ]
+    # clear entity state values
+    ent.effects = 0
+    ent.modelindex = 255
+    ent.modelindex2 = 255
+    ent.skinnum = ent.number - 1
+    ent.frame = 0
+    ent.origin = vec3f [ spawn_origin.x, spawn_origin.y,
+                         spawn_origin.z + 1.0 ]
+    ent.old_origin = ent.origin
+    # set the delta angle
+    client.ps.delta_angles = v_sub[ spawn_angles, client.resp.cmd_angles ]
+    ent.angles = vec3f [ 0.0, spawn_angles.y, 0.0 ]
+    client.ps.viewangles = ent.angles
+    client.v_angle = ent.angles
+    if [ client.pers.spectator ]
+        client.chase_target = null
+        client.resp.spectator = true
+        ent.movetype = MOVETYPE_NOCLIP
+        ent.solid = SOLID_NOT
+        ent.svflags = ent.svflags | SVF_NOCLIENT
+        ent.client.ps.gunindex = 0
+        g.world.link[ ent ]
+        return
+    el
+        client.resp.spectator = false
+    g.kill_box[ ent ]
+    g.world.link[ ent ]
+    # force the current weapon up
+    client.newweapon = client.pers.weapon
+    change_weapon[ ent ]
+
+# ClientThink: the pmove ran on the view; this is the rest of it
+func client_think [ ent: Edict, buttons: i32, upmove: i32,
+                    viewangles: vec3f, touched: vec Edict ]
+    g.level.current_entity = ent
+    client : ent.client
+    if [ g.level.intermissiontime != 0.0 ]
+        client.ps.pm_type = PM_FREEZE
+        # can exit intermission after five seconds
+        if [ g.level.time > g.level.intermissiontime + 5.0 &&
+             (buttons & BUTTON_ANY) != 0 ]
+            g.level.exitintermission = true
+        return
+    if [ ent.movetype == MOVETYPE_NOCLIP ]  client.ps.pm_type = PM_SPECTATOR
+    el [ ent.modelindex != 255 ]           client.ps.pm_type = PM_GIB
+    el [ ent.deadflag != 0 ]               client.ps.pm_type = PM_DEAD
+    el                                     client.ps.pm_type = PM_NORMAL
+    client.ps.gravity = i32[ g.sv_gravity ]
+    client.resp.cmd_angles = viewangles
+    if [ ent.deadflag != 0 ]
+        client.ps.viewangles = vec3f [ -15.0, client.killer_yaw, 40.0 ]
+    el
+        client.v_angle = viewangles
+        client.ps.viewangles = viewangles
+    g.world.link[ ent ]
+    if [ ent.movetype != MOVETYPE_NOCLIP ] g.touch_triggers[ ent ]
+    # touch other objects
+    for [ i: i32 0, i < touched.count, i += 1 ]
+        other : touched[ i ]
+        j : i32 [ 0 ]
+        while [ j < i ]
+            if [ touched[ j ] == other ] break
+            j += 1
+        if [ j != i ] continue
+        if [ !other.touch ] continue
+        g.touch_plane_on = false
+        other.touch[ other, ent ]
+    client.oldbuttons = client.buttons
+    client.buttons = buttons
+    client.latched_buttons = client.latched_buttons
+        | (client.buttons & ~client.oldbuttons)
+    # save light level the player is standing on for monster sighting
+    ent.light_level = 128
+    # fire weapon from final position if needed
+    if [ client.latched_buttons & BUTTON_ATTACK ]
+        if [ !client.weapon_thunk ]
+            client.weapon_thunk = true
+            think_weapon[ ent ]
+
+# ClientBeginServerFrame: once a server frame, before the entities run
+func client_begin_server_frame [ ent: Edict ]
+    if [ g.level.intermissiontime != 0.0 ] return
+    client : ent.client
+    # run weapon animations if it hasn't been done by a ucmd_t
+    if [ !client.weapon_thunk && !client.resp.spectator ] think_weapon[ ent ]
+    el                                                   client.weapon_thunk = false
+    if [ ent.deadflag != 0 ]
+        # wait for any button just going down
+        if [ g.level.time > client.respawn_time ]
+            if [ client.latched_buttons != 0 ||
+                 (g.deathmatch && (g.dmflags & 1024) != 0) ]
+                respawn[ ent ]
+                client.latched_buttons = 0
+        return
+    # add player trail so monsters can follow
+    if [ !g.deathmatch ]
+        last : player_trail_last_spot[]
+        if [ !last || !visible[ ent, last ] ]
+            player_trail_add[ ent.old_origin ]
+    client.latched_buttons = 0
+
+# ---- p_view.c
+func sv_calc_roll [ angles: vec3f, velocity: vec3f ] -> f32
+    side : f32 [ v_dot[ velocity, g.view_right ] ]
+    sign : f32 [ (side < 0.0) ? -1.0 : 1.0 ]
+    side = fabs[ side ]
+    value : f32 [ 2.0 ]
+    if [ side < 200.0 ] side = side * value / 200.0
+    el                  side = value
+    return side * sign
+
+# P_DamageFeedback: color blends and view kicks
+func p_damage_feedback [ player: Edict ]
+    client : player.client
+    # flash the backgrounds behind the status numbers
+    client.ps.stats[ STAT_FLASHES ] = 0
+    if [ client.damage_blood != 0 ]
+        client.ps.stats[ STAT_FLASHES ] = client.ps.stats[ STAT_FLASHES ] | 1
+    if [ client.damage_armor != 0 && (player.flags & FL_GODMODE) == 0 &&
+         client.invincible_framenum <= f32[ g.level.framenum ] ]
+        client.ps.stats[ STAT_FLASHES ] = client.ps.stats[ STAT_FLASHES ] | 2
+    # total points of damage shot at the player this frame
+    count : f32 [ f32[ client.damage_blood + client.damage_armor
+                       + client.damage_parmor ] ]
+    if [ count == 0.0 ] return
+    # start a pain animation if still in the player model
+    if [ client.anim_priority < ANIM_PAIN && player.modelindex == 255 ]
+        client.anim_priority = ANIM_PAIN
+        if [ client.ps.pm_flags & PMF_DUCKED ]
+            player.frame = FRAME_crpain1 - 1
+            client.anim_end = FRAME_crpain4
+        el
+            g.pain_anim = (g.pain_anim + 1) % 3
+            if [ g.pain_anim == 0 ]
+                player.frame = FRAME_pain101 - 1
+                client.anim_end = FRAME_pain104
+            el [ g.pain_anim == 1 ]
+                player.frame = FRAME_pain201 - 1
+                client.anim_end = FRAME_pain204
+            el
+                player.frame = FRAME_pain301 - 1
+                client.anim_end = FRAME_pain304
+    realcount : f32 [ count ]
+    # always make a visible effect
+    if [ count < 10.0 ] count = 10.0
+    # play an apropriate pain sound
+    if [ g.level.time > player.pain_debounce_time &&
+         (player.flags & FL_GODMODE) == 0 &&
+         client.invincible_framenum <= f32[ g.level.framenum ] ]
+        r : i32 [ 1 + (rand[] & 1) ]
+        player.pain_debounce_time = g.level.time + 0.7
+        l : i32 [ 100 ]
+        if [ player.health < 25 ]      l = 25
+        el [ player.health < 50 ]      l = 50
+        el [ player.health < 75 ]      l = 75
+        g.sound[ player, CHAN_VOICE,
+                 g.soundindex[ 'player/male/pain{l}_{r}.wav' ], 1.0, ATTN_NORM ]
+    # the total alpha of the blend is always proportional to count
+    if [ client.damage_alpha < 0.0 ] client.damage_alpha = 0.0
+    client.damage_alpha += count * 0.01
+    if [ client.damage_alpha < 0.2 ] client.damage_alpha = 0.2
+    if [ client.damage_alpha > 0.6 ] client.damage_alpha = 0.6
+    # the color of the blend will vary based on how much was absorbed
+    # by different armors
+    v : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ client.damage_parmor != 0 ]
+        v = v_ma[ v, f32[ client.damage_parmor ] / realcount,
+                  vec3f [ 0.0, 1.0, 0.0 ] ]
+    if [ client.damage_armor != 0 ]
+        v = v_ma[ v, f32[ client.damage_armor ] / realcount,
+                  vec3f [ 1.0, 1.0, 1.0 ] ]
+    if [ client.damage_blood != 0 ]
+        v = v_ma[ v, f32[ client.damage_blood ] / realcount,
+                  vec3f [ 1.0, 0.0, 0.0 ] ]
+    client.damage_blend = v
+    # calculate view angle kicks
+    kick : f32 [ f32[ (client.damage_knockback < 0) ? 0 - client.damage_knockback
+                      : client.damage_knockback ] ]
+    if [ kick != 0.0 && player.health > 0 ]
+        kick = kick * 100.0 / f32[ player.health ]
+        if [ kick < count * 0.5 ] kick = count * 0.5
+        if [ kick > 50.0 ] kick = 50.0
+        from : v_norm[ v_sub[ client.damage_from, player.origin ] ]
+        side : f32 [ v_dot[ from, g.view_right ] ]
+        client.v_dmg_roll = kick * side * 0.3
+        side = 0.0 - v_dot[ from, g.view_forward ]
+        client.v_dmg_pitch = kick * side * 0.3
+        client.v_dmg_time = g.level.time + DAMAGE_TIME
+    # clear totals
+    client.damage_blood = 0
+    client.damage_armor = 0
+    client.damage_parmor = 0
+    client.damage_knockback = 0
+
+func sv_calc_view_offset [ ent: Edict ]
+    cl : ent.client
+    angles : vec3f [ 0.0, 0.0, 0.0 ]
+    # if dead, fix the angle and don't add any kick
+    if [ ent.deadflag != 0 ]
+        cl.ps.viewangles = vec3f [ -15.0, cl.killer_yaw, 40.0 ]
+    el
+        # add angles based on weapon kick
+        angles = cl.kick_angles
+        # add angles based on damage kick
+        ratio : f32 [ (cl.v_dmg_time - g.level.time) / DAMAGE_TIME ]
+        if [ ratio < 0.0 ]
+            ratio = 0.0
+            cl.v_dmg_pitch = 0.0
+            cl.v_dmg_roll = 0.0
+        angles = vec3f [ angles.x + ratio * cl.v_dmg_pitch, angles.y,
+                         angles.z + ratio * cl.v_dmg_roll ]
+        # add pitch based on fall kick
+        ratio = (cl.fall_time - g.level.time) / FALL_TIME
+        if [ ratio < 0.0 ] ratio = 0.0
+        angles = vec3f [ angles.x + ratio * cl.fall_value, angles.y,
+                         angles.z ]
+        # add angles based on velocity
+        delta : f32 [ v_dot[ ent.velocity, g.view_forward ] ]
+        angles = vec3f [ angles.x + delta * 0.002, angles.y, angles.z ]
+        delta = v_dot[ ent.velocity, g.view_right ]
+        angles = vec3f [ angles.x, angles.y, angles.z + delta * 0.005 ]
+        # add angles based on bob
+        delta = g.bobfracsin * 0.002 * g.xyspeed
+        if [ cl.ps.pm_flags & PMF_DUCKED ] delta = delta * 6.0
+        angles = vec3f [ angles.x + delta, angles.y, angles.z ]
+        delta = g.bobfracsin * 0.002 * g.xyspeed
+        if [ cl.ps.pm_flags & PMF_DUCKED ] delta = delta * 6.0
+        if [ g.bobcycle & 1 ] delta = 0.0 - delta
+        angles = vec3f [ angles.x, angles.y, angles.z + delta ]
+    cl.ps.kick_angles = angles
+    # base origin
+    v : vec3f [ 0.0, 0.0, f32[ ent.viewheight ] ]
+    # add fall height
+    ratio : f32 [ (cl.fall_time - g.level.time) / FALL_TIME ]
+    if [ ratio < 0.0 ] ratio = 0.0
+    v = vec3f [ v.x, v.y, v.z - ratio * cl.fall_value * 0.4 ]
+    # add bob height
+    bob : f32 [ g.bobfracsin * g.xyspeed * 0.005 ]
+    if [ bob > 6.0 ] bob = 6.0
+    v = vec3f [ v.x, v.y, v.z + bob ]
+    # add kick offset
+    v = v_add[ v, cl.kick_origin ]
+    # absolutely bound offsets so the view can never be outside the
+    # player box
+    cl.ps.viewoffset = vec3f [ clamp[ v.x, -14.0, 14.0 ],
+                               clamp[ v.y, -14.0, 14.0 ],
+                               clamp[ v.z, -22.0, 30.0 ] ]
+
+func sv_calc_gun_offset [ ent: Edict ]
+    cl : ent.client
+    # gun angles from bobbing
+    roll : f32 [ g.xyspeed * g.bobfracsin * 0.005 ]
+    yaw : f32 [ g.xyspeed * g.bobfracsin * 0.01 ]
+    if [ g.bobcycle & 1 ]
+        roll = 0.0 - roll
+        yaw = 0.0 - yaw
+    pitch : f32 [ g.xyspeed * g.bobfracsin * 0.005 ]
+    ga : vec3f [ pitch, yaw, roll ]
+    # gun angles from delta movement
+    for [ i: i32 0, i < 3, i += 1 ]
+        old : f32 [ (i == 0) ? cl.oldviewangles.x
+                    : ((i == 1) ? cl.oldviewangles.y : cl.oldviewangles.z) ]
+        cur : f32 [ (i == 0) ? cl.ps.viewangles.x
+                    : ((i == 1) ? cl.ps.viewangles.y : cl.ps.viewangles.z) ]
+        delta : f32 [ old - cur ]
+        if [ delta > 180.0 ] delta = delta - 360.0
+        if [ delta < -180.0 ] delta = delta + 360.0
+        if [ delta > 45.0 ] delta = 45.0
+        if [ delta < -45.0 ] delta = -45.0
+        if [ i == 1 ] ga = vec3f [ ga.x, ga.y, ga.z + 0.1 * delta ]
+        if [ i == 0 ]      ga = vec3f [ ga.x + 0.2 * delta, ga.y, ga.z ]
+        el [ i == 1 ]      ga = vec3f [ ga.x, ga.y + 0.2 * delta, ga.z ]
+        el                 ga = vec3f [ ga.x, ga.y, ga.z + 0.2 * delta ]
+    cl.ps.gunangles = ga
+    # gun_x, gun_y, gun_z are 0
+    cl.ps.gunoffset = vec3f [ 0.0, 0.0, 0.0 ]
+
+func sv_add_blend [ r: f32, gg: f32, b: f32, alpha: f32,
+                    blend: vec4f ] -> vec4f
+    if [ alpha <= 0.0 ] return blend
+    a2 : f32 [ blend.w + (1.0 - blend.w) * alpha ]
+    a3 : f32 [ blend.w / a2 ]
+    return vec4f [ blend.x * a3 + r * (1.0 - a3), blend.y * a3 + gg * (1.0 - a3),
+                   blend.z * a3 + b * (1.0 - a3), a2 ]
+
+func sv_calc_blend [ ent: Edict ]
+    cl : ent.client
+    blend : vec4f [ 0.0, 0.0, 0.0, 0.0 ]
+    # add for contents
+    vieworg : v_add[ ent.origin, cl.ps.viewoffset ]
+    contents : i32 [ g.world.point_contents[ vieworg ] ]
+    if [ contents & (CONTENTS_LAVA | CONTENTS_SLIME | CONTENTS_WATER) ]
+        cl.ps.rdflags = cl.ps.rdflags | 1
+    el
+        cl.ps.rdflags = cl.ps.rdflags & ~1
+    if [ contents & (CONTENTS_SOLID | CONTENTS_LAVA) ]
+        blend = sv_add_blend[ 1.0, 0.3, 0.0, 0.6, blend ]
+    el [ contents & CONTENTS_SLIME ]
+        blend = sv_add_blend[ 0.0, 0.1, 0.05, 0.6, blend ]
+    el [ contents & CONTENTS_WATER ]
+        blend = sv_add_blend[ 0.5, 0.3, 0.2, 0.4, blend ]
+    # add for powerups
+    fnum : f32 [ f32[ g.level.framenum ] ]
+    if [ cl.quad_framenum > fnum ]
+        remaining : i32 [ cl.quad_framenum - fnum ]
+        if [ remaining == 30 ]
+            g.sound[ ent, CHAN_ITEM, g.soundindex[ 'items/damage2.wav' ], 1.0,
+                     ATTN_NORM ]
+        if [ remaining > 30 || (remaining & 4) != 0 ]
+            blend = sv_add_blend[ 0.0, 0.0, 1.0, 0.08, blend ]
+    el [ cl.invincible_framenum > fnum ]
+        remaining : i32 [ cl.invincible_framenum - fnum ]
+        if [ remaining == 30 ]
+            g.sound[ ent, CHAN_ITEM, g.soundindex[ 'items/protect2.wav' ], 1.0,
+                     ATTN_NORM ]
+        if [ remaining > 30 || (remaining & 4) != 0 ]
+            blend = sv_add_blend[ 1.0, 1.0, 0.0, 0.08, blend ]
+    el [ cl.enviro_framenum > fnum ]
+        remaining : i32 [ cl.enviro_framenum - fnum ]
+        if [ remaining == 30 ]
+            g.sound[ ent, CHAN_ITEM, g.soundindex[ 'items/airout.wav' ], 1.0,
+                     ATTN_NORM ]
+        if [ remaining > 30 || (remaining & 4) != 0 ]
+            blend = sv_add_blend[ 0.0, 1.0, 0.0, 0.08, blend ]
+    el [ cl.breather_framenum > fnum ]
+        remaining : i32 [ cl.breather_framenum - fnum ]
+        if [ remaining == 30 ]
+            g.sound[ ent, CHAN_ITEM, g.soundindex[ 'items/airout.wav' ], 1.0,
+                     ATTN_NORM ]
+        if [ remaining > 30 || (remaining & 4) != 0 ]
+            blend = sv_add_blend[ 0.4, 1.0, 0.4, 0.04, blend ]
+    # add for damage
+    if [ cl.damage_alpha > 0.0 ]
+        blend = sv_add_blend[ cl.damage_blend.x, cl.damage_blend.y,
+                              cl.damage_blend.z, cl.damage_alpha, blend ]
+    if [ cl.bonus_alpha > 0.0 ]
+        blend = sv_add_blend[ 0.85, 0.7, 0.3, cl.bonus_alpha, blend ]
+    cl.ps.blend = blend
+    # drop the damage value
+    cl.damage_alpha -= 0.06
+    if [ cl.damage_alpha < 0.0 ] cl.damage_alpha = 0.0
+    # drop the bonus value
+    cl.bonus_alpha -= 0.1
+    if [ cl.bonus_alpha < 0.0 ] cl.bonus_alpha = 0.0
+
+func p_falling_damage [ ent: Edict ]
+    cl : ent.client
+    if [ ent.modelindex != 255 ] return
+    if [ ent.movetype == MOVETYPE_NOCLIP ] return
+    delta : f32 [ 0.0 ]
+    if [ cl.oldvelocity.z < 0.0 && ent.velocity.z > cl.oldvelocity.z &&
+         !ent.groundentity ]
+        delta = cl.oldvelocity.z
+    el
+        if [ !ent.groundentity ] return
+        delta = ent.velocity.z - cl.oldvelocity.z
+    delta = delta * delta * 0.0001
+    # never take falling damage if completely underwater
+    if [ ent.waterlevel == 3 ] return
+    if [ ent.waterlevel == 2 ] delta = delta * 0.25
+    if [ ent.waterlevel == 1 ] delta = delta * 0.5
+    if [ delta < 1.0 ] return
+    if [ delta < 15.0 ]
+        ent.event = EV_FOOTSTEP
+        return
+    cl.fall_value = delta * 0.5
+    if [ cl.fall_value > 40.0 ] cl.fall_value = 40.0
+    cl.fall_time = g.level.time + FALL_TIME
+    if [ delta > 30.0 ]
+        if [ ent.health > 0 ]
+            if [ delta >= 55.0 ] ent.event = EV_FALLFAR
+            el                   ent.event = EV_FALL
+        # no normal pain sound
+        ent.pain_debounce_time = g.level.time
+        damage : i32 [ (delta - 30.0) / 2.0 ]
+        if [ damage < 1 ] damage = 1
+        dir : vec3f [ 0.0, 0.0, 1.0 ]
+        if [ !g.deathmatch || (g.dmflags & 8) == 0 ]
+            t_damage[ ent, g.edicts[ 0 ], g.edicts[ 0 ], dir, ent.origin,
+                      vec3f [ 0.0, 0.0, 0.0 ], damage, 0, 0, MOD_FALLING ]
+    el
+        ent.event = EV_FALLSHORT
+
+func p_world_effects [ ent: Edict ]
+    cl : ent.client
+    world : g.edicts[ 0 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ ent.movetype == MOVETYPE_NOCLIP ]
+        # don't need air
+        ent.air_finished = g.level.time + 12.0
+        return
+    waterlevel : i32 [ ent.waterlevel ]
+    old_waterlevel : i32 [ cl.old_waterlevel ]
+    cl.old_waterlevel = waterlevel
+    breather : bool [ cl.breather_framenum > f32[ g.level.framenum ] ]
+    envirosuit : bool [ cl.enviro_framenum > f32[ g.level.framenum ] ]
+    # if just entered a water volume, play a sound
+    if [ old_waterlevel == 0 && waterlevel != 0 ]
+        player_noise[ ent, ent.origin, PNOISE_SELF ]
+        if [ ent.watertype & CONTENTS_LAVA ]
+            g.sound[ ent, CHAN_BODY, g.soundindex[ 'player/lava_in.wav' ], 1.0,
+                     ATTN_NORM ]
+        el [ ent.watertype & (CONTENTS_SLIME | CONTENTS_WATER) ]
+            g.sound[ ent, CHAN_BODY, g.soundindex[ 'player/watr_in.wav' ], 1.0,
+                     ATTN_NORM ]
+        ent.flags = ent.flags | FL_INWATER
+        # clear damage_debounce, so the pain sound will play immediately
+        ent.damage_debounce_time = g.level.time - 1.0
+    # if just completely exited a water volume, play a sound
+    if [ old_waterlevel != 0 && waterlevel == 0 ]
+        player_noise[ ent, ent.origin, PNOISE_SELF ]
+        g.sound[ ent, CHAN_BODY, g.soundindex[ 'player/watr_out.wav' ], 1.0,
+                 ATTN_NORM ]
+        ent.flags = ent.flags & ~FL_INWATER
+    # check for head just going under water
+    if [ old_waterlevel != 3 && waterlevel == 3 ]
+        g.sound[ ent, CHAN_BODY, g.soundindex[ 'player/watr_un.wav' ], 1.0,
+                 ATTN_NORM ]
+    # check for head just coming out of water
+    if [ old_waterlevel == 3 && waterlevel != 3 ]
+        if [ ent.air_finished < g.level.time ]
+            # gasp for air
+            g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/gasp1.wav' ], 1.0,
+                     ATTN_NORM ]
+            player_noise[ ent, ent.origin, PNOISE_SELF ]
+        el [ ent.air_finished < g.level.time + 11.0 ]
+            # just break surface
+            g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/gasp2.wav' ], 1.0,
+                     ATTN_NORM ]
+    # check for drowning
+    if [ waterlevel == 3 ]
+        # breather or envirosuit give air
+        if [ breather || envirosuit ]
+            ent.air_finished = g.level.time + 10.0
+            if [ (i32[ cl.breather_framenum - f32[ g.level.framenum ] ] % 25) == 0 ]
+                if [ cl.breather_sound == 0 ]
+                    g.sound[ ent, CHAN_AUTO, g.soundindex[ 'player/u_breath1.wav' ],
+                             1.0, ATTN_NORM ]
+                el
+                    g.sound[ ent, CHAN_AUTO, g.soundindex[ 'player/u_breath2.wav' ],
+                             1.0, ATTN_NORM ]
+                cl.breather_sound = 1 - cl.breather_sound
+                player_noise[ ent, ent.origin, PNOISE_SELF ]
+        # if out of air, start drowning
+        if [ ent.air_finished < g.level.time ]
+            # drown!
+            if [ cl.next_drown_time < g.level.time && ent.health > 0 ]
+                cl.next_drown_time = g.level.time + 1.0
+                # take more damage the longer underwater
+                ent.dmg += 2
+                if [ ent.dmg > 15 ] ent.dmg = 15
+                # play a gurp sound instead of a normal pain sound
+                if [ ent.health <= ent.dmg ]
+                    g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/drown1.wav' ],
+                             1.0, ATTN_NORM ]
+                el [ rand[] & 1 ]
+                    g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/male/gurp1.wav' ],
+                             1.0, ATTN_NORM ]
+                el
+                    g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/male/gurp2.wav' ],
+                             1.0, ATTN_NORM ]
+                ent.pain_debounce_time = g.level.time
+                t_damage[ ent, world, world, zero, ent.origin, zero, ent.dmg,
+                          0, DAMAGE_NO_ARMOR, MOD_WATER ]
+    el
+        ent.air_finished = g.level.time + 12.0
+        ent.dmg = 2
+    # check for sizzle damage
+    if [ waterlevel != 0 && (ent.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0 ]
+        if [ ent.watertype & CONTENTS_LAVA ]
+            if [ ent.health > 0 && ent.pain_debounce_time <= g.level.time &&
+                 cl.invincible_framenum < f32[ g.level.framenum ] ]
+                if [ rand[] & 1 ]
+                    g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/burn1.wav' ],
+                             1.0, ATTN_NORM ]
+                el
+                    g.sound[ ent, CHAN_VOICE, g.soundindex[ 'player/burn2.wav' ],
+                             1.0, ATTN_NORM ]
+                ent.pain_debounce_time = g.level.time + 1.0
+            # take 1/3 damage with envirosuit
+            dmg : i32 [ (envirosuit) ? 1 * waterlevel : 3 * waterlevel ]
+            t_damage[ ent, world, world, zero, ent.origin, zero, dmg, 0, 0,
+                      MOD_LAVA ]
+        if [ ent.watertype & CONTENTS_SLIME ]
+            # no damage from slime with envirosuit
+            if [ !envirosuit ]
+                t_damage[ ent, world, world, zero, ent.origin, zero,
+                          1 * waterlevel, 0, 0, MOD_SLIME ]
+
+func g_set_client_effects [ ent: Edict ]
+    ent.effects = 0
+    ent.renderfx = 0
+    if [ ent.health <= 0 || g.level.intermissiontime != 0.0 ] return
+    if [ ent.powerarmor_time > g.level.time ]
+        pa_type : i32 [ power_armor_type[ ent ] ]
+        if [ pa_type == POWER_ARMOR_SCREEN ]
+            ent.effects = ent.effects | EF_POWERSCREEN
+        el [ pa_type == POWER_ARMOR_SHIELD ]
+            ent.effects = ent.effects | EF_COLOR_SHELL
+            ent.renderfx = ent.renderfx | RF_SHELL_GREEN
+    fnum : f32 [ f32[ g.level.framenum ] ]
+    if [ ent.client.quad_framenum > fnum ]
+        remaining : i32 [ ent.client.quad_framenum - fnum ]
+        if [ remaining > 30 || (remaining & 4) != 0 ]
+            ent.effects = ent.effects | EF_QUAD
+    if [ ent.client.invincible_framenum > fnum ]
+        remaining : i32 [ ent.client.invincible_framenum - fnum ]
+        if [ remaining > 30 || (remaining & 4) != 0 ]
+            ent.effects = ent.effects | EF_PENT
+    # show cheaters!!!
+    if [ ent.flags & FL_GODMODE ]
+        ent.effects = ent.effects | EF_COLOR_SHELL
+        ent.renderfx = ent.renderfx | RF_SHELL_RED | RF_SHELL_GREEN
+            | RF_SHELL_BLUE
+
+func g_set_client_event [ ent: Edict ]
+    if [ ent.event != 0 ] return
+    if [ ent.groundentity && g.xyspeed > 225.0 ]
+        if [ i32[ ent.client.bobtime + g.bobmove ] != g.bobcycle ]
+            ent.event = EV_FOOTSTEP
+
+func g_set_client_sound [ ent: Edict ]
+    cl : ent.client
+    if [ cl.pers.game_helpchanged != g.helpchanged ]
+        cl.pers.game_helpchanged = g.helpchanged
+        cl.pers.helpchanged = 1
+    # help beep (no more than three times)
+    if [ cl.pers.helpchanged != 0 && cl.pers.helpchanged <= 3 &&
+         (g.level.framenum & 63) == 0 ]
+        cl.pers.helpchanged += 1
+        g.sound[ ent, CHAN_VOICE, g.soundindex[ 'misc/pc_up.wav' ], 1.0,
+                 ATTN_STATIC ]
+    weap : string [ (cl.pers.weapon) ? cl.pers.weapon.classname : '' ]
+    if [ ent.waterlevel != 0 &&
+         (ent.watertype & (CONTENTS_LAVA | CONTENTS_SLIME)) != 0 ]
+        ent.sound = g.snd_fry
+    el [ weap == 'weapon_railgun' ]
+        ent.sound = g.soundindex[ 'weapons/rg_hum.wav' ]
+    el [ weap == 'weapon_bfg' ]
+        ent.sound = g.soundindex[ 'weapons/bfg_hum.wav' ]
+    el [ cl.weapon_sound != 0 ]
+        ent.sound = cl.weapon_sound
+    el
+        ent.sound = 0
+
+func g_set_client_frame [ ent: Edict ]
+    if [ ent.modelindex != 255 ] return
+    client : ent.client
+    duck : bool [ (client.ps.pm_flags & PMF_DUCKED) != 0 ]
+    run : bool [ g.xyspeed != 0.0 ]
+    newanim : bool [ false ]
+    # check for stand/duck and stop/go transitions
+    if [ duck != client.anim_duck && client.anim_priority < ANIM_DEATH ]
+        newanim = true
+    el [ run != client.anim_run && client.anim_priority == ANIM_BASIC ]
+        newanim = true
+    el [ !ent.groundentity && client.anim_priority <= ANIM_WAVE ]
+        newanim = true
+    if [ !newanim ]
+        if [ client.anim_priority == ANIM_REVERSE ]
+            if [ ent.frame > client.anim_end ]
+                ent.frame -= 1
+                return
+        el [ ent.frame < client.anim_end ]
+            # continue an animation
+            ent.frame += 1
+            return
+        # stay there
+        if [ client.anim_priority == ANIM_DEATH ] return
+        if [ client.anim_priority == ANIM_JUMP ]
+            # stay there
+            if [ !ent.groundentity ] return
+            client.anim_priority = ANIM_WAVE
+            ent.frame = FRAME_jump3
+            client.anim_end = FRAME_jump6
+            return
+    # return to either a running or standing frame
+    client.anim_priority = ANIM_BASIC
+    client.anim_duck = duck
+    client.anim_run = run
+    if [ !ent.groundentity ]
+        client.anim_priority = ANIM_JUMP
+        if [ ent.frame != FRAME_jump2 ] ent.frame = FRAME_jump1
+        client.anim_end = FRAME_jump2
+    el [ run ]
+        # running
+        if [ duck ]
+            ent.frame = FRAME_crwalk1
+            client.anim_end = FRAME_crwalk6
+        el
+            ent.frame = FRAME_run1
+            client.anim_end = FRAME_run6
+    el
+        # standing
+        if [ duck ]
+            ent.frame = FRAME_crstnd01
+            client.anim_end = FRAME_crstnd19
+        el
+            ent.frame = FRAME_stand01
+            client.anim_end = FRAME_stand40
+
+# ClientEndServerFrame: each player at the end of the frame
+func client_end_server_frame [ ent: Edict ]
+    cl : ent.client
+    # if the end of unit layout is displayed, don't give the player any
+    # normal movement attributes
+    if [ g.level.intermissiontime != 0.0 ]
+        cl.ps.blend = vec4f [ cl.ps.blend.x, cl.ps.blend.y, cl.ps.blend.z, 0.0 ]
+        cl.ps.fov = 90.0
+        g_set_stats[ ent ]
+        return
+    ax : angle_vectors[ cl.v_angle ]
+    g.view_forward = ax.forward
+    g.view_right = ax.right
+    g.view_up = ax.up
+    # burn from lava, etc
+    p_world_effects[ ent ]
+    # set model angles from view angles so other things in the world
+    # can tell which direction you are looking
+    pitch : f32 [ (cl.v_angle.x > 180.0) ? (-360.0 + cl.v_angle.x) / 3.0
+                  : cl.v_angle.x / 3.0 ]
+    ent.angles = vec3f [ pitch, cl.v_angle.y, 0.0 ]
+    ent.angles = vec3f [ pitch, cl.v_angle.y,
+                         sv_calc_roll[ ent.angles, ent.velocity ] * 4.0 ]
+    # calculate speed and cycle to be used for all cyclic walking effects
+    g.xyspeed = sqrt[ ent.velocity.x * ent.velocity.x
+                      + ent.velocity.y * ent.velocity.y ]
+    if [ g.xyspeed < 5.0 ]
+        g.bobmove = 0.0
+        # start at beginning of cycle again
+        cl.bobtime = 0.0
+    el [ ent.groundentity ]
+        # so bobbing only cycles when on ground
+        if [ g.xyspeed > 210.0 ]      g.bobmove = 0.25
+        el [ g.xyspeed > 100.0 ]      g.bobmove = 0.125
+        el                            g.bobmove = 0.0625
+    cl.bobtime += g.bobmove
+    bobtime : f32 [ cl.bobtime ]
+    if [ cl.ps.pm_flags & PMF_DUCKED ] bobtime = bobtime * 4.0
+    g.bobcycle = i32[ bobtime ]
+    g.bobfracsin = fabs[ sin[ bobtime * 3.14159265358979 ] ]
+    # detect hitting the floor
+    p_falling_damage[ ent ]
+    # apply all the damage taken this frame
+    p_damage_feedback[ ent ]
+    # determine the view offsets
+    sv_calc_view_offset[ ent ]
+    # determine the gun offsets
+    sv_calc_gun_offset[ ent ]
+    # determine the full screen color blend
+    sv_calc_blend[ ent ]
+    g_set_stats[ ent ]
+    g_set_client_event[ ent ]
+    g_set_client_effects[ ent ]
+    g_set_client_sound[ ent ]
+    g_set_client_frame[ ent ]
+    cl.oldvelocity = ent.velocity
+    cl.oldviewangles = cl.ps.viewangles
+    # clear weapon kicks
+    cl.kick_origin = vec3f [ 0.0, 0.0, 0.0 ]
+    cl.kick_angles = vec3f [ 0.0, 0.0, 0.0 ]
+
+# ---- p_hud.c
+func move_client_to_intermission [ ent: Edict ]
+    cl : ent.client
+    if [ g.deathmatch || g.coop ] cl.showscores = true
+    ent.origin = g.level.intermission_origin
+    cl.ps.viewangles = g.level.intermission_angle
+    cl.ps.pm_type = PM_FREEZE
+    cl.ps.gunindex = 0
+    cl.ps.blend = vec4f [ 0.0, 0.0, 0.0, 0.0 ]
+    cl.ps.rdflags = cl.ps.rdflags & ~1
+    # clean up powerup info
+    cl.quad_framenum = 0.0
+    cl.invincible_framenum = 0.0
+    cl.breather_framenum = 0.0
+    cl.enviro_framenum = 0.0
+    cl.grenade_blew_up = false
+    cl.grenade_time = 0.0
+    ent.viewheight = 0
+    ent.modelindex = 0
+    ent.modelindex2 = 0
+    ent.modelindex3 = 0
+    ent.effects = 0
+    ent.sound = 0
+    ent.solid = SOLID_NOT
+
+func begin_intermission [ targ: Edict ]
+    # already activated
+    if [ g.level.intermissiontime != 0.0 ] return
+    g.autosaved = false
+    # respawn any dead clients
+    for [ i: i32 0, i < g.maxclients, i += 1 ]
+        client : g.edicts[ 1 + i ]
+        if [ !client.inuse ] continue
+        if [ client.health <= 0 ] respawn[ client ]
+    g.level.intermissiontime = g.level.time
+    g.level.changemap = targ.map
+    if [ strchr[ g.level.changemap.chars, 42 ] ]
+        if [ g.coop ]
+            for [ i: i32 0, i < g.maxclients, i += 1 ]
+                client : g.edicts[ 1 + i ]
+                if [ !client.inuse ] continue
+                # strip players of all keys between units
+                for [ n: i32 0, n < g.num_items, n += 1 ]
+                    if [ g.items[ n ].flags & IT_KEY ]
+                        client.client.pers.inventory[ n ] = 0
+    el
+        if [ !g.deathmatch ]
+            # go immediately to the next level
+            g.level.exitintermission = true
+            return
+    g.level.exitintermission = false
+    # find an intermission spot
+    ent : g.find[ null, EField.classname, 'info_player_intermission' ]
+    if [ !ent ]
+        # the map creator forgot to put in an intermission point...
+        ent = g.find[ null, EField.classname, 'info_player_start' ]
+        if [ !ent ] ent = g.find[ null, EField.classname, 'info_player_deathmatch' ]
+    el
+        # chose one of four spots
+        i : i32 [ rand[] & 3 ]
+        while [ i > 0 ]
+            i -= 1
+            ent = g.find[ ent, EField.classname, 'info_player_intermission' ]
+            # wrap around the list
+            if [ !ent ]
+                ent = g.find[ ent, EField.classname,
+                    'info_player_intermission' ]
+    if [ ent ]
+        g.level.intermission_origin = ent.origin
+        g.level.intermission_angle = ent.angles
+    # move all clients to the intermission point
+    for [ i: i32 0, i < g.maxclients, i += 1 ]
+        client : g.edicts[ 1 + i ]
+        if [ !client.inuse ] continue
+        move_client_to_intermission[ client ]
+
+func exit_level []
+    # gamemap <changemap>: the map load is the app's
+    g.next_map = g.level.changemap
+    g.level.changemap = null
+    g.level.exitintermission = false
+    g.level.intermissiontime = 0.0
+    for [ i: i32 1, i <= g.maxclients, i += 1 ]
+        e : g.edicts[ i ]
+        if [ !e.inuse || !e.client ] continue
+        client_end_server_frame[ e ]
+    for [ i: i32 0, i < g.maxclients, i += 1 ]
+        ent : g.edicts[ 1 + i ]
+        if [ !ent.inuse ] continue
+        if [ ent.health > ent.client.pers.max_health ]
+            ent.health = ent.client.pers.max_health
+
+func cmd_score [ ent: Edict ]
+    ent.client.showinventory = false
+    ent.client.showhelp = false
+    if [ !g.deathmatch && !g.coop ] return
+    if [ ent.client.showscores ]
+        ent.client.showscores = false
+        return
+    ent.client.showscores = true
+
+func cmd_help [ ent: Edict ]
+    # this is for backwards compatability
+    if [ g.deathmatch ]
+        cmd_score[ ent ]
+        return
+    ent.client.showinventory = false
+    ent.client.showscores = false
+    if [ ent.client.showhelp &&
+         ent.client.pers.game_helpchanged == g.helpchanged ]
+        ent.client.showhelp = false
+        return
+    ent.client.showhelp = true
+    ent.client.pers.helpchanged = 0
+
+# G_SetStats: the status bar numbers
+func g_set_stats [ ent: Edict ]
+    cl : ent.client
+    st : cl.ps.stats
+    # health
+    st[ STAT_HEALTH_ICON ] = g.level.pic_health
+    st[ STAT_HEALTH ] = ent.health
+    # ammo
+    if [ cl.ammo_index == 0 ]
+        st[ STAT_AMMO_ICON ] = 0
+        st[ STAT_AMMO ] = 0
+    el
+        item : g.items[ cl.ammo_index ]
+        st[ STAT_AMMO_ICON ] = g.imageindex[ item.icon ]
+        st[ STAT_AMMO ] = cl.pers.inventory[ cl.ammo_index ]
+    # armor
+    pa_type : i32 [ power_armor_type[ ent ] ]
+    cells : i32 [ 0 ]
+    if [ pa_type != 0 ]
+        cells = cl.pers.inventory[ find_item[ 'cells' ].index ]
+        if [ cells == 0 ]
+            # ran out of cells for power armor
+            ent.flags = ent.flags & ~FL_POWER_ARMOR
+            g.sound[ ent, CHAN_ITEM, g.soundindex[ 'misc/power2.wav' ], 1.0,
+                     ATTN_NORM ]
+            pa_type = 0
+    index : i32 [ armor_index[ ent ] ]
+    if [ pa_type != 0 && (index == 0 || (g.level.framenum & 8) != 0) ]
+        # flash between power armor and other armor icon
+        st[ STAT_ARMOR_ICON ] = g.imageindex[ 'i_powershield' ]
+        st[ STAT_ARMOR ] = cells
+    el [ index != 0 ]
+        item : get_item_by_index[ index ]
+        st[ STAT_ARMOR_ICON ] = g.imageindex[ item.icon ]
+        st[ STAT_ARMOR ] = cl.pers.inventory[ index ]
+    el
+        st[ STAT_ARMOR_ICON ] = 0
+        st[ STAT_ARMOR ] = 0
+    # pickup message
+    if [ g.level.time > cl.pickup_msg_time ]
+        st[ STAT_PICKUP_ICON ] = 0
+        st[ STAT_PICKUP_STRING ] = 0
+    # timers
+    fnum : f32 [ f32[ g.level.framenum ] ]
+    if [ cl.quad_framenum > fnum ]
+        st[ STAT_TIMER_ICON ] = g.imageindex[ 'p_quad' ]
+        st[ STAT_TIMER ] = i32[ (cl.quad_framenum - fnum) / 10.0 ]
+    el [ cl.invincible_framenum > fnum ]
+        st[ STAT_TIMER_ICON ] = g.imageindex[ 'p_invulnerability' ]
+        st[ STAT_TIMER ] = i32[ (cl.invincible_framenum - fnum) / 10.0 ]
+    el [ cl.enviro_framenum > fnum ]
+        st[ STAT_TIMER_ICON ] = g.imageindex[ 'p_envirosuit' ]
+        st[ STAT_TIMER ] = i32[ (cl.enviro_framenum - fnum) / 10.0 ]
+    el [ cl.breather_framenum > fnum ]
+        st[ STAT_TIMER_ICON ] = g.imageindex[ 'p_rebreather' ]
+        st[ STAT_TIMER ] = i32[ (cl.breather_framenum - fnum) / 10.0 ]
+    el
+        st[ STAT_TIMER_ICON ] = 0
+        st[ STAT_TIMER ] = 0
+    # selected item
+    if [ cl.pers.selected_item == -1 ]
+        st[ STAT_SELECTED_ICON ] = 0
+    el
+        st[ STAT_SELECTED_ICON ] =
+            g.imageindex[ g.items[ cl.pers.selected_item ].icon ]
+    st[ STAT_SELECTED_ITEM ] = cl.pers.selected_item
+    # layouts
+    st[ STAT_LAYOUTS ] = 0
+    if [ g.deathmatch ]
+        if [ cl.pers.health <= 0 || g.level.intermissiontime != 0.0 ||
+             cl.showscores ]
+            st[ STAT_LAYOUTS ] = st[ STAT_LAYOUTS ] | 1
+        if [ cl.showinventory && cl.pers.health > 0 ]
+            st[ STAT_LAYOUTS ] = st[ STAT_LAYOUTS ] | 2
+    el
+        if [ cl.showscores || cl.showhelp ]
+            st[ STAT_LAYOUTS ] = st[ STAT_LAYOUTS ] | 1
+        if [ cl.showinventory && cl.pers.health > 0 ]
+            st[ STAT_LAYOUTS ] = st[ STAT_LAYOUTS ] | 2
+    # frags
+    st[ STAT_FRAGS ] = cl.resp.score
+    # help icon / current weapon if not shown
+    if [ cl.pers.helpchanged != 0 && (g.level.framenum & 8) != 0 ]
+        st[ STAT_HELPICON ] = g.imageindex[ 'i_help' ]
+    el [ (cl.pers.hand == CENTER_HANDED || cl.ps.fov > 91.0) && cl.pers.weapon ]
+        st[ STAT_HELPICON ] = g.imageindex[ cl.pers.weapon.icon ]
+    el
+        st[ STAT_HELPICON ] = 0
+
+# ---- g_cmds.c
+func select_next_item [ ent: Edict, itflags: i32 ]
+    cl : ent.client
+    for [ i: i32 1, i <= MAX_ITEMS, i += 1 ]
+        index : i32 [ (cl.pers.selected_item + i) % MAX_ITEMS ]
+        if [ cl.pers.inventory[ index ] == 0 ] continue
+        it : g.items[ index ]
+        if [ !it.use ] continue
+        if [ (it.flags & itflags) == 0 ] continue
+        cl.pers.selected_item = index
+        return
+    cl.pers.selected_item = -1
+
+func select_prev_item [ ent: Edict, itflags: i32 ]
+    cl : ent.client
+    for [ i: i32 1, i <= MAX_ITEMS, i += 1 ]
+        index : i32 [ (cl.pers.selected_item + MAX_ITEMS - i) % MAX_ITEMS ]
+        if [ cl.pers.inventory[ index ] == 0 ] continue
+        it : g.items[ index ]
+        if [ !it.use ] continue
+        if [ (it.flags & itflags) == 0 ] continue
+        cl.pers.selected_item = index
+        return
+    cl.pers.selected_item = -1
+
+func validate_selected_item [ ent: Edict ]
+    cl : ent.client
+    if [ cl.pers.selected_item >= 0 &&
+         cl.pers.inventory[ cl.pers.selected_item ] != 0 ]
+        return
+    select_next_item[ ent, -1 ]
+
+# Cmd_Give_f: 'all', 'health', 'weapons', 'ammo', 'armor', or an item
+func cmd_give [ ent: Edict, name: string ]
+    give_all : bool [ strcasecmp[ name.chars, 'all' ] == 0 ]
+    if [ give_all || strcasecmp[ name.chars, 'health' ] == 0 ]
+        ent.health = ent.max_health
+        if [ !give_all ] return
+    if [ give_all || strcasecmp[ name.chars, 'weapons' ] == 0 ]
+        for [ i: i32 0, i < g.num_items, i += 1 ]
+            it : g.items[ i ]
+            if [ it.pickup == null ] continue
+            if [ (it.flags & IT_WEAPON) == 0 ] continue
+            inv_add[ ent, i, 1 ]
+        if [ !give_all ] return
+    if [ give_all || strcasecmp[ name.chars, 'ammo' ] == 0 ]
+        for [ i: i32 0, i < g.num_items, i += 1 ]
+            it : g.items[ i ]
+            if [ it.pickup == null ] continue
+            if [ (it.flags & IT_AMMO) == 0 ] continue
+            add_ammo[ ent, it, 1000 ]
+        if [ !give_all ] return
+    if [ give_all || strcasecmp[ name.chars, 'armor' ] == 0 ]
+        inv_set[ ent, find_item[ 'Jacket Armor' ].index, 0 ]
+        inv_set[ ent, find_item[ 'Combat Armor' ].index, 0 ]
+        body : find_item[ 'Body Armor' ]
+        inv_set[ ent, body.index, body.max_count ]
+        if [ !give_all ] return
+    if [ give_all || strcasecmp[ name.chars, 'Power Shield' ] == 0 ]
+        it : find_item[ 'Power Shield' ]
+        it_ent : g.spawn[]
+        it_ent.classname = it.classname
+        spawn_item[ it_ent, it ]
+        g.touch_plane_on = false
+        touch_item[ it_ent, ent ]
+        if [ it_ent.inuse ] g.free_edict[ it_ent ]
+        if [ !give_all ] return
+    if [ give_all ]
+        for [ i: i32 0, i < g.num_items, i += 1 ]
+            it : g.items[ i ]
+            if [ it.pickup == null ] continue
+            if [ it.flags & (IT_ARMOR | IT_WEAPON | IT_AMMO) ] continue
+            inv_set[ ent, i, 1 ]
+        return
+    it : find_item[ name ]
+    if [ !it ]
+        g.cprintf[ ent, 'unknown item' ]
+        return
+    if [ it.pickup == null ]
+        g.cprintf[ ent, 'non-pickup item' ]
+        return
+    if [ it.flags & IT_AMMO ]
+        inv_add[ ent, it.index, it.quantity ]
+    el
+        it_ent : g.spawn[]
+        it_ent.classname = it.classname
+        spawn_item[ it_ent, it ]
+        g.touch_plane_on = false
+        touch_item[ it_ent, ent ]
+        if [ it_ent.inuse ] g.free_edict[ it_ent ]
+
+func cmd_god [ ent: Edict ]
+    if [ ent.flags & FL_GODMODE ]
+        ent.flags = ent.flags & ~FL_GODMODE
+        g.cprintf[ ent, 'godmode OFF' ]
+    el
+        ent.flags = ent.flags | FL_GODMODE
+        g.cprintf[ ent, 'godmode ON' ]
+
+func cmd_notarget [ ent: Edict ]
+    if [ ent.flags & FL_NOTARGET ]
+        ent.flags = ent.flags & ~FL_NOTARGET
+        g.cprintf[ ent, 'notarget OFF' ]
+    el
+        ent.flags = ent.flags | FL_NOTARGET
+        g.cprintf[ ent, 'notarget ON' ]
+
+func cmd_noclip [ ent: Edict ]
+    if [ ent.movetype == MOVETYPE_NOCLIP ]
+        ent.movetype = MOVETYPE_WALK
+        g.cprintf[ ent, 'noclip OFF' ]
+    el
+        ent.movetype = MOVETYPE_NOCLIP
+        g.cprintf[ ent, 'noclip ON' ]
+
+func cmd_use [ ent: Edict, name: string ]
+    it : find_item[ name ]
+    if [ !it ]
+        g.cprintf[ ent, 'unknown item: {name}' ]
+        return
+    if [ !it.use ]
+        g.cprintf[ ent, 'Item is not usable.' ]
+        return
+    if [ inv_get[ ent, it.index ] == 0 ]
+        g.cprintf[ ent, 'Out of item: {name}' ]
+        return
+    it.use[ ent, it ]
+
+func cmd_drop [ ent: Edict, name: string ]
+    it : find_item[ name ]
+    if [ !it ]
+        g.cprintf[ ent, 'unknown item: {name}' ]
+        return
+    if [ !it.drop ]
+        g.cprintf[ ent, 'Item is not dropable.' ]
+        return
+    if [ inv_get[ ent, it.index ] == 0 ]
+        g.cprintf[ ent, 'Out of item: {name}' ]
+        return
+    it.drop[ ent, it ]
+
+func cmd_inven [ ent: Edict ]
+    cl : ent.client
+    cl.showscores = false
+    cl.showhelp = false
+    if [ cl.showinventory ]
+        cl.showinventory = false
+        return
+    cl.showinventory = true
+
+func cmd_invuse [ ent: Edict ]
+    validate_selected_item[ ent ]
+    if [ ent.client.pers.selected_item == -1 ]
+        g.cprintf[ ent, 'No item to use.' ]
+        return
+    it : g.items[ ent.client.pers.selected_item ]
+    if [ !it.use ]
+        g.cprintf[ ent, 'Item is not usable.' ]
+        return
+    it.use[ ent, it ]
+
+func cmd_weapprev [ ent: Edict ]
+    cl : ent.client
+    if [ !cl.pers.weapon ] return
+    selected_weapon : i32 [ cl.pers.weapon.index ]
+    # scan for the next valid one
+    for [ i: i32 1, i <= MAX_ITEMS, i += 1 ]
+        index : i32 [ (selected_weapon + i) % MAX_ITEMS ]
+        if [ cl.pers.inventory[ index ] == 0 ] continue
+        it : g.items[ index ]
+        if [ !it.use ] continue
+        if [ (it.flags & IT_WEAPON) == 0 ] continue
+        it.use[ ent, it ]
+        # successful
+        if [ cl.pers.weapon == it ] return
+
+func cmd_weapnext [ ent: Edict ]
+    cl : ent.client
+    if [ !cl.pers.weapon ] return
+    selected_weapon : i32 [ cl.pers.weapon.index ]
+    for [ i: i32 1, i <= MAX_ITEMS, i += 1 ]
+        index : i32 [ (selected_weapon + MAX_ITEMS - i) % MAX_ITEMS ]
+        if [ cl.pers.inventory[ index ] == 0 ] continue
+        it : g.items[ index ]
+        if [ !it.use ] continue
+        if [ (it.flags & IT_WEAPON) == 0 ] continue
+        it.use[ ent, it ]
+        if [ cl.pers.weapon == it ] return
+
+func cmd_weaplast [ ent: Edict ]
+    cl : ent.client
+    if [ !cl.pers.weapon || !cl.pers.lastweapon ] return
+    index : i32 [ cl.pers.lastweapon.index ]
+    if [ cl.pers.inventory[ index ] == 0 ] return
+    it : g.items[ index ]
+    if [ !it.use ] return
+    if [ (it.flags & IT_WEAPON) == 0 ] return
+    it.use[ ent, it ]
+
+func cmd_invdrop [ ent: Edict ]
+    validate_selected_item[ ent ]
+    if [ ent.client.pers.selected_item == -1 ]
+        g.cprintf[ ent, 'No item to drop.' ]
+        return
+    it : g.items[ ent.client.pers.selected_item ]
+    if [ !it.drop ]
+        g.cprintf[ ent, 'Item is not dropable.' ]
+        return
+    it.drop[ ent, it ]
+
+func cmd_kill [ ent: Edict ]
+    if [ g.level.time - ent.client.respawn_time < 5.0 ] return
+    ent.flags = ent.flags & ~FL_GODMODE
+    ent.health = 0
+    g.means_of_death = MOD_SUICIDE
+    player_die[ ent, ent, ent, 100000, vec3f [ 0.0, 0.0, 0.0 ] ]
+
+func cmd_putaway [ ent: Edict ]
+    ent.client.showscores = false
+    ent.client.showhelp = false
+    ent.client.showinventory = false
+
+func cmd_wave [ ent: Edict, i: i32 ]
+    cl : ent.client
+    # can't wave when ducked
+    if [ cl.ps.pm_flags & PMF_DUCKED ] return
+    if [ cl.anim_priority > ANIM_WAVE ] return
+    cl.anim_priority = ANIM_WAVE
+    if [ i == 0 ]
+        g.cprintf[ ent, 'flipoff' ]
+        ent.frame = FRAME_flip01 - 1
+        cl.anim_end = FRAME_flip12
+    el [ i == 1 ]
+        g.cprintf[ ent, 'salute' ]
+        ent.frame = FRAME_salute01 - 1
+        cl.anim_end = FRAME_salute11
+    el [ i == 2 ]
+        g.cprintf[ ent, 'taunt' ]
+        ent.frame = FRAME_taunt01 - 1
+        cl.anim_end = FRAME_taunt17
+    el [ i == 3 ]
+        g.cprintf[ ent, 'wave' ]
+        ent.frame = FRAME_wave01 - 1
+        cl.anim_end = FRAME_wave11
+    el
+        g.cprintf[ ent, 'point' ]
+        ent.frame = FRAME_point01 - 1
+        cl.anim_end = FRAME_point12
+
+# ClientCommand: the console commands the app forwards
+func client_command [ ent: Edict, cmd: string, arg: string ]
+    if [ !ent.client ] return
+    if [ cmd == 'score' ]
+        cmd_score[ ent ]
+        return
+    if [ cmd == 'help' ]
+        cmd_help[ ent ]
+        return
+    if [ g.level.intermissiontime != 0.0 ] return
+    if [ cmd == 'use' ]            cmd_use[ ent, arg ]
+    el [ cmd == 'drop' ]           cmd_drop[ ent, arg ]
+    el [ cmd == 'give' ]           cmd_give[ ent, arg ]
+    el [ cmd == 'god' ]            cmd_god[ ent ]
+    el [ cmd == 'notarget' ]       cmd_notarget[ ent ]
+    el [ cmd == 'noclip' ]         cmd_noclip[ ent ]
+    el [ cmd == 'inven' ]          cmd_inven[ ent ]
+    el [ cmd == 'invnext' ]        select_next_item[ ent, -1 ]
+    el [ cmd == 'invprev' ]        select_prev_item[ ent, -1 ]
+    el [ cmd == 'invnextw' ]       select_next_item[ ent, IT_WEAPON ]
+    el [ cmd == 'invprevw' ]       select_prev_item[ ent, IT_WEAPON ]
+    el [ cmd == 'invnextp' ]       select_next_item[ ent, IT_POWERUP ]
+    el [ cmd == 'invprevp' ]       select_prev_item[ ent, IT_POWERUP ]
+    el [ cmd == 'invuse' ]         cmd_invuse[ ent ]
+    el [ cmd == 'invdrop' ]        cmd_invdrop[ ent ]
+    el [ cmd == 'weapprev' ]       cmd_weapprev[ ent ]
+    el [ cmd == 'weapnext' ]       cmd_weapnext[ ent ]
+    el [ cmd == 'weaplast' ]       cmd_weaplast[ ent ]
+    el [ cmd == 'kill' ]           cmd_kill[ ent ]
+    el [ cmd == 'putaway' ]        cmd_putaway[ ent ]
+    el [ cmd == 'wave' ]           cmd_wave[ ent, i32[ atoi[ arg.chars ] ] ]
+    el                             g.cprintf[ ent, 'unknown command {cmd}' ]
+

@@ -1,0 +1,336 @@
+# m_boss31.c: jorg, the makron's walker (twin chainguns, bfg)
+extend quake2
+
+jorg_sound_pain1 : i32
+jorg_sound_pain2 : i32
+jorg_sound_pain3 : i32
+jorg_sound_idle : i32
+jorg_sound_death : i32
+jorg_sound_search1 : i32
+jorg_sound_search2 : i32
+jorg_sound_search3 : i32
+jorg_sound_attack1 : i32
+jorg_sound_attack2 : i32
+jorg_sound_step_left : i32
+jorg_sound_step_right : i32
+jorg_sound_death_hit : i32
+jorg_move_stand : MMove
+jorg_move_run : MMove
+jorg_move_start_walk : MMove
+jorg_move_walk : MMove
+jorg_move_end_walk : MMove
+jorg_move_pain3 : MMove
+jorg_move_pain2 : MMove
+jorg_move_pain1 : MMove
+jorg_move_death : MMove
+jorg_move_attack2 : MMove
+jorg_move_start_attack1 : MMove
+jorg_move_attack1 : MMove
+jorg_move_end_attack1 : MMove
+
+func jorg_search [ e: Edict ]
+    r : f32 [ frand[] ]
+    if [ r <= 0.3 ]
+        g.sound[ e, CHAN_VOICE, jorg_sound_search1, 1.0, ATTN_NORM ]
+    el [ r <= 0.6 ]
+        g.sound[ e, CHAN_VOICE, jorg_sound_search2, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, jorg_sound_search3, 1.0, ATTN_NORM ]
+
+func jorg_idle [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, jorg_sound_idle, 1.0, ATTN_NORM ]
+
+func jorg_death_hit [ e: Edict ]
+    g.sound[ e, CHAN_BODY, jorg_sound_death_hit, 1.0, ATTN_NORM ]
+
+func jorg_step_left [ e: Edict ]
+    g.sound[ e, CHAN_BODY, jorg_sound_step_left, 1.0, ATTN_NORM ]
+
+func jorg_step_right [ e: Edict ]
+    g.sound[ e, CHAN_BODY, jorg_sound_step_right, 1.0, ATTN_NORM ]
+
+func jorg_stand [ e: Edict ]
+    e.monsterinfo.currentmove = jorg_move_stand
+
+func jorg_walk [ e: Edict ]
+    e.monsterinfo.currentmove = jorg_move_walk
+
+func jorg_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = jorg_move_stand
+    el
+        e.monsterinfo.currentmove = jorg_move_run
+
+func jorg_reattack1 [ e: Edict ]
+    if [ visible[ e, e.enemy ] && frand[] < 0.9 ]
+        e.monsterinfo.currentmove = jorg_move_attack1
+    el
+        e.sound = 0
+        e.monsterinfo.currentmove = jorg_move_end_attack1
+
+func jorg_attack1 [ e: Edict ]
+    e.monsterinfo.currentmove = jorg_move_attack1
+
+func jorg_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    e.sound = 0
+    if [ g.level.time < e.pain_debounce_time ] return
+    # lessen the chance of pain frames when he takes little damage
+    if [ damage <= 40 ]
+        if [ frand[] <= 0.6 ] return
+    # entering attack1 or using it, or raising the bfg: less again
+    # attak101 0 .. attak108 7
+    if [ e.frame >= 0 && e.frame <= 7 ]
+        if [ frand[] <= 0.005 ] return
+    # attak109 8 .. attak114 13
+    if [ e.frame >= 8 && e.frame <= 13 ]
+        if [ frand[] <= 0.00005 ] return
+    # attak201 18 .. attak208 25
+    if [ e.frame >= 18 && e.frame <= 25 ]
+        if [ frand[] <= 0.005 ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ damage <= 50 ]
+        g.sound[ e, CHAN_VOICE, jorg_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = jorg_move_pain1
+    el [ damage <= 100 ]
+        g.sound[ e, CHAN_VOICE, jorg_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = jorg_move_pain2
+    el [ frand[] <= 0.3 ]
+        g.sound[ e, CHAN_VOICE, jorg_sound_pain3, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = jorg_move_pain3
+
+func jorg_bfg [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ MZ2_JORG_BFG_1 ],
+                            ax.forward, ax.right ]
+    aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_norm[ v_sub[ aim, start ] ]
+    g.sound[ e, CHAN_VOICE, jorg_sound_attack2, 1.0, ATTN_NORM ]
+    monster_fire_bfg[ e, start, dir, 50, 300, 100, 200.0,
+                      MZ2_JORG_BFG_1 ]
+
+func jorg_firebullet_at [ e: Edict, flash: i32 ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash ], ax.forward,
+                            ax.right ]
+    target : v_ma[ e.enemy.origin, -0.2, e.enemy.velocity ]
+    target = vec3f [ target.x, target.y,
+                     target.z + f32[ e.enemy.viewheight ] ]
+    forward : v_norm[ v_sub[ target, start ] ]
+    monster_fire_bullet[ e, start, forward, 6, 4,
+                         DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                         flash ]
+
+func jorg_firebullet [ e: Edict ]
+    jorg_firebullet_at[ e, MZ2_JORG_MACHINEGUN_L1 ]
+    jorg_firebullet_at[ e, MZ2_JORG_MACHINEGUN_R1 ]
+
+func jorg_attack [ e: Edict ]
+    if [ frand[] <= 0.75 ]
+        g.sound[ e, CHAN_VOICE, jorg_sound_attack1, 1.0, ATTN_NORM ]
+        e.sound = g.soundindex[ 'boss3/w_loop.wav' ]
+        e.monsterinfo.currentmove = jorg_move_start_attack1
+    el
+        g.sound[ e, CHAN_VOICE, jorg_sound_attack2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = jorg_move_attack2
+
+# jorg_dead: the source compiles its body out (#if 0)
+func jorg_dead [ e: Edict ]
+    return
+
+func jorg_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                damage: i32, point: vec3f ]
+    g.sound[ e, CHAN_VOICE, jorg_sound_death, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_NO
+    e.sound = 0
+    e.count = 0
+    e.monsterinfo.currentmove = jorg_move_death
+
+func sp_monster_jorg [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    jorg_moves[]
+    jorg_sound_pain1 = g.soundindex[ 'boss3/bs3pain1.wav' ]
+    jorg_sound_pain2 = g.soundindex[ 'boss3/bs3pain2.wav' ]
+    jorg_sound_pain3 = g.soundindex[ 'boss3/bs3pain3.wav' ]
+    jorg_sound_death = g.soundindex[ 'boss3/bs3deth1.wav' ]
+    jorg_sound_attack1 = g.soundindex[ 'boss3/bs3atck1.wav' ]
+    jorg_sound_attack2 = g.soundindex[ 'boss3/bs3atck2.wav' ]
+    jorg_sound_search1 = g.soundindex[ 'boss3/bs3srch1.wav' ]
+    jorg_sound_search2 = g.soundindex[ 'boss3/bs3srch2.wav' ]
+    jorg_sound_search3 = g.soundindex[ 'boss3/bs3srch3.wav' ]
+    jorg_sound_idle = g.soundindex[ 'boss3/bs3idle1.wav' ]
+    jorg_sound_step_left = g.soundindex[ 'boss3/step1.wav' ]
+    jorg_sound_step_right = g.soundindex[ 'boss3/step2.wav' ]
+    g.soundindex[ 'boss3/xfire.wav' ]
+    jorg_sound_death_hit = g.soundindex[ 'boss3/d_hit.wav' ]
+    makron_precache[]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    rider : 'models/monsters/boss3/rider/tris.md2'
+    e.modelindex = g.modelindex[ rider ]
+    walker : 'models/monsters/boss3/jorg/tris.md2'
+    e.modelindex2 = g.modelindex[ walker ]
+    e.mins = vec3f [ -80.0, -80.0, 0.0 ]
+    e.maxs = vec3f [ 80.0, 80.0, 140.0 ]
+    e.health = 3000
+    e.gib_health = -2000
+    e.mass = 1000
+    e.pain = lambda jorg_pain[]
+    e.die  = lambda jorg_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda jorg_stand[]
+    mi.walk   = lambda jorg_walk[]
+    mi.run    = lambda jorg_run[]
+    mi.attack = lambda jorg_attack[]
+    mi.search = lambda jorg_search[]
+    mi.checkattack = lambda makron_checkattack[]
+    g.world.link[ e ]
+    mi.currentmove = jorg_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_boss31.h
+func jorg_moves []
+    if [ jorg_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda jorg_idle[] ]
+    mf[ v, 32, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 19.0, null ]
+    mf[ v, 1, lambda ai_stand[], 11.0, lambda jorg_step_left[] ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 6.0, null ]
+    mf[ v, 1, lambda ai_stand[], 9.0, lambda jorg_step_right[] ]
+    mf[ v, 7, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -2.0, null ]
+    mf[ v, 1, lambda ai_stand[], -17.0, lambda jorg_step_left[] ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -12.0, null ]
+    mf[ v, 1, lambda ai_stand[], -14.0, lambda jorg_step_right[] ]
+    # stand01 .. stand51
+    jorg_move_stand = MMove [
+        firstframe: 112, lastframe: 162, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 17.0, lambda jorg_step_left[] ]
+    mf[ v, 3, lambda ai_run[], 0.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    mf[ v, 1, lambda ai_run[], 33.0, lambda jorg_step_right[] ]
+    mf[ v, 3, lambda ai_run[], 0.0, null ]
+    mf[ v, 3, lambda ai_run[], 9.0, null ]
+    # walk06 .. walk19
+    jorg_move_run = MMove [
+        firstframe: 168, lastframe: 181, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.0, null ]
+    mf[ v, 1, lambda ai_walk[], 15.0, null ]
+    # walk01 .. walk05
+    jorg_move_start_walk = MMove [
+        firstframe: 163, lastframe: 167, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 17.0, null ]
+    mf[ v, 3, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 12.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 1, lambda ai_walk[], 33.0, null ]
+    mf[ v, 3, lambda ai_walk[], 0.0, null ]
+    mf[ v, 3, lambda ai_walk[], 9.0, null ]
+    # walk06 .. walk19
+    jorg_move_walk = MMove [
+        firstframe: 168, lastframe: 181, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 11.0, null ]
+    mf[ v, 3, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.0, null ]
+    mf[ v, 1, lambda ai_walk[], -8.0, null ]
+    # walk20 .. walk25
+    jorg_move_end_walk = MMove [
+        firstframe: 182, lastframe: 187, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -28.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, lambda jorg_step_left[] ]
+    mf[ v, 1, lambda ai_move[], -9.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda jorg_step_right[] ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -11.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 10.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 10.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 10.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, lambda jorg_step_left[] ]
+    mf[ v, 1, lambda ai_move[], 17.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda jorg_step_right[] ]
+    # pain301 .. pain325
+    jorg_move_pain3 = MMove [
+        firstframe: 87, lastframe: 111, frames: v,
+        endfunc: lambda jorg_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain203
+    jorg_move_pain2 = MMove [
+        firstframe: 84, lastframe: 86, frames: v,
+        endfunc: lambda jorg_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain103
+    jorg_move_pain1 = MMove [
+        firstframe: 81, lastframe: 83, frames: v,
+        endfunc: lambda jorg_run[] ]
+    v = vec MFrame []
+    mf[ v, 48, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_toss[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda boss_explode[] ]
+    # death01 .. death50
+    jorg_move_death = MMove [
+        firstframe: 31, lastframe: 80, frames: v,
+        endfunc: lambda jorg_dead[] ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda jorg_bfg[] ]
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    # attak201 .. attak213
+    jorg_move_attack2 = MMove [
+        firstframe: 18, lastframe: 30, frames: v,
+        endfunc: lambda jorg_run[] ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_charge[], 0.0, null ]
+    # attak101 .. attak108
+    jorg_move_start_attack1 = MMove [
+        firstframe: 0, lastframe: 7, frames: v,
+        endfunc: lambda jorg_attack1[] ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_charge[], 0.0, lambda jorg_firebullet[] ]
+    # attak109 .. attak114
+    jorg_move_attack1 = MMove [
+        firstframe: 8, lastframe: 13, frames: v,
+        endfunc: lambda jorg_reattack1[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # attak115 .. attak118
+    jorg_move_end_attack1 = MMove [
+        firstframe: 14, lastframe: 17, frames: v,
+        endfunc: lambda jorg_run[] ]
+

@@ -1,0 +1,836 @@
+# g_items.c: the item list, pickups, uses and drops
+extend quake2
+
+# one item of the table; the armors carry their protection
+func item_add [ classname: string, pickup: lambda bool [ Edict, Edict ],
+                use: lambda none [ Edict, GItem ],
+                drop: lambda none [ Edict, GItem ],
+                weaponthink: lambda none [ Edict ], pickup_sound: string,
+                world_model: string, world_model_flags: i32,
+                view_model: string, icon: string, pickup_name: string,
+                count_width: i32, quantity: i32, ammo: string,
+                flags: i32, weapmodel: i32, tag: i32,
+                precaches: string ] -> GItem
+    it : GItem [ index: g.items.count, classname: classname,
+                 pickup: pickup, use: use, drop: drop,
+                 weaponthink: weaponthink, pickup_sound: pickup_sound,
+                 world_model: world_model,
+                 world_model_flags: world_model_flags,
+                 view_model: view_model, icon: icon,
+                 pickup_name: pickup_name, count_width: count_width,
+                 quantity: quantity, ammo: ammo, flags: flags,
+                 weapmodel: weapmodel, tag: tag, precaches: precaches ]
+    g.items.push[ it ]
+    return it
+
+func item_armor [ it: GItem, base: i32, max: i32, normal: f32,
+                  energy: f32 ]
+    it.base_count = base
+    it.max_count = max
+    it.normal_protection = normal
+    it.energy_protection = energy
+
+# InitItems: itemlist[], in its order; index 0 is empty
+func init_items []
+    g.items = vec GItem []
+    item_add[ null, null, null, null, null, null, null, 0,
+              null, null, null, 0, 0, null, 0, 0, 0, null ]
+    it : item_add[ 'item_armor_body', lambda pickup_armor[], null,
+        null, null, 'misc/ar1_pkup.wav',
+        'models/items/armor/body/tris.md2', EF_ROTATE, null,
+        'i_bodyarmor', 'Body Armor', 3, 0, null, IT_ARMOR, 0,
+        ARMOR_BODY, '' ]
+    item_armor[ it, 100, 200, 0.8, 0.6 ]
+    it = item_add[ 'item_armor_combat', lambda pickup_armor[], null,
+        null, null, 'misc/ar1_pkup.wav',
+        'models/items/armor/combat/tris.md2', EF_ROTATE, null,
+        'i_combatarmor', 'Combat Armor', 3, 0, null, IT_ARMOR, 0,
+        ARMOR_COMBAT, '' ]
+    item_armor[ it, 50, 100, 0.6, 0.3 ]
+    it = item_add[ 'item_armor_jacket', lambda pickup_armor[], null,
+        null, null, 'misc/ar1_pkup.wav',
+        'models/items/armor/jacket/tris.md2', EF_ROTATE, null,
+        'i_jacketarmor', 'Jacket Armor', 3, 0, null, IT_ARMOR, 0,
+        ARMOR_JACKET, '' ]
+    item_armor[ it, 25, 50, 0.3, 0.0 ]
+    item_add[ 'item_armor_shard', lambda pickup_armor[], null, null,
+        null, 'misc/ar2_pkup.wav',
+        'models/items/armor/shard/tris.md2', EF_ROTATE, null,
+        'i_jacketarmor', 'Armor Shard', 3, 0, null, IT_ARMOR, 0,
+        ARMOR_SHARD, '' ]
+    item_add[ 'item_power_screen', lambda pickup_power_armor[],
+        lambda use_power_armor[], lambda drop_power_armor[], null,
+        'misc/ar3_pkup.wav', 'models/items/armor/screen/tris.md2',
+        EF_ROTATE, null, 'i_powerscreen', 'Power Screen', 0, 60, null,
+        IT_ARMOR, 0, 0, '' ]
+    item_add[ 'item_power_shield', lambda pickup_power_armor[],
+        lambda use_power_armor[], lambda drop_power_armor[], null,
+        'misc/ar3_pkup.wav', 'models/items/armor/shield/tris.md2',
+        EF_ROTATE, null, 'i_powershield', 'Power Shield', 0, 60, null,
+        IT_ARMOR, 0, 0, 'misc/power2.wav misc/power1.wav' ]
+    item_add[ 'weapon_blaster', null, lambda use_weapon[], null,
+        lambda weapon_blaster[], 'misc/w_pkup.wav', null, 0,
+        'models/weapons/v_blast/tris.md2', 'w_blaster', 'Blaster', 0, 0,
+        null, IT_WEAPON | IT_STAY_COOP, WEAP_BLASTER, 0,
+        'weapons/blastf1a.wav misc/lasfly.wav' ]
+    item_add[ 'weapon_shotgun', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_shotgun[], 'misc/w_pkup.wav',
+        'models/weapons/g_shotg/tris.md2', EF_ROTATE,
+        'models/weapons/v_shotg/tris.md2', 'w_shotgun', 'Shotgun', 0, 1,
+        'Shells', IT_WEAPON | IT_STAY_COOP, WEAP_SHOTGUN, 0,
+        'weapons/shotgf1b.wav weapons/shotgr1b.wav' ]
+    item_add[ 'weapon_supershotgun', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_supershotgun[], 'misc/w_pkup.wav',
+        'models/weapons/g_shotg2/tris.md2', EF_ROTATE,
+        'models/weapons/v_shotg2/tris.md2', 'w_sshotgun',
+        'Super Shotgun', 0, 2, 'Shells', IT_WEAPON | IT_STAY_COOP,
+        WEAP_SUPERSHOTGUN, 0, 'weapons/sshotf1b.wav' ]
+    item_add[ 'weapon_machinegun', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_machinegun[], 'misc/w_pkup.wav',
+        'models/weapons/g_machn/tris.md2', EF_ROTATE,
+        'models/weapons/v_machn/tris.md2', 'w_machinegun', 'Machinegun',
+        0, 1, 'Bullets', IT_WEAPON | IT_STAY_COOP, WEAP_MACHINEGUN, 0,
+        'weapons/machgf1b.wav weapons/machgf2b.wav weapons/machgf3b.wav weapons/machgf4b.wav weapons/machgf5b.wav' ]
+    item_add[ 'weapon_chaingun', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_chaingun[], 'misc/w_pkup.wav',
+        'models/weapons/g_chain/tris.md2', EF_ROTATE,
+        'models/weapons/v_chain/tris.md2', 'w_chaingun', 'Chaingun', 0,
+        1, 'Bullets', IT_WEAPON | IT_STAY_COOP, WEAP_CHAINGUN, 0,
+        'weapons/chngnu1a.wav weapons/chngnl1a.wav weapons/machgf3b.wav weapons/chngnd1a.wav' ]
+    item_add[ 'ammo_grenades', lambda pickup_ammo[], lambda use_weapon[],
+        lambda drop_ammo[], lambda weapon_grenade[], 'misc/am_pkup.wav',
+        'models/items/ammo/grenades/medium/tris.md2', 0,
+        'models/weapons/v_handgr/tris.md2', 'a_grenades', 'Grenades', 3,
+        5, 'grenades', IT_AMMO | IT_WEAPON, WEAP_GRENADES, AMMO_GRENADES,
+        'weapons/hgrent1a.wav weapons/hgrena1b.wav weapons/hgrenc1b.wav weapons/hgrenb1a.wav weapons/hgrenb2a.wav ' ]
+    item_add[ 'weapon_grenadelauncher', lambda pickup_weapon[],
+        lambda use_weapon[], lambda drop_weapon[], lambda weapon_grenadelauncher[],
+        'misc/w_pkup.wav', 'models/weapons/g_launch/tris.md2', EF_ROTATE,
+        'models/weapons/v_launch/tris.md2', 'w_glauncher',
+        'Grenade Launcher', 0, 1, 'Grenades', IT_WEAPON | IT_STAY_COOP,
+        WEAP_GRENADELAUNCHER, 0,
+        'models/objects/grenade/tris.md2 weapons/grenlf1a.wav weapons/grenlr1b.wav weapons/grenlb1b.wav' ]
+    item_add[ 'weapon_rocketlauncher', lambda pickup_weapon[],
+        lambda use_weapon[], lambda drop_weapon[], lambda weapon_rocketlauncher[],
+        'misc/w_pkup.wav', 'models/weapons/g_rocket/tris.md2', EF_ROTATE,
+        'models/weapons/v_rocket/tris.md2', 'w_rlauncher',
+        'Rocket Launcher', 0, 1, 'Rockets', IT_WEAPON | IT_STAY_COOP,
+        WEAP_ROCKETLAUNCHER, 0,
+        'models/objects/rocket/tris.md2 weapons/rockfly.wav weapons/rocklf1a.wav weapons/rocklr1b.wav models/objects/debris2/tris.md2' ]
+    item_add[ 'weapon_hyperblaster', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_hyperblaster[], 'misc/w_pkup.wav',
+        'models/weapons/g_hyperb/tris.md2', EF_ROTATE,
+        'models/weapons/v_hyperb/tris.md2', 'w_hyperblaster',
+        'HyperBlaster', 0, 1, 'Cells', IT_WEAPON | IT_STAY_COOP,
+        WEAP_HYPERBLASTER, 0,
+        'weapons/hyprbu1a.wav weapons/hyprbl1a.wav weapons/hyprbf1a.wav weapons/hyprbd1a.wav misc/lasfly.wav' ]
+    item_add[ 'weapon_railgun', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_railgun[], 'misc/w_pkup.wav',
+        'models/weapons/g_rail/tris.md2', EF_ROTATE,
+        'models/weapons/v_rail/tris.md2', 'w_railgun', 'Railgun', 0, 1,
+        'Slugs', IT_WEAPON | IT_STAY_COOP, WEAP_RAILGUN, 0,
+        'weapons/rg_hum.wav' ]
+    item_add[ 'weapon_bfg', lambda pickup_weapon[], lambda use_weapon[],
+        lambda drop_weapon[], lambda weapon_bfg[], 'misc/w_pkup.wav',
+        'models/weapons/g_bfg/tris.md2', EF_ROTATE,
+        'models/weapons/v_bfg/tris.md2', 'w_bfg', 'BFG10K', 0, 50,
+        'Cells', IT_WEAPON | IT_STAY_COOP, WEAP_BFG, 0,
+        'sprites/s_bfg1.sp2 sprites/s_bfg2.sp2 sprites/s_bfg3.sp2 weapons/bfg__f1y.wav weapons/bfg__l1a.wav weapons/bfg__x1b.wav weapons/bfg_hum.wav' ]
+    item_add[ 'ammo_shells', lambda pickup_ammo[], null, lambda drop_ammo[],
+        null, 'misc/am_pkup.wav',
+        'models/items/ammo/shells/medium/tris.md2', 0, null, 'a_shells',
+        'Shells', 3, 10, null, IT_AMMO, 0, AMMO_SHELLS, '' ]
+    item_add[ 'ammo_bullets', lambda pickup_ammo[], null, lambda drop_ammo[],
+        null, 'misc/am_pkup.wav',
+        'models/items/ammo/bullets/medium/tris.md2', 0, null,
+        'a_bullets', 'Bullets', 3, 50, null, IT_AMMO, 0, AMMO_BULLETS, '' ]
+    item_add[ 'ammo_cells', lambda pickup_ammo[], null, lambda drop_ammo[],
+        null, 'misc/am_pkup.wav',
+        'models/items/ammo/cells/medium/tris.md2', 0, null, 'a_cells',
+        'Cells', 3, 50, null, IT_AMMO, 0, AMMO_CELLS, '' ]
+    item_add[ 'ammo_rockets', lambda pickup_ammo[], null, lambda drop_ammo[],
+        null, 'misc/am_pkup.wav',
+        'models/items/ammo/rockets/medium/tris.md2', 0, null,
+        'a_rockets', 'Rockets', 3, 5, null, IT_AMMO, 0, AMMO_ROCKETS, '' ]
+    item_add[ 'ammo_slugs', lambda pickup_ammo[], null, lambda drop_ammo[],
+        null, 'misc/am_pkup.wav',
+        'models/items/ammo/slugs/medium/tris.md2', 0, null, 'a_slugs',
+        'Slugs', 3, 10, null, IT_AMMO, 0, AMMO_SLUGS, '' ]
+    item_add[ 'item_quad', lambda pickup_powerup[], lambda use_quad[],
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/quaddama/tris.md2', EF_ROTATE, null, 'p_quad',
+        'Quad Damage', 2, 60, null, IT_POWERUP, 0, 0,
+        'items/damage.wav items/damage2.wav items/damage3.wav' ]
+    item_add[ 'item_invulnerability', lambda pickup_powerup[],
+        lambda use_invulnerability[], lambda drop_general[], null,
+        'items/pkup.wav', 'models/items/invulner/tris.md2', EF_ROTATE,
+        null, 'p_invulnerability', 'Invulnerability', 2, 300, null,
+        IT_POWERUP, 0, 0,
+        'items/protect.wav items/protect2.wav items/protect4.wav' ]
+    item_add[ 'item_silencer', lambda pickup_powerup[], lambda use_silencer[],
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/silencer/tris.md2', EF_ROTATE, null, 'p_silencer',
+        'Silencer', 2, 60, null, IT_POWERUP, 0, 0, '' ]
+    item_add[ 'item_breather', lambda pickup_powerup[], lambda use_breather[],
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/breather/tris.md2', EF_ROTATE, null,
+        'p_rebreather', 'Rebreather', 2, 60, null,
+        IT_STAY_COOP | IT_POWERUP, 0, 0, 'items/airout.wav' ]
+    item_add[ 'item_enviro', lambda pickup_powerup[], lambda use_envirosuit[],
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/enviro/tris.md2', EF_ROTATE, null, 'p_envirosuit',
+        'Environment Suit', 2, 60, null, IT_STAY_COOP | IT_POWERUP, 0, 0,
+        'items/airout.wav' ]
+    item_add[ 'item_ancient_head', lambda pickup_ancient_head[], null,
+        null, null, 'items/pkup.wav',
+        'models/items/c_head/tris.md2', EF_ROTATE, null, 'i_fixme',
+        'Ancient Head', 2, 60, null, 0, 0, 0, '' ]
+    item_add[ 'item_adrenaline', lambda pickup_adrenaline[], null,
+        null, null, 'items/pkup.wav',
+        'models/items/adrenal/tris.md2', EF_ROTATE, null, 'p_adrenaline',
+        'Adrenaline', 2, 60, null, 0, 0, 0, '' ]
+    item_add[ 'item_bandolier', lambda pickup_bandolier[], null, null,
+        null, 'items/pkup.wav', 'models/items/band/tris.md2',
+        EF_ROTATE, null, 'p_bandolier', 'Bandolier', 2, 60, null, 0, 0,
+        0, '' ]
+    item_add[ 'item_pack', lambda pickup_pack[], null, null, null,
+        'items/pkup.wav', 'models/items/pack/tris.md2', EF_ROTATE, null,
+        'i_pack', 'Ammo Pack', 2, 180, null, 0, 0, 0, '' ]
+    item_add[ 'key_data_cd', lambda pickup_key[], null, lambda drop_general[],
+        null, 'items/pkup.wav', 'models/items/keys/data_cd/tris.md2',
+        EF_ROTATE, null, 'k_datacd', 'Data CD', 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ 'key_power_cube', lambda pickup_key[], null,
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/keys/power/tris.md2', EF_ROTATE, null,
+        'k_powercube', 'Power Cube', 2, 0, null, IT_STAY_COOP | IT_KEY,
+        0, 0, '' ]
+    item_add[ 'key_pyramid', lambda pickup_key[], null, lambda drop_general[],
+        null, 'items/pkup.wav', 'models/items/keys/pyramid/tris.md2',
+        EF_ROTATE, null, 'k_pyramid', 'Pyramid Key', 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ 'key_data_spinner', lambda pickup_key[], null,
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/keys/spinner/tris.md2', EF_ROTATE, null,
+        'k_dataspin', 'Data Spinner', 2, 0, null, IT_STAY_COOP | IT_KEY,
+        0, 0, '' ]
+    item_add[ 'key_pass', lambda pickup_key[], null, lambda drop_general[],
+        null, 'items/pkup.wav', 'models/items/keys/pass/tris.md2',
+        EF_ROTATE, null, 'k_security', 'Security Pass', 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ 'key_blue_key', lambda pickup_key[], null, lambda drop_general[],
+        null, 'items/pkup.wav', 'models/items/keys/key/tris.md2',
+        EF_ROTATE, null, 'k_bluekey', 'Blue Key', 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ 'key_red_key', lambda pickup_key[], null, lambda drop_general[],
+        null, 'items/pkup.wav', 'models/items/keys/red_key/tris.md2',
+        EF_ROTATE, null, 'k_redkey', 'Red Key', 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ 'key_commander_head', lambda pickup_key[], null,
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/monsters/commandr/head/tris.md2', EF_GIB, null,
+        'k_comhead', "Commander's Head", 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ 'key_airstrike_target', lambda pickup_key[], null,
+        lambda drop_general[], null, 'items/pkup.wav',
+        'models/items/keys/target/tris.md2', EF_ROTATE, null,
+        'i_airstrike', 'Airstrike Marker', 2, 0, null,
+        IT_STAY_COOP | IT_KEY, 0, 0, '' ]
+    item_add[ null, lambda pickup_health[], null, null, null,
+        'items/pkup.wav', null, 0, null, 'i_health', 'Health', 3, 0,
+        null, 0, 0, 0,
+        'items/s_health.wav items/n_health.wav items/l_health.wav items/m_health.wav' ]
+    g.num_items = g.items.count
+    # SetItemNames
+    g.jacket_armor_index = find_item[ 'Jacket Armor' ].index
+    g.combat_armor_index = find_item[ 'Combat Armor' ].index
+    g.body_armor_index   = find_item[ 'Body Armor' ].index
+    g.power_screen_index = find_item[ 'Power Screen' ].index
+    g.power_shield_index = find_item[ 'Power Shield' ].index
+
+func get_item_by_index [ index: i32 ] -> GItem
+    if [ index <= 0 || index >= g.num_items ] return null
+    return g.items[ index ]
+
+func find_item_by_classname [ classname: string ] -> GItem
+    for [ i: i32 0, i < g.num_items, i += 1 ]
+        it : g.items[ i ]
+        if [ !it.classname ] continue
+        if [ strcasecmp[ it.classname.chars, classname.chars ] == 0 ]
+            return it
+    return null
+
+func find_item [ pickup_name: string ] -> GItem
+    for [ i: i32 0, i < g.num_items, i += 1 ]
+        it : g.items[ i ]
+        if [ !it.pickup_name ] continue
+        if [ strcasecmp[ it.pickup_name.chars, pickup_name.chars ] == 0 ]
+            return it
+    return null
+
+# ---- respawning
+func do_respawn [ ent: Edict ]
+    e : ent
+    if [ e.team ]
+        master : e.teammaster
+        count : i32 [ 0 ]
+        t : master
+        while [ t ]
+            count += 1
+            t = t.chain
+        choice : i32 [ rand[] % count ]
+        e = master
+        for [ i: i32 0, i < choice, i += 1 ]
+            e = e.chain
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.solid = SOLID_TRIGGER
+    g.world.link[ e ]
+    e.event = EV_ITEM_RESPAWN
+
+func set_respawn [ e: Edict, delay: f32 ]
+    e.flags = e.flags | FL_RESPAWN
+    e.svflags = e.svflags | SVF_NOCLIENT
+    e.solid = SOLID_NOT
+    e.nextthink = g.level.time + delay
+    e.think = lambda do_respawn[]
+    g.world.link[ e ]
+
+# ---- pickups
+func inv_get [ e: Edict, index: i32 ] -> i32
+    return e.client.pers.inventory[ index ]
+
+func inv_add [ e: Edict, index: i32, n: i32 ]
+    e.client.pers.inventory[ index ] = e.client.pers.inventory[ index ] + n
+
+func inv_set [ e: Edict, index: i32, n: i32 ]
+    e.client.pers.inventory[ index ] = n
+
+func pickup_powerup [ e: Edict, other: Edict ] -> bool
+    quantity : i32 [ inv_get[ other, e.item.index ] ]
+    if [ (g.skill == 1 && quantity >= 2) || (g.skill >= 2 && quantity >= 1) ]
+        return false
+    if [ g.coop && (e.item.flags & IT_STAY_COOP) != 0 && quantity > 0 ]
+        return false
+    inv_add[ other, e.item.index, 1 ]
+    if [ g.deathmatch ]
+        if [ (e.spawnflags & DROPPED_ITEM) == 0 ]
+            set_respawn[ e, f32[ e.item.quantity ] ]
+        instant : bool [ (g.dmflags & 16) != 0 ]
+        quad_drop : bool [ e.item.classname == 'item_quad' &&
+                           (e.spawnflags & DROPPED_PLAYER_ITEM) != 0 ]
+        if [ instant || quad_drop ]
+            if [ quad_drop ]
+                g.quad_drop_timeout_hack =
+                    i32[ (e.nextthink - g.level.time) / FRAMETIME ]
+            e.item.use[ other, e.item ]
+    return true
+
+func drop_general [ e: Edict, item: GItem ]
+    drop_item[ e, item ]
+    inv_add[ e, item.index, -1 ]
+    validate_selected_item[ e ]
+
+func pickup_adrenaline [ e: Edict, other: Edict ] -> bool
+    if [ !g.deathmatch ] other.max_health += 1
+    if [ other.health < other.max_health ] other.health = other.max_health
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+        set_respawn[ e, f32[ e.item.quantity ] ]
+    return true
+
+func pickup_ancient_head [ e: Edict, other: Edict ] -> bool
+    other.max_health += 2
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+        set_respawn[ e, f32[ e.item.quantity ] ]
+    return true
+
+# the ammo of a pack: the item's quantity up to the given max
+func pack_ammo [ other: Edict, name: string, max: i32 ]
+    item : find_item[ name ]
+    if [ !item ] return
+    inv_add[ other, item.index, item.quantity ]
+    if [ inv_get[ other, item.index ] > max ] inv_set[ other, item.index, max ]
+
+func pickup_bandolier [ e: Edict, other: Edict ] -> bool
+    pers : other.client.pers
+    if [ pers.max_bullets < 250 ] pers.max_bullets = 250
+    if [ pers.max_shells < 150 ] pers.max_shells = 150
+    if [ pers.max_cells < 250 ] pers.max_cells = 250
+    if [ pers.max_slugs < 75 ] pers.max_slugs = 75
+    pack_ammo[ other, 'Bullets', pers.max_bullets ]
+    pack_ammo[ other, 'Shells', pers.max_shells ]
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+        set_respawn[ e, f32[ e.item.quantity ] ]
+    return true
+
+func pickup_pack [ e: Edict, other: Edict ] -> bool
+    pers : other.client.pers
+    if [ pers.max_bullets < 300 ] pers.max_bullets = 300
+    if [ pers.max_shells < 200 ] pers.max_shells = 200
+    if [ pers.max_rockets < 100 ] pers.max_rockets = 100
+    if [ pers.max_grenades < 100 ] pers.max_grenades = 100
+    if [ pers.max_cells < 300 ] pers.max_cells = 300
+    if [ pers.max_slugs < 100 ] pers.max_slugs = 100
+    pack_ammo[ other, 'Bullets', pers.max_bullets ]
+    pack_ammo[ other, 'Shells', pers.max_shells ]
+    pack_ammo[ other, 'Cells', pers.max_cells ]
+    pack_ammo[ other, 'Grenades', pers.max_grenades ]
+    pack_ammo[ other, 'Rockets', pers.max_rockets ]
+    pack_ammo[ other, 'Slugs', pers.max_slugs ]
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+        set_respawn[ e, f32[ e.item.quantity ] ]
+    return true
+
+func use_quad [ e: Edict, item: GItem ]
+    inv_add[ e, item.index, -1 ]
+    validate_selected_item[ e ]
+    timeout : i32 [ 300 ]
+    if [ g.quad_drop_timeout_hack != 0 ]
+        timeout = g.quad_drop_timeout_hack
+        g.quad_drop_timeout_hack = 0
+    cl : e.client
+    if [ cl.quad_framenum > f32[ g.level.framenum ] ]
+        cl.quad_framenum = cl.quad_framenum + f32[ timeout ]
+    el
+        cl.quad_framenum = f32[ g.level.framenum + timeout ]
+    g.sound[ e, CHAN_ITEM, g.soundindex[ 'items/damage.wav' ], 1.0,
+             ATTN_NORM ]
+
+func use_breather [ e: Edict, item: GItem ]
+    inv_add[ e, item.index, -1 ]
+    validate_selected_item[ e ]
+    cl : e.client
+    if [ cl.breather_framenum > f32[ g.level.framenum ] ]
+        cl.breather_framenum = cl.breather_framenum + 300.0
+    el
+        cl.breather_framenum = f32[ g.level.framenum + 300 ]
+
+func use_envirosuit [ e: Edict, item: GItem ]
+    inv_add[ e, item.index, -1 ]
+    validate_selected_item[ e ]
+    cl : e.client
+    if [ cl.enviro_framenum > f32[ g.level.framenum ] ]
+        cl.enviro_framenum = cl.enviro_framenum + 300.0
+    el
+        cl.enviro_framenum = f32[ g.level.framenum + 300 ]
+
+func use_invulnerability [ e: Edict, item: GItem ]
+    inv_add[ e, item.index, -1 ]
+    validate_selected_item[ e ]
+    cl : e.client
+    if [ cl.invincible_framenum > f32[ g.level.framenum ] ]
+        cl.invincible_framenum = cl.invincible_framenum + 300.0
+    el
+        cl.invincible_framenum = f32[ g.level.framenum + 300 ]
+    g.sound[ e, CHAN_ITEM, g.soundindex[ 'items/protect.wav' ], 1.0,
+             ATTN_NORM ]
+
+func use_silencer [ e: Edict, item: GItem ]
+    inv_add[ e, item.index, -1 ]
+    validate_selected_item[ e ]
+    e.client.silencer_shots += 30
+
+func pickup_key [ e: Edict, other: Edict ] -> bool
+    if [ g.coop ]
+        if [ e.classname == 'key_power_cube' ]
+            cube : i32 [ (e.spawnflags & 65280) >> 8 ]
+            if [ other.client.pers.power_cubes & cube ] return false
+            inv_add[ other, e.item.index, 1 ]
+            other.client.pers.power_cubes =
+                other.client.pers.power_cubes | cube
+        el
+            if [ inv_get[ other, e.item.index ] != 0 ] return false
+            inv_set[ other, e.item.index, 1 ]
+        return true
+    inv_add[ other, e.item.index, 1 ]
+    return true
+
+func add_ammo [ e: Edict, item: GItem, count: i32 ] -> bool
+    if [ !e.client ] return false
+    pers : e.client.pers
+    max : i32 [ 0 ]
+    if [ item.tag == AMMO_BULLETS ]       max = pers.max_bullets
+    el [ item.tag == AMMO_SHELLS ]        max = pers.max_shells
+    el [ item.tag == AMMO_ROCKETS ]       max = pers.max_rockets
+    el [ item.tag == AMMO_GRENADES ]      max = pers.max_grenades
+    el [ item.tag == AMMO_CELLS ]         max = pers.max_cells
+    el [ item.tag == AMMO_SLUGS ]         max = pers.max_slugs
+    el                                    return false
+    index : i32 [ item.index ]
+    if [ pers.inventory[ index ] == max ] return false
+    pers.inventory[ index ] = pers.inventory[ index ] + count
+    if [ pers.inventory[ index ] > max ] pers.inventory[ index ] = max
+    return true
+
+func pickup_ammo [ e: Edict, other: Edict ] -> bool
+    weapon : bool [ (e.item.flags & IT_WEAPON) != 0 ]
+    count : i32 [ e.item.quantity ]
+    if [ weapon && (g.dmflags & 8192) != 0 ] count = 1000
+    el [ e.count != 0 ]                    count = e.count
+    oldcount : i32 [ inv_get[ other, e.item.index ] ]
+    if [ !add_ammo[ other, e.item, count ] ] return false
+    if [ weapon && oldcount == 0 ]
+        if [ other.client.pers.weapon != e.item &&
+             (!g.deathmatch ||
+              other.client.pers.weapon == find_item[ 'blaster' ]) ]
+            other.client.newweapon = e.item
+    if [ (e.spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)) == 0 &&
+         g.deathmatch ]
+        set_respawn[ e, 30.0 ]
+    return true
+
+func drop_ammo [ e: Edict, item: GItem ]
+    index : i32 [ item.index ]
+    dropped : drop_item[ e, item ]
+    if [ inv_get[ e, index ] >= item.quantity ] dropped.count = item.quantity
+    el                                          dropped.count = inv_get[ e, index ]
+    pers : e.client.pers
+    if [ pers.weapon && pers.weapon.tag == AMMO_GRENADES &&
+         item.tag == AMMO_GRENADES &&
+         inv_get[ e, index ] - dropped.count <= 0 ]
+        g.cprintf[ e, 'Cannot drop current weapon' ]
+        g.free_edict[ dropped ]
+        return
+    inv_add[ e, index, 0 - dropped.count ]
+    validate_selected_item[ e ]
+
+func megahealth_think [ e: Edict ]
+    if [ e.owner.health > e.owner.max_health ]
+        e.nextthink = g.level.time + 1.0
+        e.owner.health -= 1
+        return
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+        set_respawn[ e, 20.0 ]
+    el
+        g.free_edict[ e ]
+
+func pickup_health [ e: Edict, other: Edict ] -> bool
+    if [ (e.style & HEALTH_IGNORE_MAX) == 0 ]
+        if [ other.health >= other.max_health ] return false
+    other.health += e.count
+    if [ (e.style & HEALTH_IGNORE_MAX) == 0 ]
+        if [ other.health > other.max_health ]
+            other.health = other.max_health
+    if [ e.style & HEALTH_TIMED ]
+        e.think = lambda megahealth_think[]
+        e.nextthink = g.level.time + 5.0
+        e.owner = other
+        e.flags = e.flags | FL_RESPAWN
+        e.svflags = e.svflags | SVF_NOCLIENT
+        e.solid = SOLID_NOT
+    el
+        if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+            set_respawn[ e, 30.0 ]
+    return true
+
+func armor_index [ e: Edict ] -> i32
+    if [ !e.client ] return 0
+    if [ inv_get[ e, g.jacket_armor_index ] > 0 ] return g.jacket_armor_index
+    if [ inv_get[ e, g.combat_armor_index ] > 0 ] return g.combat_armor_index
+    if [ inv_get[ e, g.body_armor_index ] > 0 ] return g.body_armor_index
+    return 0
+
+func pickup_armor [ e: Edict, other: Edict ] -> bool
+    newinfo : e.item
+    old_armor_index : i32 [ armor_index[ other ] ]
+    if [ e.item.tag == ARMOR_SHARD ]
+        # shards give 2 to the armor held, else start a jacket
+        if [ old_armor_index == 0 ] inv_set[ other, g.jacket_armor_index, 2 ]
+        el                          inv_add[ other, old_armor_index, 2 ]
+    el [ old_armor_index == 0 ]
+        inv_set[ other, e.item.index, newinfo.base_count ]
+    el
+        oldinfo : g.items[ old_armor_index ]
+        if [ newinfo.normal_protection > oldinfo.normal_protection ]
+            # the new armor is better: salvage the old count into it
+            salvage : f32 [ oldinfo.normal_protection
+                            / newinfo.normal_protection ]
+            salvagecount : i32 [ salvage * f32[ inv_get[ other,
+                                                   old_armor_index ] ] ]
+            newcount : i32 [ newinfo.base_count + salvagecount ]
+            if [ newcount > newinfo.max_count ] newcount = newinfo.max_count
+            inv_set[ other, old_armor_index, 0 ]
+            inv_set[ other, e.item.index, newcount ]
+        el
+            # the old armor is better: salvage the new one into it
+            salvage : f32 [ newinfo.normal_protection
+                            / oldinfo.normal_protection ]
+            salvagecount : i32 [ salvage * f32[ newinfo.base_count ] ]
+            newcount : i32 [ inv_get[ other, old_armor_index ]
+                             + salvagecount ]
+            if [ newcount > oldinfo.max_count ] newcount = oldinfo.max_count
+            if [ inv_get[ other, old_armor_index ] >= newcount ] return false
+            inv_set[ other, old_armor_index, newcount ]
+    if [ (e.spawnflags & DROPPED_ITEM) == 0 && g.deathmatch ]
+        set_respawn[ e, 20.0 ]
+    return true
+
+func power_armor_type [ e: Edict ] -> i32
+    if [ !e.client ] return POWER_ARMOR_NONE
+    if [ (e.flags & FL_POWER_ARMOR) == 0 ] return POWER_ARMOR_NONE
+    if [ inv_get[ e, g.power_shield_index ] > 0 ] return POWER_ARMOR_SHIELD
+    if [ inv_get[ e, g.power_screen_index ] > 0 ] return POWER_ARMOR_SCREEN
+    return POWER_ARMOR_NONE
+
+func use_power_armor [ e: Edict, item: GItem ]
+    if [ e.flags & FL_POWER_ARMOR ]
+        e.flags = e.flags & ~FL_POWER_ARMOR
+        g.sound[ e, CHAN_AUTO, g.soundindex[ 'misc/power2.wav' ], 1.0,
+                 ATTN_NORM ]
+    el
+        index : i32 [ find_item[ 'cells' ].index ]
+        if [ inv_get[ e, index ] == 0 ]
+            g.cprintf[ e, 'No cells for power armor.' ]
+            return
+        e.flags = e.flags | FL_POWER_ARMOR
+        g.sound[ e, CHAN_AUTO, g.soundindex[ 'misc/power1.wav' ], 1.0,
+                 ATTN_NORM ]
+
+func pickup_power_armor [ e: Edict, other: Edict ] -> bool
+    quantity : i32 [ inv_get[ other, e.item.index ] ]
+    inv_add[ other, e.item.index, 1 ]
+    if [ g.deathmatch ]
+        if [ (e.spawnflags & DROPPED_ITEM) == 0 ]
+            set_respawn[ e, f32[ e.item.quantity ] ]
+        # auto-use for DM only if we didn't already have one
+        if [ quantity == 0 ] e.item.use[ other, e.item ]
+    return true
+
+func drop_power_armor [ e: Edict, item: GItem ]
+    if [ (e.flags & FL_POWER_ARMOR) != 0 && inv_get[ e, item.index ] == 1 ]
+        use_power_armor[ e, item ]
+    drop_general[ e, item ]
+
+# ---- Touch_Item
+func touch_item [ e: Edict, other: Edict ]
+    if [ !other.client ] return
+    if [ other.health < 1 ] return
+    if [ e.item.pickup == null ] return
+    taken : bool [ e.item.pickup[ e, other ] ]
+    if [ taken ]
+        # flash the screen
+        other.client.bonus_alpha = 0.25
+        other.client.ps.stats[ STAT_PICKUP_ICON ] = g.imageindex[ e.item.icon ]
+        other.client.ps.stats[ STAT_PICKUP_STRING ] = e.item.index
+        other.client.pickup_msg_time = g.level.time + 3.0
+        # change selected item
+        if [ e.item.use ]
+            other.client.pers.selected_item = e.item.index
+            other.client.ps.stats[ STAT_SELECTED_ITEM ] = e.item.index
+        if [ e.item.pickup_name == 'Health' ]
+            if [ e.count == 2 ]
+                g.sound[ other, CHAN_ITEM, g.soundindex[ 'items/s_health.wav' ],
+                         1.0, ATTN_NORM ]
+            el [ e.count == 10 ]
+                g.sound[ other, CHAN_ITEM, g.soundindex[ 'items/n_health.wav' ],
+                         1.0, ATTN_NORM ]
+            el [ e.count == 25 ]
+                g.sound[ other, CHAN_ITEM, g.soundindex[ 'items/l_health.wav' ],
+                         1.0, ATTN_NORM ]
+            el
+                g.sound[ other, CHAN_ITEM, g.soundindex[ 'items/m_health.wav' ],
+                         1.0, ATTN_NORM ]
+        el [ e.item.pickup_sound ]
+            g.sound[ other, CHAN_ITEM, g.soundindex[ e.item.pickup_sound ],
+                     1.0, ATTN_NORM ]
+    if [ (e.spawnflags & ITEM_TARGETS_USED) == 0 ]
+        g.use_targets[ e, other ]
+        e.spawnflags = e.spawnflags | ITEM_TARGETS_USED
+    if [ !taken ] return
+    if [ !(g.coop && (e.item.flags & IT_STAY_COOP) != 0) ||
+         (e.spawnflags & (DROPPED_ITEM | DROPPED_PLAYER_ITEM)) != 0 ]
+        if [ e.flags & FL_RESPAWN ] e.flags = e.flags & ~FL_RESPAWN
+        el                          g.free_edict[ e ]
+
+func drop_temp_touch [ e: Edict, other: Edict ]
+    if [ other == e.owner ] return
+    touch_item[ e, other ]
+
+func drop_make_touchable [ e: Edict ]
+    e.touch = lambda touch_item[]
+    if [ g.deathmatch ]
+        e.nextthink = g.level.time + 29.0
+        e.think = lambda remove_edict[]
+
+func drop_item [ e: Edict, item: GItem ] -> Edict
+    dropped : g.spawn[]
+    dropped.classname = item.classname
+    dropped.item = item
+    dropped.spawnflags = DROPPED_ITEM
+    dropped.effects = item.world_model_flags
+    dropped.renderfx = RF_GLOW
+    dropped.mins = vec3f [ -15.0, -15.0, -15.0 ]
+    dropped.maxs = vec3f [ 15.0, 15.0, 15.0 ]
+    g.setmodel[ dropped, item.world_model ]
+    dropped.solid = SOLID_TRIGGER
+    dropped.movetype = MOVETYPE_TOSS
+    dropped.touch = lambda drop_temp_touch[]
+    dropped.owner = e
+    forward : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ e.client ]
+        ax : angle_vectors[ e.client.v_angle ]
+        forward = ax.forward
+        offset : vec3f [ 24.0, 0.0, -16.0 ]
+        dropped.origin = project_source[ e.origin, offset, ax.forward,
+                                         ax.right ]
+        tr : g.world.trace[ e.origin, dropped.mins, dropped.maxs,
+                            dropped.origin, e, CONTENTS_SOLID ]
+        dropped.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+    el
+        ax : angle_vectors[ e.angles ]
+        forward = ax.forward
+        dropped.origin = e.origin
+    dropped.velocity = v_scale[ forward, 100.0 ]
+    dropped.velocity = vec3f [ dropped.velocity.x, dropped.velocity.y, 300.0 ]
+    dropped.think = lambda drop_make_touchable[]
+    dropped.nextthink = g.level.time + 1.0
+    g.world.link[ dropped ]
+    return dropped
+
+func use_item [ e: Edict, other: Edict, activator: Edict ]
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.use = null
+    if [ e.spawnflags & ITEM_NO_TOUCH ]
+        e.solid = SOLID_BBOX
+        e.touch = null
+    el
+        e.solid = SOLID_TRIGGER
+        e.touch = lambda touch_item[]
+    g.world.link[ e ]
+
+func droptofloor [ e: Edict ]
+    e.mins = vec3f [ -15.0, -15.0, -15.0 ]
+    e.maxs = vec3f [ 15.0, 15.0, 15.0 ]
+    if [ e.model ] g.setmodel[ e, e.model ]
+    el             g.setmodel[ e, e.item.world_model ]
+    e.solid = SOLID_TRIGGER
+    e.movetype = MOVETYPE_TOSS
+    e.touch = lambda touch_item[]
+    dest : vec3f [ e.origin.x, e.origin.y, e.origin.z - 128.0 ]
+    tr : g.world.trace[ e.origin, e.mins, e.maxs, dest, e, MASK_SOLID ]
+    if [ tr.startsolid ]
+        g.dprintf[ 'droptofloor: {e.classname} startsolid' ]
+        g.free_edict[ e ]
+        return
+    e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+    if [ e.team ]
+        e.flags = e.flags & ~FL_TEAMSLAVE
+        e.chain = e.teamchain
+        e.teamchain = null
+        e.svflags = e.svflags | SVF_NOCLIENT
+        e.solid = SOLID_NOT
+        if [ e == e.teammaster ]
+            e.nextthink = g.level.time + FRAMETIME
+            e.think = lambda do_respawn[]
+    if [ e.spawnflags & ITEM_NO_TOUCH ]
+        e.solid = SOLID_BBOX
+        e.touch = null
+        e.effects = e.effects & ~EF_ROTATE
+        e.renderfx = e.renderfx & ~RF_GLOW
+    if [ e.spawnflags & ITEM_TRIGGER_SPAWN ]
+        e.svflags = e.svflags | SVF_NOCLIENT
+        e.solid = SOLID_NOT
+        e.use = lambda use_item[]
+    g.world.link[ e ]
+
+# PrecacheItem: the names into the index tables
+func precache_item [ it: GItem ]
+    if [ !it ] return
+    if [ it.pickup_sound ] g.soundindex[ it.pickup_sound ]
+    if [ it.world_model ] g.modelindex[ it.world_model ]
+    if [ it.view_model ] g.modelindex[ it.view_model ]
+    if [ it.icon ] g.imageindex[ it.icon ]
+    if [ it.ammo && it.ammo.count > 0 ]
+        ammo : find_item[ it.ammo ]
+        if [ ammo != it ] precache_item[ ammo ]
+    s : string [ it.precaches ]
+    if [ !s || s.count == 0 ] return
+    start : i32 [ 0 ]
+    n : i32 [ s.count ]
+    while [ start < n ]
+        stop : i32 [ start ]
+        while [ stop < n && s[ stop ] != 32 ] stop += 1
+        len : i32 [ stop - start ]
+        if [ len >= 5 ]
+            name : s.mid[ start, len ]
+            ext : s.mid[ stop - 3, 3 ]
+            if [ ext == 'md2' || ext == 'sp2' ] g.modelindex[ name ]
+            el [ ext == 'wav' ]                 g.soundindex[ name ]
+            el [ ext == 'pcx' ]                 g.imageindex[ name ]
+        start = stop + 1
+
+# SpawnItem: sized and planted on the floor two frames on
+func spawn_item [ e: Edict, item: GItem ]
+    precache_item[ item ]
+    if [ e.spawnflags != 0 ]
+        if [ e.classname != 'key_power_cube' ]
+            e.spawnflags = 0
+            g.dprintf[ '{e.classname} has invalid spawnflags set' ]
+    if [ g.deathmatch ]
+        if [ g.dmflags & 2048 ]
+            if [ item.flags & IT_ARMOR ]
+                g.free_edict[ e ]
+                return
+        if [ g.dmflags & 2 ]
+            if [ item.flags & IT_POWERUP ]
+                g.free_edict[ e ]
+                return
+        if [ g.dmflags & 1 ]
+            if [ item.pickup_name == 'Health' ||
+                 item.classname == 'item_adrenaline' ||
+                 item.classname == 'item_ancient_head' ]
+                g.free_edict[ e ]
+                return
+        if [ g.dmflags & 8192 ]
+            if [ item.flags == IT_AMMO || e.classname == 'weapon_bfg' ]
+                g.free_edict[ e ]
+                return
+    if [ g.coop && e.classname == 'key_power_cube' ]
+        e.spawnflags = e.spawnflags | (1 << (8 + g.level.power_cubes))
+        g.level.power_cubes += 1
+    # don't let them drop items that stay in a coop game
+    if [ g.coop && (item.flags & IT_STAY_COOP) != 0 ] item.drop = null
+    e.item = item
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    e.think = lambda droptofloor[]
+    e.effects = item.world_model_flags
+    e.renderfx = RF_GLOW
+    if [ e.model ] g.modelindex[ e.model ]
+
+func sp_item_health [ e: Edict ]
+    if [ g.deathmatch && (g.dmflags & 1) != 0 ]
+        g.free_edict[ e ]
+        return
+    e.model = 'models/items/healing/medium/tris.md2'
+    e.count = 10
+    spawn_item[ e, find_item[ 'Health' ] ]
+    g.soundindex[ 'items/n_health.wav' ]
+
+func sp_item_health_small [ e: Edict ]
+    if [ g.deathmatch && (g.dmflags & 1) != 0 ]
+        g.free_edict[ e ]
+        return
+    e.model = 'models/items/healing/stimpack/tris.md2'
+    e.count = 2
+    spawn_item[ e, find_item[ 'Health' ] ]
+    e.style = HEALTH_IGNORE_MAX
+    g.soundindex[ 'items/s_health.wav' ]
+
+func sp_item_health_large [ e: Edict ]
+    if [ g.deathmatch && (g.dmflags & 1) != 0 ]
+        g.free_edict[ e ]
+        return
+    e.model = 'models/items/healing/large/tris.md2'
+    e.count = 25
+    spawn_item[ e, find_item[ 'Health' ] ]
+    g.soundindex[ 'items/l_health.wav' ]
+
+func sp_item_health_mega [ e: Edict ]
+    if [ g.deathmatch && (g.dmflags & 1) != 0 ]
+        g.free_edict[ e ]
+        return
+    e.model = 'models/items/mega_h/tris.md2'
+    e.count = 100
+    spawn_item[ e, find_item[ 'Health' ] ]
+    g.soundindex[ 'items/m_health.wav' ]
+    e.style = HEALTH_IGNORE_MAX | HEALTH_TIMED
+

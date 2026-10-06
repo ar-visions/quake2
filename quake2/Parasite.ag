@@ -1,0 +1,369 @@
+# m_parasite.c: the parasite (a draining tongue)
+extend quake2
+
+parasite_sound_pain1 : i32
+parasite_sound_pain2 : i32
+parasite_sound_die : i32
+parasite_sound_launch : i32
+parasite_sound_impact : i32
+parasite_sound_suck : i32
+parasite_sound_reelin : i32
+parasite_sound_sight : i32
+parasite_sound_tap : i32
+parasite_sound_scratch : i32
+parasite_sound_search : i32
+parasite_move_start_fidget : MMove
+parasite_move_fidget : MMove
+parasite_move_end_fidget : MMove
+parasite_move_stand : MMove
+parasite_move_run : MMove
+parasite_move_start_run : MMove
+parasite_move_stop_run : MMove
+parasite_move_walk : MMove
+parasite_move_start_walk : MMove
+parasite_move_stop_walk : MMove
+parasite_move_pain1 : MMove
+parasite_move_drain : MMove
+parasite_move_break : MMove
+parasite_move_death : MMove
+
+func parasite_launch [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, parasite_sound_launch, 1.0, ATTN_NORM ]
+
+func parasite_reel_in [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, parasite_sound_reelin, 1.0, ATTN_NORM ]
+
+func parasite_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_WEAPON, parasite_sound_sight, 1.0, ATTN_NORM ]
+
+func parasite_tap [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, parasite_sound_tap, 1.0, ATTN_IDLE ]
+
+func parasite_scratch [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, parasite_sound_scratch, 1.0, ATTN_IDLE ]
+
+func parasite_search [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, parasite_sound_search, 1.0, ATTN_IDLE ]
+
+func parasite_end_fidget [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_end_fidget
+
+func parasite_do_fidget [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_fidget
+
+func parasite_refidget [ e: Edict ]
+    if [ frand[] <= 0.8 ]
+        e.monsterinfo.currentmove = parasite_move_fidget
+    el
+        e.monsterinfo.currentmove = parasite_move_end_fidget
+
+func parasite_idle [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_start_fidget
+
+func parasite_stand [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_stand
+
+func parasite_start_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = parasite_move_stand
+    el
+        e.monsterinfo.currentmove = parasite_move_start_run
+
+func parasite_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = parasite_move_stand
+    el
+        e.monsterinfo.currentmove = parasite_move_run
+
+func parasite_start_walk [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_start_walk
+
+func parasite_walk [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_walk
+
+func parasite_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, parasite_sound_pain1, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, parasite_sound_pain2, 1.0, ATTN_NORM ]
+    e.monsterinfo.currentmove = parasite_move_pain1
+
+func parasite_drain_attack_ok [ start: vec3f, end: vec3f ] -> bool
+    # check for max distance
+    dir : v_sub[ start, end ]
+    if [ v_len[ dir ] > 256.0 ] return false
+    # check for min/max pitch
+    angles : vectoangles[ dir ]
+    pitch : f32 [ angles.x ]
+    if [ pitch < -180.0 ] pitch = pitch + 360.0
+    if [ fabs[ pitch ] > 30.0 ] return false
+    return true
+
+func parasite_drain_attack [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    offset : vec3f [ 24.0, 0.0, 6.0 ]
+    start : project_source[ e.origin, offset, ax.forward, ax.right ]
+    end : vec3f [ e.enemy.origin ]
+    if [ !parasite_drain_attack_ok[ start, end ] ]
+        end = vec3f [ end.x, end.y,
+                      e.enemy.origin.z + e.enemy.maxs.z - 8.0 ]
+        if [ !parasite_drain_attack_ok[ start, end ] ]
+            end = vec3f [ end.x, end.y,
+                          e.enemy.origin.z + e.enemy.mins.z + 8.0 ]
+            if [ !parasite_drain_attack_ok[ start, end ] ] return
+    end = e.enemy.origin
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    tr : g.world.trace[ start, zero, zero, end, e, MASK_SHOT ]
+    if [ tr.ent != e.enemy ] return
+    # drain03 41, drain04 42
+    damage : i32 [ 2 ]
+    if [ e.frame == 41 ]
+        damage = 5
+        g.sound[ e.enemy, CHAN_AUTO, parasite_sound_impact, 1.0,
+                 ATTN_NORM ]
+    el [ e.frame == 42 ]
+        g.sound[ e, CHAN_WEAPON, parasite_sound_suck, 1.0, ATTN_NORM ]
+    g.temp_entity_beam[ TE_PARASITE_ATTACK, e, start, end ]
+    dir : v_sub[ start, end ]
+    t_damage[ e.enemy, e, e, dir, e.enemy.origin, zero, damage, 0,
+              DAMAGE_NO_KNOCKBACK, MOD_UNKNOWN ]
+
+func parasite_attack [ e: Edict ]
+    e.monsterinfo.currentmove = parasite_move_drain
+
+func parasite_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func parasite_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                    damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, parasite_sound_die, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = parasite_move_death
+
+func sp_monster_parasite [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    parasite_moves[]
+    parasite_sound_pain1  = g.soundindex[ 'parasite/parpain1.wav' ]
+    parasite_sound_pain2  = g.soundindex[ 'parasite/parpain2.wav' ]
+    parasite_sound_die    = g.soundindex[ 'parasite/pardeth1.wav' ]
+    parasite_sound_launch = g.soundindex[ 'parasite/paratck1.wav' ]
+    parasite_sound_impact = g.soundindex[ 'parasite/paratck2.wav' ]
+    parasite_sound_suck   = g.soundindex[ 'parasite/paratck3.wav' ]
+    parasite_sound_reelin = g.soundindex[ 'parasite/paratck4.wav' ]
+    parasite_sound_sight  = g.soundindex[ 'parasite/parsght1.wav' ]
+    parasite_sound_tap    = g.soundindex[ 'parasite/paridle1.wav' ]
+    parasite_sound_scratch = g.soundindex[ 'parasite/paridle2.wav' ]
+    parasite_sound_search = g.soundindex[ 'parasite/parsrch1.wav' ]
+    e.modelindex = g.modelindex[ 'models/monsters/parasite/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 24.0 ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.health = 175
+    e.gib_health = -50
+    e.mass = 250
+    e.pain = lambda parasite_pain[]
+    e.die  = lambda parasite_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda parasite_stand[]
+    mi.walk   = lambda parasite_start_walk[]
+    mi.run    = lambda parasite_start_run[]
+    mi.attack = lambda parasite_attack[]
+    mi.sight  = lambda parasite_sight[]
+    mi.idle   = lambda parasite_idle[]
+    g.world.link[ e ]
+    mi.currentmove = parasite_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_parasite.h
+func parasite_moves []
+    if [ parasite_move_start_fidget ] return
+    v : vec MFrame []
+    mf[ v, 4, lambda ai_stand[], 0.0, null ]
+    # stand18 .. stand21
+    parasite_move_start_fidget = MMove [
+        firstframe: 100, lastframe: 103, frames: v,
+        endfunc: lambda parasite_do_fidget[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_scratch[] ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_scratch[] ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    # stand22 .. stand27
+    parasite_move_fidget = MMove [
+        firstframe: 104, lastframe: 109, frames: v,
+        endfunc: lambda parasite_refidget[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_scratch[] ]
+    mf[ v, 7, lambda ai_stand[], 0.0, null ]
+    # stand28 .. stand35
+    parasite_move_end_fidget = MMove [
+        firstframe: 110, lastframe: 117, frames: v,
+        endfunc: lambda parasite_stand[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_tap[] ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_tap[] ]
+    mf[ v, 3, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_tap[] ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_tap[] ]
+    mf[ v, 3, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_tap[] ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda parasite_tap[] ]
+    # stand01 .. stand17
+    parasite_move_stand = MMove [
+        firstframe: 83, lastframe: 99, frames: v,
+        endfunc: lambda parasite_stand[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_run[], 30.0, null ]
+    mf[ v, 1, lambda ai_run[], 22.0, null ]
+    mf[ v, 1, lambda ai_run[], 19.0, null ]
+    mf[ v, 1, lambda ai_run[], 24.0, null ]
+    mf[ v, 1, lambda ai_run[], 28.0, null ]
+    mf[ v, 1, lambda ai_run[], 25.0, null ]
+    # run03 .. run09
+    parasite_move_run = MMove [
+        firstframe: 70, lastframe: 76, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 0.0, null ]
+    mf[ v, 1, lambda ai_run[], 30.0, null ]
+    # run01 .. run02
+    parasite_move_start_run = MMove [
+        firstframe: 68, lastframe: 69, frames: v,
+        endfunc: lambda parasite_run[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_run[], 20.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    mf[ v, 2, lambda ai_run[], 0.0, null ]
+    # run10 .. run15
+    parasite_move_stop_run = MMove [
+        firstframe: 77, lastframe: 82, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_walk[], 30.0, null ]
+    mf[ v, 1, lambda ai_walk[], 22.0, null ]
+    mf[ v, 1, lambda ai_walk[], 19.0, null ]
+    mf[ v, 1, lambda ai_walk[], 24.0, null ]
+    mf[ v, 1, lambda ai_walk[], 28.0, null ]
+    mf[ v, 1, lambda ai_walk[], 25.0, null ]
+    # run03 .. run09
+    parasite_move_walk = MMove [
+        firstframe: 70, lastframe: 76, frames: v,
+        endfunc: lambda parasite_walk[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 30.0, lambda parasite_walk[] ]
+    # run01 .. run02
+    parasite_move_start_walk = MMove [
+        firstframe: 68, lastframe: 69, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_walk[], 20.0, null ]
+    mf[ v, 1, lambda ai_walk[], 12.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 2, lambda ai_walk[], 0.0, null ]
+    # run10 .. run15
+    parasite_move_stop_walk = MMove [
+        firstframe: 77, lastframe: 82, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 16.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain111
+    parasite_move_pain1 = MMove [
+        firstframe: 57, lastframe: 67, frames: v,
+        endfunc: lambda parasite_start_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda parasite_launch[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 15.0, lambda parasite_drain_attack[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, lambda parasite_drain_attack[] ]
+    mf[ v, 2, lambda ai_charge[], -2.0, lambda parasite_drain_attack[] ]
+    mf[ v, 1, lambda ai_charge[], -3.0, lambda parasite_drain_attack[] ]
+    mf[ v, 1, lambda ai_charge[], -2.0, lambda parasite_drain_attack[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda parasite_drain_attack[] ]
+    mf[ v, 1, lambda ai_charge[], -1.0, lambda parasite_drain_attack[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda parasite_reel_in[] ]
+    mf[ v, 2, lambda ai_charge[], -2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    # drain01 .. drain18
+    parasite_move_drain = MMove [
+        firstframe: 39, lastframe: 56, frames: v,
+        endfunc: lambda parasite_start_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 2, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -18.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 9.0, null ]
+    mf[ v, 1, lambda ai_charge[], 6.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -18.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 8.0, null ]
+    mf[ v, 1, lambda ai_charge[], 9.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -18.0, null ]
+    mf[ v, 7, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 11.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -5.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    # break01 .. break32
+    parasite_move_break = MMove [
+        firstframe: 0, lastframe: 31, frames: v,
+        endfunc: lambda parasite_start_run[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # death101 .. death107
+    parasite_move_death = MMove [
+        firstframe: 32, lastframe: 38, frames: v,
+        endfunc: lambda parasite_dead[] ]
+

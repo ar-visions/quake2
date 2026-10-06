@@ -1,0 +1,671 @@
+# MD2 models and their skins, drawn as gl_mesh.c drew them
+extend quake2
+
+MD2_MAX_VERTS : i32 [ 98304 ]
+RF_MINLIGHT   : i32 [ 1 ]
+RF_FULLBRIGHT : i32 [ 8 ]
+
+enum Md2Surface
+    skin : 0
+
+# a skin from the atlas times the vertex light, as GL modulated it
+ModelViewProject Md2Lit
+    attrib skin  : LayoutBinding [ type:typeid[ Md2Surface ],
+                                   id:Md2Surface.skin, count:1,
+                                   format: typeid[ rgba8 ] ]
+    attrib a_pos : VertexInput [ type:typeid[ vec3f ] ]
+    attrib a_uv  : VertexInput [ type:typeid[ vec2f ] ]
+    attrib a_col : VertexInput [ type:typeid[ vec4f ] ]
+
+    attrib v_uv  : VertexOutput [ type:typeid[ vec2f ] ]
+    attrib v_col : VertexOutput [ type:typeid[ vec4f ] ]
+    attrib fragColor : FragmentOutput [ type:typeid[ vec4f ] ]
+
+    func init [ ]
+        model = mat4f.identity[]
+        view  = mat4f.identity[]
+        proj  = mat4f.identity[]
+
+    func vertex [] -> GLSL none {
+        v_uv        = a_uv;
+        // alpha 2 marks the view weapon: opaque, its depth squeezed
+        float hack  = step(1.5, a_col.a);
+        v_col       = vec4(a_col.rgb, a_col.a - hack);
+        mat4 mvp    = ubo.proj * ubo.view * ubo.model;
+        gl_Position = mvp * vec4(a_pos, 1.0);
+        gl_Position.z *= 1.0 - 0.7 * hack;
+    }
+
+    func fragment [] -> GLSL none {
+        // intensity 2 on the texel, the colour clamped to one
+        vec4 t    = texture(skin, v_uv);
+        vec3 c    = min(t.rgb * 2.0, vec3(1.0));
+        float al  = t.a * v_col.a;
+        if (al < 0.004) discard;
+        fragColor = vec4(c * min(v_col.rgb, vec3(1.0)), al);
+    }
+
+# one model file: its header fields, the bytes, the skins' places
+class Md2
+    public name       : string
+    public file       : PakData
+    public skin_w     : i32
+    public skin_h     : i32
+    public framesize  : i32
+    public num_skins  : i32
+    public num_xyz    : i32
+    public num_tris   : i32
+    public num_frames : i32
+    public ofs_st     : i32
+    public ofs_tris   : i32
+    public ofs_frames : i32
+    # each skin's atlas rect: u, v, width, height, all 0..1
+    public rects      : vec f32
+    # an sp2 sprite: each frame's width, height, origin x and y
+    public sprite     : bool
+    public frames     : vec i32
+
+# one of the frame's two meshes: nine floats a vertex
+class Md2Mesh
+    public gp    : Gpu
+    public out   : @f32
+    public ready : bool
+    public used  : i32
+
+    public func begin [ to: Gpu ]
+        gp = to
+        ready = false
+        used = 0
+        # position 3, uv 2, colour 4 floats, packed in that order
+        if [ gp.vertex_size != 36 ]
+            log 'md2: vertex size {gp.vertex_size}, wanted 36'
+            return
+        out = @gp.vertex_data[ 0 ]
+        ready = true
+
+    public func finish []
+        if [ !ready ] return
+        gp.index_count = used
+        gp.upload_verts[]
+
+# the models of a map, one skin atlas, and the frame's triangles
+class Md2Set
+    public pak     : Pak
+    public palette : vec u8
+    public list    : vec Md2
+    # model index -> 1 + its place in list; 0 until asked for
+    public slot    : vec i32
+    public atlas   : Image
+    public atlas_w : i32 [ 2048 ]
+    public atlas_h : i32 [ 2048 ]
+    public pen_x   : i32
+    public pen_y   : i32
+    public pen_row : i32
+    # skins placed since the texture last took them
+    public pending : vec BspTex
+    # the 162 normals of anorms.h, and their light at one yaw
+    public anorms  : vec f32
+    public dots    : vec f32
+    # one entity's vertices in the world, and each one's light
+    public xyz     : vec f32
+    public shade   : vec f32
+    # what depth hides, and what is seen through (no depth write)
+    public solid   : Md2Mesh
+    public clear   : Md2Mesh
+    # the eye's right and up, quake axes: sprites and particles
+    public vright  : vec3f
+    public vup     : vec3f
+    public vpn     : vec3f
+    public eye     : vec3f
+
+    func init []
+        list    = vec Md2 []
+        slot    = vec i32 []
+        pending = vec BspTex []
+        dots    = vec f32 [ 162 ]
+        xyz     = vec f32 [ 2048 * 3 ]
+        shade   = vec f32 [ 2048 ]
+        atlas = Image [ width: atlas_w, height: atlas_h,
+                        format: Pixel.rgba8, linear: true ]
+        solid = Md2Mesh [ ]
+        clear = Md2Mesh [ ]
+        ad : @u8 [ atlas.vdata[] ]
+        memset[ ad, 255, atlas_w * atlas_h * 4 ]
+        # texels 0..3 stay white (beams, shells); the particle dot
+        # of gl_rmisc.c sits at 6..15, clear all round it
+        for [ y: i32 0, y < 10, y += 1 ]
+            for [ x: i32 0, x < 10, x += 1 ]
+                inside : bool [ y >= 1 && y <= 4 && x >= 1 && x <= 4 ]
+                ends : bool [ y == 1 || y == 4 ]
+                corner : bool [ ends && (x == 1 || x == 4) ]
+                dot : bool [ inside && !corner ]
+                ad[ (y * atlas_w + 6 + x) * 4 + 3 ] = (dot) ? 255 : 0
+        pen_x = 18
+        pen_row = 12
+        anorms = vec f32 [] [
+        -0.525731, 0.0, 0.850651, -0.442863, 0.238856, 0.864188,
+        -0.295242, 0.0, 0.955423, -0.309017, 0.5, 0.809017, -0.16246,
+        0.262866, 0.951056, 0.0, 0.0, 1.0, 0.0, 0.850651, 0.525731,
+        -0.147621, 0.716567, 0.681718, 0.147621, 0.716567, 0.681718,
+        0.0, 0.525731, 0.850651, 0.309017, 0.5, 0.809017, 0.525731, 0.0,
+        0.850651, 0.295242, 0.0, 0.955423, 0.442863, 0.238856, 0.864188,
+        0.16246, 0.262866, 0.951056, -0.681718, 0.147621, 0.716567,
+        -0.809017, 0.309017, 0.5, -0.587785, 0.425325, 0.688191,
+        -0.850651, 0.525731, 0.0, -0.864188, 0.442863, 0.238856,
+        -0.716567, 0.681718, 0.147621, -0.688191, 0.587785, 0.425325,
+        -0.5, 0.809017, 0.309017, -0.238856, 0.864188, 0.442863,
+        -0.425325, 0.688191, 0.587785, -0.716567, 0.681718, -0.147621,
+        -0.5, 0.809017, -0.309017, -0.525731, 0.850651, 0.0, 0.0,
+        0.850651, -0.525731, -0.238856, 0.864188, -0.442863, 0.0,
+        0.955423, -0.295242, -0.262866, 0.951056, -0.16246, 0.0, 1.0,
+        0.0, 0.0, 0.955423, 0.295242, -0.262866, 0.951056, 0.16246,
+        0.238856, 0.864188, 0.442863, 0.262866, 0.951056, 0.16246, 0.5,
+        0.809017, 0.309017, 0.238856, 0.864188, -0.442863, 0.262866,
+        0.951056, -0.16246, 0.5, 0.809017, -0.309017, 0.850651,
+        0.525731, 0.0, 0.716567, 0.681718, 0.147621, 0.716567, 0.681718,
+        -0.147621, 0.525731, 0.850651, 0.0, 0.425325, 0.688191,
+        0.587785, 0.864188, 0.442863, 0.238856, 0.688191, 0.587785,
+        0.425325, 0.809017, 0.309017, 0.5, 0.681718, 0.147621, 0.716567,
+        0.587785, 0.425325, 0.688191, 0.955423, 0.295242, 0.0, 1.0, 0.0,
+        0.0, 0.951056, 0.16246, 0.262866, 0.850651, -0.525731, 0.0,
+        0.955423, -0.295242, 0.0, 0.864188, -0.442863, 0.238856,
+        0.951056, -0.16246, 0.262866, 0.809017, -0.309017, 0.5,
+        0.681718, -0.147621, 0.716567, 0.850651, 0.0, 0.525731,
+        0.864188, 0.442863, -0.238856, 0.809017, 0.309017, -0.5,
+        0.951056, 0.16246, -0.262866, 0.525731, 0.0, -0.850651,
+        0.681718, 0.147621, -0.716567, 0.681718, -0.147621, -0.716567,
+        0.850651, 0.0, -0.525731, 0.809017, -0.309017, -0.5, 0.864188,
+        -0.442863, -0.238856, 0.951056, -0.16246, -0.262866, 0.147621,
+        0.716567, -0.681718, 0.309017, 0.5, -0.809017, 0.425325,
+        0.688191, -0.587785, 0.442863, 0.238856, -0.864188, 0.587785,
+        0.425325, -0.688191, 0.688191, 0.587785, -0.425325, -0.147621,
+        0.716567, -0.681718, -0.309017, 0.5, -0.809017, 0.0, 0.525731,
+        -0.850651, -0.525731, 0.0, -0.850651, -0.442863, 0.238856,
+        -0.864188, -0.295242, 0.0, -0.955423, -0.16246, 0.262866,
+        -0.951056, 0.0, 0.0, -1.0, 0.295242, 0.0, -0.955423, 0.16246,
+        0.262866, -0.951056, -0.442863, -0.238856, -0.864188, -0.309017,
+        -0.5, -0.809017, -0.16246, -0.262866, -0.951056, 0.0, -0.850651,
+        -0.525731, -0.147621, -0.716567, -0.681718, 0.147621, -0.716567,
+        -0.681718, 0.0, -0.525731, -0.850651, 0.309017, -0.5, -0.809017,
+        0.442863, -0.238856, -0.864188, 0.16246, -0.262866, -0.951056,
+        0.238856, -0.864188, -0.442863, 0.5, -0.809017, -0.309017,
+        0.425325, -0.688191, -0.587785, 0.716567, -0.681718, -0.147621,
+        0.688191, -0.587785, -0.425325, 0.587785, -0.425325, -0.688191,
+        0.0, -0.955423, -0.295242, 0.0, -1.0, 0.0, 0.262866, -0.951056,
+        -0.16246, 0.0, -0.850651, 0.525731, 0.0, -0.955423, 0.295242,
+        0.238856, -0.864188, 0.442863, 0.262866, -0.951056, 0.16246,
+        0.5, -0.809017, 0.309017, 0.716567, -0.681718, 0.147621,
+        0.525731, -0.850651, 0.0, -0.238856, -0.864188, -0.442863, -0.5,
+        -0.809017, -0.309017, -0.262866, -0.951056, -0.16246, -0.850651,
+        -0.525731, 0.0, -0.716567, -0.681718, -0.147621, -0.716567,
+        -0.681718, 0.147621, -0.525731, -0.850651, 0.0, -0.5, -0.809017,
+        0.309017, -0.238856, -0.864188, 0.442863, -0.262866, -0.951056,
+        0.16246, -0.864188, -0.442863, 0.238856, -0.809017, -0.309017,
+        0.5, -0.688191, -0.587785, 0.425325, -0.681718, -0.147621,
+        0.716567, -0.442863, -0.238856, 0.864188, -0.587785, -0.425325,
+        0.688191, -0.309017, -0.5, 0.809017, -0.147621, -0.716567,
+        0.681718, -0.425325, -0.688191, 0.587785, -0.16246, -0.262866,
+        0.951056, 0.442863, -0.238856, 0.864188, 0.16246, -0.262866,
+        0.951056, 0.309017, -0.5, 0.809017, 0.147621, -0.716567,
+        0.681718, 0.0, -0.525731, 0.850651, 0.425325, -0.688191,
+        0.587785, 0.587785, -0.425325, 0.688191, 0.688191, -0.587785,
+        0.425325, -0.955423, 0.295242, 0.0, -0.951056, 0.16246,
+        0.262866, -1.0, 0.0, 0.0, -0.850651, 0.0, 0.525731, -0.955423,
+        -0.295242, 0.0, -0.951056, -0.16246, 0.262866, -0.864188,
+        0.442863, -0.238856, -0.951056, 0.16246, -0.262866, -0.809017,
+        0.309017, -0.5, -0.864188, -0.442863, -0.238856, -0.951056,
+        -0.16246, -0.262866, -0.809017, -0.309017, -0.5, -0.681718,
+        0.147621, -0.716567, -0.681718, -0.147621, -0.716567, -0.850651,
+        0.0, -0.525731, -0.688191, 0.587785, -0.425325, -0.587785,
+        0.425325, -0.688191, -0.425325, 0.688191, -0.587785, -0.425325,
+        -0.688191, -0.587785, -0.587785, -0.425325, -0.688191,
+        -0.688191, -0.587785, -0.425325 ]
+
+    # LoadPCX: 8-bit run-length rows through the colormap's palette
+    public func load_pcx [ name: string, holes: bool ] -> BspTex
+        d : pak.read[ name ]
+        if [ !d ]
+            log 'md2: missing {name}'
+            return null
+        b : @u8 [ d.data ]
+        if [ b[ 0 ] != 10 || b[ 1 ] != 5 || b[ 2 ] != 1 || b[ 3 ] != 8 ]
+            return null
+        w : i32 [ bsp_i16[ b, 8 ] + 1 ]
+        h : i32 [ bsp_i16[ b, 10 ] + 1 ]
+        if [ w > 640 || h > 480 ] return null
+        bytes : i32 [ w * h * 4 ]
+        px : new u8 [ bytes ]
+        at : i32 [ 128 ]
+        for [ y: i32 0, y < h, y += 1 ]
+            x : i32 [ 0 ]
+            while [ x < w && at < d.size ]
+                c : i32 [ b[ at ] ]
+                run : i32 [ 1 ]
+                at += 1
+                if [ (c & 192) == 192 ]
+                    run = c & 63
+                    c = b[ at ]
+                    at += 1
+                while [ run > 0 && x < w ]
+                    o : i32 [ (y * w + x) * 4 ]
+                    px[ o ]     = palette[ c * 3 ]
+                    px[ o + 1 ] = palette[ c * 3 + 1 ]
+                    px[ o + 2 ] = palette[ c * 3 + 2 ]
+                    # a sprite's colour 255 is see-through
+                    px[ o + 3 ] = (holes && c == 255) ? 0 : 255
+                    x += 1
+                    run -= 1
+        return BspTex [ name: name, width: w, height: h, pixels: px ]
+
+    # a skin into the atlas, two pixels clear of its neighbours
+    func add_skin [ m: Md2, name: string, holes: bool ]
+        t : load_pcx[ name, holes ]
+        if [ t && pen_x + t.width > atlas_w ]
+            pen_x = 0
+            pen_y = pen_y + pen_row
+            pen_row = 0
+        if [ !t || pen_y + t.height > atlas_h ]
+            if [ t ] log 'md2: the skin atlas is full at {name}'
+            for [ i: i32 0, i < 4, i += 1 ] m.rects.push[ 0.0 ]
+            return
+        t.ax = pen_x
+        t.ay = pen_y
+        ad : @u8 [ atlas.vdata[] ]
+        for [ r: i32 0, r < t.height, r += 1 ]
+            dst : i32 [ ((t.ay + r) * atlas_w + t.ax) * 4 ]
+            memcpy[ @ad[ dst ], @t.pixels[ r * t.width * 4 ],
+                    t.width * 4 ]
+        pen_x = pen_x + t.width + 2
+        if [ t.height + 2 > pen_row ] pen_row = t.height + 2
+        aw : f32 [ atlas_w ]
+        ah : f32 [ atlas_h ]
+        u0 : f32 [ t.ax / aw ]
+        v0 : f32 [ t.ay / ah ]
+        uw : f32 [ t.width / aw ]
+        vh : f32 [ t.height / ah ]
+        m.rects.push[ u0 ]
+        m.rects.push[ v0 ]
+        m.rects.push[ uw ]
+        m.rects.push[ vh ]
+        pending.push[ t ]
+
+    # Mod_LoadAliasModel: IDP2 version 8; no triangles when it fails
+    func load [ name: string ] -> Md2
+        m : Md2 [ name: name ]
+        m.rects = vec f32 []
+        n : i32 [ name.count ]
+        if [ n >= 4 && strcmp[ @name.chars[ n - 4 ], ".sp2" ] == 0 ]
+            load_sprite[ m ]
+            return m
+        if [ n < 4 || strcmp[ @name.chars[ n - 4 ], ".md2" ] != 0 ]
+            return m
+        d : pak.read[ name ]
+        if [ !d ]
+            log 'md2: missing {name}'
+            return m
+        b : @u8 [ d.data ]
+        if [ bsp_i32[ b, 0 ] != 844121161 || bsp_i32[ b, 4 ] != 8 ]
+            log 'md2: {name} is not an IDP2 version 8 file'
+            return m
+        if [ bsp_i32[ b, 24 ] > 2048 ]
+            log 'md2: {name} has too many vertices'
+            return m
+        m.file       = d
+        m.skin_w     = bsp_i32[ b, 8 ]
+        m.skin_h     = bsp_i32[ b, 12 ]
+        m.framesize  = bsp_i32[ b, 16 ]
+        m.num_xyz    = bsp_i32[ b, 24 ]
+        m.num_tris   = bsp_i32[ b, 32 ]
+        m.num_frames = bsp_i32[ b, 40 ]
+        m.ofs_st     = bsp_i32[ b, 48 ]
+        m.ofs_tris   = bsp_i32[ b, 52 ]
+        m.ofs_frames = bsp_i32[ b, 56 ]
+        skins : i32 [ bsp_i32[ b, 20 ] ]
+        ofs_skins : i32 [ bsp_i32[ b, 44 ] ]
+        nb : local i8 [ 65 ]
+        for [ i: i32 0, i < skins, i += 1 ]
+            memcpy[ nb, @b[ ofs_skins + i * 64 ], 64 ]
+            nb[ 64 ] = 0
+            skin_name : string [ cast cstr [ nb ] ]
+            add_skin[ m, skin_name, false ]
+        m.num_skins = skins
+        return m
+
+    # Mod_LoadSpriteModel: IDS2 version 2, a pcx a frame
+    func load_sprite [ m: Md2 ]
+        d : pak.read[ m.name ]
+        if [ !d ]
+            log 'md2: missing {m.name}'
+            return
+        b : @u8 [ d.data ]
+        if [ bsp_i32[ b, 0 ] != 844317769 || bsp_i32[ b, 4 ] != 2 ]
+            return
+        m.sprite = true
+        m.frames = vec i32 []
+        m.num_frames = bsp_i32[ b, 8 ]
+        nb : local i8 [ 65 ]
+        for [ i: i32 0, i < m.num_frames, i += 1 ]
+            at : i32 [ 12 + i * 80 ]
+            for [ k: i32 0, k < 4, k += 1 ]
+                field : i32 [ bsp_i32[ b, at + k * 4 ] ]
+                m.frames.push[ field ]
+            memcpy[ nb, @b[ at + 16 ], 64 ]
+            nb[ 64 ] = 0
+            frame_name : string [ cast cstr [ nb ] ]
+            add_skin[ m, frame_name, true ]
+        m.num_skins = m.num_frames
+
+    # the model a game index names, loaded the first time
+    public func get [ index: i32, names: vec string ] -> Md2
+        while [ slot.count <= index ] slot.push[ 0 ]
+        if [ slot[ index ] == 0 ]
+            list.push[ load[ names[ index ] ] ]
+            slot[ index ] = list.count
+        return list[ slot[ index ] - 1 ]
+
+    # the frame's mesh: positions, uvs, colours, indices in order
+    public func mesh [] -> GltfModel
+        nv : i32 [ MD2_MAX_VERTS ]
+        pb : i32 [ nv * 12 ]
+        ub : i32 [ nv * 8 ]
+        cb : i32 [ nv * 16 ]
+        tsz : i32 [ pb + ub + cb + nv * 4 ]
+        data : new u8 [ tsz ]
+        memset[ data, 0, tsz ]
+        iu : @u32 [ @data[ pb + ub + cb ] ]
+        for [ i: i32 0, i < nv, i += 1 ] iu[ i ] = u32[ i ]
+        bufs : vec GltfBuffer []
+        bufs += GltfBuffer [ byteLength: u64[ tsz ], data: data ]
+        views : vec BufferView []
+        views += BufferView [ buffer: 0, byteOffset: 0, byteLength: pb ]
+        views += BufferView [ buffer: 0, byteOffset: pb,
+                              byteLength: ub ]
+        views += BufferView [ buffer: 0, byteOffset: pb + ub,
+                              byteLength: cb ]
+        views += BufferView [ buffer: 0, byteOffset: pb + ub + cb,
+                              byteLength: nv * 4 ]
+        accs : vec Accessor []
+        accs += Accessor [ bufferView: 0,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC3, count: nv ]
+        accs += Accessor [ bufferView: 1,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC2, count: nv ]
+        accs += Accessor [ bufferView: 2,
+                           componentType: ComponentType.FLOAT,
+                           type: CompoundType.VEC4, count: nv ]
+        accs += Accessor [ bufferView: 3,
+                           componentType: ComponentType.UNSIGNED_INT,
+                           type: CompoundType.SCALAR, count: nv ]
+        am : map i64 [ string ] [ ]
+        am[ 'POSITION' ]   = i64[ 0 ]
+        am[ 'TEXCOORD_0' ] = i64[ 1 ]
+        am[ 'TEXCOORD_1' ] = i64[ 2 ]
+        prs : vec Primitive []
+        prs += Primitive [ name: 'md2', attributes: am,
+                           indices: u64[ 3 ], material: 0,
+                           mode: Mode.TRIANGLES ]
+        mshs : vec Mesh []
+        mshs += Mesh [ name: 'md2', primitives: prs ]
+        nds : vec Node []
+        nds += Node [ name: 'md2', mesh: 0 ]
+        sn : vec i64 []
+        sn += i64[ 0 ]
+        scns : vec Scene []
+        scns += Scene [ name: 'scene', nodes: sn ]
+        return GltfModel [ nodes: nds, meshes: mshs, scenes: scns,
+            scene: 0, buffers: bufs, bufferViews: views,
+            accessors: accs ]
+
+    # the farthest a frame's vertex can be from the origin
+    public func radius [ m: Md2, frame_in: i32 ] -> f32
+        if [ m.sprite || m.num_tris == 0 ] return 64.0
+        frame : i32 [ frame_in ]
+        if [ frame < 0 || frame >= m.num_frames ] frame = 0
+        b : @u8 [ m.file.data ]
+        at : i32 [ m.ofs_frames + frame * m.framesize ]
+        sum : f32 [ 0.0 ]
+        for [ k: i32 0, k < 3, k += 1 ]
+            low : f32 [ bsp_f32[ b, at + 12 + k * 4 ] ]
+            high : f32 [ low + bsp_f32[ b, at + k * 4 ] * 255.0 ]
+            far : f32 [ (fabs[ low ] > fabs[ high ]) ? low : high ]
+            sum = sum + far * far
+        return sqrt[ sum ]
+
+    # the model a name names: the game's index for it, then get
+    public func named [ name: string ] -> Md2
+        return get[ g.modelindex[ name ], g.models ]
+
+    # the frame starts: both meshes empty; the eye's axes kept
+    public func begin [ gs: Gpu, gc: Gpu, at: vec3f, forward: vec3f,
+                        right: vec3f, up: vec3f ]
+        solid.begin[ gs ]
+        clear.begin[ gc ]
+        eye = at
+        vpn = forward
+        vright = right
+        vup = up
+
+    # one vertex, quake axes, into a mesh
+    public func put [ mesh: Md2Mesh, p: vec3f, u: f32, v: f32, r: f32,
+                      gr: f32, b: f32, alpha: f32 ]
+        if [ !mesh.ready || mesh.used >= MD2_MAX_VERTS ] return
+        o : i32 [ mesh.used * 9 ]
+        out : @f32 [ mesh.out ]
+        out[ o ]     = p.x
+        out[ o + 1 ] = p.z
+        out[ o + 2 ] = 0.0 - p.y
+        out[ o + 3 ] = u
+        out[ o + 4 ] = v
+        out[ o + 5 ] = r
+        out[ o + 6 ] = gr
+        out[ o + 7 ] = b
+        out[ o + 8 ] = alpha
+        mesh.used += 1
+
+    # a palette colour's three channels, 0..1
+    public func shade_of [ index: i32 ] -> vec3f
+        c : i32 [ (index & 255) * 3 ]
+        return vec3f [ f32[ palette[ c ] ] / 255.0,
+                       f32[ palette[ c + 1 ] ] / 255.0,
+                       f32[ palette[ c + 2 ] ] / 255.0 ]
+
+    # GL_DrawParticles: a dot facing the eye, bigger far away
+    public func particle [ p: vec3f, color: i32, alpha: f32 ]
+        c : vec3f [ shade_of[ color ] ]
+        scale : f32 [ v_dot[ v_sub[ p, eye ], vpn ] ]
+        scale = (scale < 20.0) ? 1.5 : 1.5 + scale * 0.006
+        aw : f32 [ atlas_w ]
+        ah : f32 [ atlas_h ]
+        u0 : f32 [ 6.5 / aw ]
+        v0 : f32 [ 0.5 / ah ]
+        put[ clear, p, u0, v0, c.x, c.y, c.z, alpha ]
+        put[ clear, v_ma[ p, scale, vup ], u0 + 8.0 / aw, v0, c.x, c.y,
+             c.z, alpha ]
+        put[ clear, v_ma[ p, scale, vright ], u0, v0 + 8.0 / ah, c.x,
+             c.y, c.z, alpha ]
+
+    # R_DrawBeam: six sides round a line, one colour, no texture
+    public func beam [ from: vec3f, to: vec3f, width: f32, color: i32,
+                       alpha: f32 ]
+        dir : vec3f [ v_sub[ to, from ] ]
+        if [ v_len[ dir ] == 0.0 ] return
+        axis : vec3f [ v_norm[ dir ] ]
+        # MakeNormalVectors: two unit vectors square to the line
+        side : vec3f [ axis.z, 0.0 - axis.x, axis.y ]
+        side = v_norm[ v_ma[ side, 0.0 - v_dot[ side, axis ], axis ] ]
+        over : vec3f [ v_cross[ side, axis ] ]
+        c : vec3f [ shade_of[ color ] ]
+        white : f32 [ 1.5 / f32[ atlas_w ] ]
+        for [ i: i32 0, i < 6, i += 1 ]
+            t0 : f32 [ f32[ i ] * 1.0471976 ]
+            t1 : f32 [ f32[ i + 1 ] * 1.0471976 ]
+            half : f32 [ width * 0.5 ]
+            p0 : vec3f [ v_ma[ v_ma[ from, cos[ t0 ] * half, side ],
+                               sin[ t0 ] * half, over ] ]
+            p1 : vec3f [ v_ma[ v_ma[ from, cos[ t1 ] * half, side ],
+                               sin[ t1 ] * half, over ] ]
+            q0 : vec3f [ v_add[ p0, dir ] ]
+            q1 : vec3f [ v_add[ p1, dir ] ]
+            put[ clear, p0, white, white, c.x, c.y, c.z, alpha ]
+            put[ clear, q0, white, white, c.x, c.y, c.z, alpha ]
+            put[ clear, p1, white, white, c.x, c.y, c.z, alpha ]
+            put[ clear, q0, white, white, c.x, c.y, c.z, alpha ]
+            put[ clear, q1, white, white, c.x, c.y, c.z, alpha ]
+            put[ clear, p1, white, white, c.x, c.y, c.z, alpha ]
+
+    # R_DrawSpriteModel: a frame's picture, square to the eye
+    public func sprite [ m: Md2, frame_in: i32, origin: vec3f,
+                         alpha: f32 ]
+        if [ !m.sprite || m.num_frames == 0 ] return
+        frame : i32 [ frame_in % m.num_frames ]
+        if [ frame < 0 ] frame = 0
+        w  : f32 [ m.frames[ frame * 4 ] ]
+        h  : f32 [ m.frames[ frame * 4 + 1 ] ]
+        ox : f32 [ m.frames[ frame * 4 + 2 ] ]
+        oy : f32 [ m.frames[ frame * 4 + 3 ] ]
+        u0 : f32 [ m.rects[ frame * 4 ] ]
+        v0 : f32 [ m.rects[ frame * 4 + 1 ] ]
+        u1 : f32 [ u0 + m.rects[ frame * 4 + 2 ] ]
+        v1 : f32 [ v0 + m.rects[ frame * 4 + 3 ] ]
+        low  : vec3f [ v_ma[ origin, 0.0 - oy, vup ] ]
+        high : vec3f [ v_ma[ origin, h - oy, vup ] ]
+        bl : vec3f [ v_ma[ low, 0.0 - ox, vright ] ]
+        tl : vec3f [ v_ma[ high, 0.0 - ox, vright ] ]
+        tr : vec3f [ v_ma[ high, w - ox, vright ] ]
+        br : vec3f [ v_ma[ low, w - ox, vright ] ]
+        mesh : Md2Mesh [ (alpha < 1.0) ? clear : solid ]
+        put[ mesh, bl, u0, v1, 1.0, 1.0, 1.0, alpha ]
+        put[ mesh, tl, u0, v0, 1.0, 1.0, 1.0, alpha ]
+        put[ mesh, tr, u1, v0, 1.0, 1.0, 1.0, alpha ]
+        put[ mesh, bl, u0, v1, 1.0, 1.0, 1.0, alpha ]
+        put[ mesh, tr, u1, v0, 1.0, 1.0, 1.0, alpha ]
+        put[ mesh, br, u1, v1, 1.0, 1.0, 1.0, alpha ]
+
+    # GL_DrawAliasFrameLerp: one entity's triangles, in the world
+    # alpha under 1 is seen through; 2 is the view weapon; a shell
+    # is the plain colour `light`, four units out along the normals
+    public func add [ m: Md2, skinnum: i32, frame_in: i32, old_in: i32,
+                      backlerp: f32, origin: vec3f, angles: vec3f,
+                      light: vec3f, alpha: f32, shell: bool ]
+        if [ m.sprite ]
+            sprite[ m, frame_in, origin, alpha ]
+            return
+        mesh : Md2Mesh [ (alpha < 1.0) ? clear : solid ]
+        if [ !mesh.ready || m.num_tris == 0 ] return
+        if [ mesh.used + m.num_tris * 3 > MD2_MAX_VERTS ] return
+        out : @f32 [ mesh.out ]
+        used : i32 [ mesh.used ]
+        frame : i32 [ frame_in ]
+        old : i32 [ old_in ]
+        # no such frame: both go to the first, as R_DrawAliasModel
+        if [ frame >= m.num_frames || frame < 0 ||
+             old >= m.num_frames || old < 0 ]
+            frame = 0
+            old = 0
+        b : @u8 [ m.file.data ]
+        fa : i32 [ m.ofs_frames + frame * m.framesize ]
+        fo : i32 [ m.ofs_frames + old * m.framesize ]
+        front : f32 [ 1.0 - backlerp ]
+        # each frame: scale x y z, translate x y z, a name, the verts
+        asx : f32 [ bsp_f32[ b, fa ] * front ]
+        asy : f32 [ bsp_f32[ b, fa + 4 ] * front ]
+        asz : f32 [ bsp_f32[ b, fa + 8 ] * front ]
+        osx : f32 [ bsp_f32[ b, fo ] * backlerp ]
+        osy : f32 [ bsp_f32[ b, fo + 4 ] * backlerp ]
+        osz : f32 [ bsp_f32[ b, fo + 8 ] * backlerp ]
+        tx : f32 [ bsp_f32[ b, fo + 12 ] * backlerp
+                   + bsp_f32[ b, fa + 12 ] * front ]
+        ty : f32 [ bsp_f32[ b, fo + 16 ] * backlerp
+                   + bsp_f32[ b, fa + 16 ] * front ]
+        tz : f32 [ bsp_f32[ b, fo + 20 ] * backlerp
+                   + bsp_f32[ b, fa + 20 ] * front ]
+        # gl turned alias models with the roll the other way round
+        turned : vec3f [ angles.x, angles.y, 0.0 - angles.z ]
+        ax : angle_vectors[ turned ]
+        f : vec3f [ ax.forward ]
+        r : vec3f [ ax.right ]
+        u : vec3f [ ax.up ]
+        # shadedots: sixteen yaws, the light from the side and above
+        quant : i32 [ i32[ angles.y * (16.0 / 360.0) ] & 15 ]
+        turn : f32 [ 0.0 - f32[ quant ] * 0.39269908 ]
+        lx : f32 [ cos[ turn ] * 0.70710678 ]
+        ly : f32 [ sin[ turn ] * 0.70710678 ]
+        for [ i: i32 0, i < 162, i += 1 ]
+            d : f32 [ anorms[ i * 3 ] * lx + anorms[ i * 3 + 1 ] * ly
+                      + anorms[ i * 3 + 2 ] * 0.70710678 ]
+            dots[ i ] = (d >= 0.0) ? 1.0 + d : 1.0 + 0.3 * d
+        for [ i: i32 0, i < m.num_xyz, i += 1 ]
+            va : i32 [ fa + 40 + i * 4 ]
+            vo : i32 [ fo + 40 + i * 4 ]
+            x : f32 [ f32[ b[ vo ] ] * osx + f32[ b[ va ] ] * asx + tx ]
+            y : f32 [ f32[ b[ vo + 1 ] ] * osy
+                      + f32[ b[ va + 1 ] ] * asy + ty ]
+            z : f32 [ f32[ b[ vo + 2 ] ] * osz
+                      + f32[ b[ va + 2 ] ] * asz + tz ]
+            # the model's y runs left; quake z up is trinity y up
+            wx : f32 [ origin.x + x * f.x - y * r.x + z * u.x ]
+            wy : f32 [ origin.y + x * f.y - y * r.y + z * u.y ]
+            wz : f32 [ origin.z + x * f.z - y * r.z + z * u.z ]
+            xyz[ i * 3 ]     = wx
+            xyz[ i * 3 + 1 ] = wz
+            xyz[ i * 3 + 2 ] = 0.0 - wy
+            normal : i32 [ b[ va + 3 ] ]
+            if [ normal >= 162 ] normal = 0
+            shade[ i ] = dots[ normal ]
+            if [ shell ]
+                # POWERSUIT_SCALE 4 along the vertex normal
+                nx : f32 [ anorms[ normal * 3 ] * 4.0 ]
+                ny : f32 [ anorms[ normal * 3 + 1 ] * 4.0 ]
+                nz : f32 [ anorms[ normal * 3 + 2 ] * 4.0 ]
+                wx = wx + nx * f.x - ny * r.x + nz * u.x
+                wy = wy + nx * f.y - ny * r.y + nz * u.y
+                wz = wz + nx * f.z - ny * r.z + nz * u.z
+                xyz[ i * 3 ]     = wx
+                xyz[ i * 3 + 1 ] = wz
+                xyz[ i * 3 + 2 ] = 0.0 - wy
+                shade[ i ] = 1.0
+        # the skin asked for, else the first, as R_DrawAliasModel
+        pick : i32 [ skinnum ]
+        if [ pick < 0 || pick >= m.num_skins ] pick = 0
+        ru : f32 [ 0.0 ]
+        rv : f32 [ 0.0 ]
+        rw : f32 [ 0.0 ]
+        rh : f32 [ 0.0 ]
+        if [ m.num_skins > 0 ]
+            ru = m.rects[ pick * 4 ]
+            rv = m.rects[ pick * 4 + 1 ]
+            rw = m.rects[ pick * 4 + 2 ] / f32[ m.skin_w ]
+            rh = m.rects[ pick * 4 + 3 ] / f32[ m.skin_h ]
+        for [ t: i32 0, t < m.num_tris, t += 1 ]
+            ta : i32 [ m.ofs_tris + t * 12 ]
+            for [ c: i32 0, c < 3, c += 1 ]
+                vi : i32 [ bsp_i16[ b, ta + c * 2 ] ]
+                st : i32 [ m.ofs_st + bsp_i16[ b, ta + 6 + c * 2 ] * 4 ]
+                if [ vi < 0 || vi >= m.num_xyz ] vi = 0
+                o : i32 [ used * 9 ]
+                s : f32 [ bsp_i16[ b, st ] ]
+                tt : f32 [ bsp_i16[ b, st + 2 ] ]
+                out[ o ]     = xyz[ vi * 3 ]
+                out[ o + 1 ] = xyz[ vi * 3 + 1 ]
+                out[ o + 2 ] = xyz[ vi * 3 + 2 ]
+                out[ o + 3 ] = ru + (s + 0.5) * rw
+                out[ o + 4 ] = rv + (tt + 0.5) * rh
+                if [ shell ]
+                    out[ o + 3 ] = 1.5 / f32[ atlas_w ]
+                    out[ o + 4 ] = 1.5 / f32[ atlas_h ]
+                out[ o + 5 ] = shade[ vi ] * light.x
+                out[ o + 6 ] = shade[ vi ] * light.y
+                out[ o + 7 ] = shade[ vi ] * light.z
+                out[ o + 8 ] = alpha
+                used += 1
+        mesh.used = used
+
+    # the frame ends: both meshes go to the gpu, new skins too
+    public func finish [ tx: Texture ]
+        solid.finish[]
+        clear.finish[]
+        for [ t: BspTex ] in pending
+            tx.upload_region[ t.ax, t.ay, t.width, t.height, t.pixels,
+                              t.width * t.height * 4 ]
+        if [ pending.count > 0 ] pending = vec BspTex []

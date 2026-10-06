@@ -1,0 +1,297 @@
+# m_flyer.c: the flyer (twin blasters, wing blades up close)
+extend quake2
+
+flyer_sound_sight : i32
+flyer_sound_idle : i32
+flyer_sound_pain1 : i32
+flyer_sound_pain2 : i32
+flyer_sound_slash : i32
+flyer_sound_sproing : i32
+flyer_sound_die : i32
+# after a start or stop: 1 attack1, 2 attack2, 3 run
+flyer_nextmove_kind : i32
+flyer_move_stand : MMove
+flyer_move_walk : MMove
+flyer_move_run : MMove
+flyer_move_start : MMove
+flyer_move_stop : MMove
+flyer_move_rollright : MMove
+flyer_move_rollleft : MMove
+flyer_move_pain3 : MMove
+flyer_move_pain2 : MMove
+flyer_move_pain1 : MMove
+flyer_move_defense : MMove
+flyer_move_bankright : MMove
+flyer_move_bankleft : MMove
+flyer_move_attack2 : MMove
+flyer_move_start_melee : MMove
+flyer_move_end_melee : MMove
+flyer_move_loop_melee : MMove
+
+func flyer_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, flyer_sound_sight, 1.0, ATTN_NORM ]
+
+func flyer_idle [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, flyer_sound_idle, 1.0, ATTN_IDLE ]
+
+func flyer_pop_blades [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, flyer_sound_sproing, 1.0, ATTN_NORM ]
+
+func flyer_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = flyer_move_stand
+    el
+        e.monsterinfo.currentmove = flyer_move_run
+
+func flyer_walk [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_walk
+
+func flyer_stand [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_stand
+
+func flyer_stop [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_stop
+
+func flyer_start [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_start
+
+func flyer_fire [ e: Edict, flash_number: i32 ]
+    # attak204 82, attak207 85, attak210 88
+    effect : i32 [ 0 ]
+    if [ e.frame == 82 || e.frame == 85 || e.frame == 88 ]
+        effect = EF_HYPERBLASTER
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    end : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_sub[ end, start ]
+    monster_fire_blaster[ e, start, dir, 1, 1000, flash_number, effect ]
+
+func flyer_fireleft [ e: Edict ]
+    flyer_fire[ e, MZ2_FLYER_BLASTER_1 ]
+
+func flyer_fireright [ e: Edict ]
+    flyer_fire[ e, MZ2_FLYER_BLASTER_2 ]
+
+func flyer_slash_left [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.mins.x, 0.0 ]
+    fire_hit[ e, aim, 5, 0 ]
+    g.sound[ e, CHAN_WEAPON, flyer_sound_slash, 1.0, ATTN_NORM ]
+
+func flyer_slash_right [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.maxs.x, 0.0 ]
+    fire_hit[ e, aim, 5, 0 ]
+    g.sound[ e, CHAN_WEAPON, flyer_sound_slash, 1.0, ATTN_NORM ]
+
+func flyer_loop_melee [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_loop_melee
+
+func flyer_attack [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_attack2
+
+func flyer_setstart [ e: Edict ]
+    flyer_nextmove_kind = 3
+    e.monsterinfo.currentmove = flyer_move_start
+
+func flyer_nextmove [ e: Edict ]
+    if [ flyer_nextmove_kind == 1 ]
+        e.monsterinfo.currentmove = flyer_move_start_melee
+    el [ flyer_nextmove_kind == 2 ]
+        e.monsterinfo.currentmove = flyer_move_attack2
+    el [ flyer_nextmove_kind == 3 ]
+        e.monsterinfo.currentmove = flyer_move_run
+
+func flyer_melee [ e: Edict ]
+    e.monsterinfo.currentmove = flyer_move_start_melee
+
+func flyer_check_melee [ e: Edict ]
+    if [ ai_range[ e, e.enemy ] == RANGE_MELEE && frand[] <= 0.8 ]
+        e.monsterinfo.currentmove = flyer_move_loop_melee
+    el
+        e.monsterinfo.currentmove = flyer_move_end_melee
+
+func flyer_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    n : i32 [ rand[] % 3 ]
+    if [ n == 0 ]
+        g.sound[ e, CHAN_VOICE, flyer_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = flyer_move_pain1
+    el [ n == 1 ]
+        g.sound[ e, CHAN_VOICE, flyer_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = flyer_move_pain2
+    el
+        g.sound[ e, CHAN_VOICE, flyer_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = flyer_move_pain3
+
+func flyer_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    g.sound[ e, CHAN_VOICE, flyer_sound_die, 1.0, ATTN_NORM ]
+    become_explosion1[ e ]
+
+func sp_monster_flyer [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    flyer_moves[]
+    # fix a map bug in jail5.bsp
+    if [ g.level.mapname == 'jail5' && e.origin.z == -104.0 ]
+        e.targetname = e.target
+        e.target = null
+    flyer_sound_sight   = g.soundindex[ 'flyer/flysght1.wav' ]
+    flyer_sound_idle    = g.soundindex[ 'flyer/flysrch1.wav' ]
+    flyer_sound_pain1   = g.soundindex[ 'flyer/flypain1.wav' ]
+    flyer_sound_pain2   = g.soundindex[ 'flyer/flypain2.wav' ]
+    flyer_sound_slash   = g.soundindex[ 'flyer/flyatck2.wav' ]
+    flyer_sound_sproing = g.soundindex[ 'flyer/flyatck1.wav' ]
+    flyer_sound_die     = g.soundindex[ 'flyer/flydeth1.wav' ]
+    g.soundindex[ 'flyer/flyatck3.wav' ]
+    e.modelindex = g.modelindex[ 'models/monsters/flyer/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.sound = g.soundindex[ 'flyer/flyidle1.wav' ]
+    e.health = 50
+    e.mass = 50
+    e.pain = lambda flyer_pain[]
+    e.die  = lambda flyer_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda flyer_stand[]
+    mi.walk   = lambda flyer_walk[]
+    mi.run    = lambda flyer_run[]
+    mi.attack = lambda flyer_attack[]
+    mi.melee  = lambda flyer_melee[]
+    mi.sight  = lambda flyer_sight[]
+    mi.idle   = lambda flyer_idle[]
+    g.world.link[ e ]
+    mi.currentmove = flyer_move_stand
+    mi.scale = 1.0
+    flymonster_start[ e ]
+
+# the moves, built once: frame numbers from m_flyer.h
+func flyer_moves []
+    if [ flyer_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 45, lambda ai_stand[], 0.0, null ]
+    # stand01 .. stand45
+    flyer_move_stand = MMove [
+        firstframe: 13, lastframe: 57, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 45, lambda ai_walk[], 5.0, null ]
+    # stand01 .. stand45
+    flyer_move_walk = MMove [
+        firstframe: 13, lastframe: 57, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 45, lambda ai_run[], 10.0, null ]
+    # stand01 .. stand45
+    flyer_move_run = MMove [
+        firstframe: 13, lastframe: 57, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda flyer_nextmove[] ]
+    # start01 .. start06
+    flyer_move_start = MMove [
+        firstframe: 0, lastframe: 5, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda flyer_nextmove[] ]
+    # stop01 .. stop07
+    flyer_move_stop = MMove [
+        firstframe: 6, lastframe: 12, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # rollr01 .. rollr09
+    flyer_move_rollright = MMove [
+        firstframe: 119, lastframe: 127, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # rollf01 .. rollf09
+    flyer_move_rollleft = MMove [
+        firstframe: 110, lastframe: 118, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain301 .. pain304
+    flyer_move_pain3 = MMove [
+        firstframe: 147, lastframe: 150, frames: v,
+        endfunc: lambda flyer_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain204
+    flyer_move_pain2 = MMove [
+        firstframe: 143, lastframe: 146, frames: v,
+        endfunc: lambda flyer_run[] ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # pain101 .. pain109
+    flyer_move_pain1 = MMove [
+        firstframe: 134, lastframe: 142, frames: v,
+        endfunc: lambda flyer_run[] ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    # defens01 .. defens06
+    flyer_move_defense = MMove [
+        firstframe: 128, lastframe: 133, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # bankr01 .. bankr07
+    flyer_move_bankright = MMove [
+        firstframe: 103, lastframe: 109, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # bankl01 .. bankl07
+    flyer_move_bankleft = MMove [
+        firstframe: 96, lastframe: 102, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireleft[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireright[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireleft[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireright[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireleft[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireright[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireleft[] ]
+    mf[ v, 1, lambda ai_charge[], -10.0, lambda flyer_fireright[] ]
+    mf[ v, 6, lambda ai_charge[], 0.0, null ]
+    # attak201 .. attak217
+    flyer_move_attack2 = MMove [
+        firstframe: 79, lastframe: 95, frames: v,
+        endfunc: lambda flyer_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda flyer_pop_blades[] ]
+    mf[ v, 5, lambda ai_charge[], 0.0, null ]
+    # attak101 .. attak106
+    flyer_move_start_melee = MMove [
+        firstframe: 58, lastframe: 63, frames: v,
+        endfunc: lambda flyer_loop_melee[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    # attak119 .. attak121
+    flyer_move_end_melee = MMove [
+        firstframe: 76, lastframe: 78, frames: v,
+        endfunc: lambda flyer_run[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda flyer_slash_left[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda flyer_slash_right[] ]
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    # attak107 .. attak118
+    flyer_move_loop_melee = MMove [
+        firstframe: 64, lastframe: 75, frames: v,
+        endfunc: lambda flyer_check_melee[] ]
+

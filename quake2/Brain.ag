@@ -1,0 +1,381 @@
+# m_brain.c: the brain (tentacles up close, a power screen)
+extend quake2
+
+brain_sound_chest_open : i32
+brain_sound_tentacles_extend : i32
+brain_sound_tentacles_retract : i32
+brain_sound_death : i32
+brain_sound_idle1 : i32
+brain_sound_idle2 : i32
+brain_sound_idle3 : i32
+brain_sound_pain1 : i32
+brain_sound_pain2 : i32
+brain_sound_sight : i32
+brain_sound_search : i32
+brain_sound_melee1 : i32
+brain_sound_melee2 : i32
+brain_sound_melee3 : i32
+brain_move_stand : MMove
+brain_move_idle : MMove
+brain_move_walk1 : MMove
+brain_move_defense : MMove
+brain_move_pain3 : MMove
+brain_move_pain2 : MMove
+brain_move_pain1 : MMove
+brain_move_duck : MMove
+brain_move_death2 : MMove
+brain_move_death1 : MMove
+brain_move_attack1 : MMove
+brain_move_attack2 : MMove
+brain_move_run : MMove
+
+func brain_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, brain_sound_sight, 1.0, ATTN_NORM ]
+
+func brain_search [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, brain_sound_search, 1.0, ATTN_NORM ]
+
+func brain_stand [ e: Edict ]
+    e.monsterinfo.currentmove = brain_move_stand
+
+func brain_idle [ e: Edict ]
+    g.sound[ e, CHAN_AUTO, brain_sound_idle3, 1.0, ATTN_IDLE ]
+    e.monsterinfo.currentmove = brain_move_idle
+
+func brain_walk [ e: Edict ]
+    e.monsterinfo.currentmove = brain_move_walk1
+
+func brain_duck_down [ e: Edict ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_DUCKED ] return
+    mi.aiflags = mi.aiflags | AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z - 32.0 ]
+    e.takedamage = DAMAGE_YES
+    g.world.link[ e ]
+
+func brain_duck_hold [ e: Edict ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func brain_duck_up [ e: Edict ]
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags & ~AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z + 32.0 ]
+    e.takedamage = DAMAGE_AIM
+    g.world.link[ e ]
+
+func brain_dodge [ e: Edict, attacker: Edict, eta: f32 ]
+    if [ frand[] > 0.25 ] return
+    if [ !e.enemy ] e.enemy = attacker
+    e.monsterinfo.pausetime = g.level.time + eta + 0.5
+    e.monsterinfo.currentmove = brain_move_duck
+
+func brain_swing_right [ e: Edict ]
+    g.sound[ e, CHAN_BODY, brain_sound_melee1, 1.0, ATTN_NORM ]
+
+func brain_hit_right [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.maxs.x, 8.0 ]
+    if [ fire_hit[ e, aim, 15 + (rand[] % 5), 40 ] ]
+        g.sound[ e, CHAN_WEAPON, brain_sound_melee3, 1.0, ATTN_NORM ]
+
+func brain_swing_left [ e: Edict ]
+    g.sound[ e, CHAN_BODY, brain_sound_melee2, 1.0, ATTN_NORM ]
+
+func brain_hit_left [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.mins.x, 8.0 ]
+    if [ fire_hit[ e, aim, 15 + (rand[] % 5), 40 ] ]
+        g.sound[ e, CHAN_WEAPON, brain_sound_melee3, 1.0, ATTN_NORM ]
+
+func brain_chest_open [ e: Edict ]
+    e.spawnflags = e.spawnflags & ~65536
+    e.monsterinfo.power_armor_type = POWER_ARMOR_NONE
+    g.sound[ e, CHAN_BODY, brain_sound_chest_open, 1.0, ATTN_NORM ]
+
+func brain_tentacle_attack [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, 0.0, 8.0 ]
+    if [ fire_hit[ e, aim, 10 + (rand[] % 5), -600 ] && g.skill > 0 ]
+        e.spawnflags = e.spawnflags | 65536
+    g.sound[ e, CHAN_WEAPON, brain_sound_tentacles_retract, 1.0,
+             ATTN_NORM ]
+
+func brain_chest_closed [ e: Edict ]
+    e.monsterinfo.power_armor_type = POWER_ARMOR_SCREEN
+    if [ e.spawnflags & 65536 ]
+        e.spawnflags = e.spawnflags & ~65536
+        e.monsterinfo.currentmove = brain_move_attack1
+
+func brain_melee [ e: Edict ]
+    if [ frand[] <= 0.5 ]
+        e.monsterinfo.currentmove = brain_move_attack1
+    el
+        e.monsterinfo.currentmove = brain_move_attack2
+
+func brain_run [ e: Edict ]
+    mi : e.monsterinfo
+    mi.power_armor_type = POWER_ARMOR_SCREEN
+    if [ mi.aiflags & AI_STAND_GROUND ]
+        mi.currentmove = brain_move_stand
+    el
+        mi.currentmove = brain_move_run
+
+func brain_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    r : f32 [ frand[] ]
+    if [ r < 0.33 ]
+        g.sound[ e, CHAN_VOICE, brain_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = brain_move_pain1
+    el [ r < 0.66 ]
+        g.sound[ e, CHAN_VOICE, brain_sound_pain2, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = brain_move_pain2
+    el
+        g.sound[ e, CHAN_VOICE, brain_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = brain_move_pain3
+
+func brain_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func brain_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    e.effects = 0
+    e.monsterinfo.power_armor_type = POWER_ARMOR_NONE
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, brain_sound_death, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    if [ frand[] <= 0.5 ]
+        e.monsterinfo.currentmove = brain_move_death1
+    el
+        e.monsterinfo.currentmove = brain_move_death2
+
+func sp_monster_brain [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    brain_moves[]
+    brain_sound_chest_open = g.soundindex[ 'brain/brnatck1.wav' ]
+    brain_sound_tentacles_extend  = g.soundindex[ 'brain/brnatck2.wav' ]
+    brain_sound_tentacles_retract = g.soundindex[ 'brain/brnatck3.wav' ]
+    brain_sound_death  = g.soundindex[ 'brain/brndeth1.wav' ]
+    brain_sound_idle1  = g.soundindex[ 'brain/brnidle1.wav' ]
+    brain_sound_idle2  = g.soundindex[ 'brain/brnidle2.wav' ]
+    brain_sound_idle3  = g.soundindex[ 'brain/brnlens1.wav' ]
+    brain_sound_pain1  = g.soundindex[ 'brain/brnpain1.wav' ]
+    brain_sound_pain2  = g.soundindex[ 'brain/brnpain2.wav' ]
+    brain_sound_sight  = g.soundindex[ 'brain/brnsght1.wav' ]
+    brain_sound_search = g.soundindex[ 'brain/brnsrch1.wav' ]
+    brain_sound_melee1 = g.soundindex[ 'brain/melee1.wav' ]
+    brain_sound_melee2 = g.soundindex[ 'brain/melee2.wav' ]
+    brain_sound_melee3 = g.soundindex[ 'brain/melee3.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/brain/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.health = 300
+    e.gib_health = -150
+    e.mass = 400
+    e.pain = lambda brain_pain[]
+    e.die  = lambda brain_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda brain_stand[]
+    mi.walk   = lambda brain_walk[]
+    mi.run    = lambda brain_run[]
+    mi.dodge  = lambda brain_dodge[]
+    mi.melee  = lambda brain_melee[]
+    mi.sight  = lambda brain_sight[]
+    mi.search = lambda brain_search[]
+    mi.idle   = lambda brain_idle[]
+    mi.power_armor_type = POWER_ARMOR_SCREEN
+    mi.power_armor_power = 100
+    g.world.link[ e ]
+    mi.currentmove = brain_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_brain.h
+func brain_moves []
+    if [ brain_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 30, lambda ai_stand[], 0.0, null ]
+    # stand01 .. stand30
+    brain_move_stand = MMove [
+        firstframe: 162, lastframe: 191, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 30, lambda ai_stand[], 0.0, null ]
+    # stand31 .. stand60
+    brain_move_idle = MMove [
+        firstframe: 192, lastframe: 221, frames: v,
+        endfunc: lambda brain_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 2, lambda ai_walk[], 3.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.0, null ]
+    mf[ v, 2, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.0, null ]
+    mf[ v, 1, lambda ai_walk[], -4.0, null ]
+    mf[ v, 1, lambda ai_walk[], -1.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    # walk101 .. walk111
+    brain_move_walk1 = MMove [
+        firstframe: 0, lastframe: 10, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # defens01 .. defens08
+    brain_move_defense = MMove [
+        firstframe: 154, lastframe: 161, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    # pain301 .. pain306
+    brain_move_pain3 = MMove [
+        firstframe: 117, lastframe: 122, frames: v,
+        endfunc: lambda brain_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    # pain201 .. pain208
+    brain_move_pain2 = MMove [
+        firstframe: 109, lastframe: 116, frames: v,
+        endfunc: lambda brain_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 10, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    # pain101 .. pain121
+    brain_move_pain1 = MMove [
+        firstframe: 88, lastframe: 108, frames: v,
+        endfunc: lambda brain_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, lambda brain_duck_down[] ]
+    mf[ v, 1, lambda ai_move[], 17.0, lambda brain_duck_hold[] ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, lambda brain_duck_up[] ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 2, lambda ai_move[], -6.0, null ]
+    # duck01 .. duck08
+    brain_move_duck = MMove [
+        firstframe: 146, lastframe: 153, frames: v,
+        endfunc: lambda brain_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 9.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # death201 .. death205
+    brain_move_death2 = MMove [
+        firstframe: 141, lastframe: 145, frames: v,
+        endfunc: lambda brain_dead[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 9.0, null ]
+    mf[ v, 14, lambda ai_move[], 0.0, null ]
+    # death101 .. death118
+    brain_move_death1 = MMove [
+        firstframe: 123, lastframe: 140, frames: v,
+        endfunc: lambda brain_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 8.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, lambda brain_swing_right[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -5.0, null ]
+    mf[ v, 1, lambda ai_charge[], -7.0, lambda brain_hit_right[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 6.0, lambda brain_swing_left[] ]
+    mf[ v, 1, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, lambda brain_hit_left[] ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 6.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -11.0, null ]
+    # attak101 .. attak118
+    brain_move_attack1 = MMove [
+        firstframe: 53, lastframe: 70, frames: v,
+        endfunc: lambda brain_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 2, lambda ai_charge[], -4.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda brain_chest_open[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 13.0, lambda brain_tentacle_attack[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], -9.0, lambda brain_chest_closed[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], -6.0, null ]
+    # attak201 .. attak217
+    brain_move_attack2 = MMove [
+        firstframe: 71, lastframe: 87, frames: v,
+        endfunc: lambda brain_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 9.0, null ]
+    mf[ v, 1, lambda ai_run[], 2.0, null ]
+    mf[ v, 2, lambda ai_run[], 3.0, null ]
+    mf[ v, 1, lambda ai_run[], 1.0, null ]
+    mf[ v, 2, lambda ai_run[], 0.0, null ]
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    mf[ v, 1, lambda ai_run[], -4.0, null ]
+    mf[ v, 1, lambda ai_run[], -1.0, null ]
+    mf[ v, 1, lambda ai_run[], 2.0, null ]
+    # walk101 .. walk111
+    brain_move_run = MMove [
+        firstframe: 0, lastframe: 10, frames: v,
+        endfunc: null ]
+

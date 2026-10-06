@@ -1,0 +1,250 @@
+# m_gladiator.c: the gladiator (railgun, a cleaver up close)
+extend quake2
+
+gladiator_sound_pain1 : i32
+gladiator_sound_pain2 : i32
+gladiator_sound_die : i32
+gladiator_sound_gun : i32
+gladiator_sound_swing : i32
+gladiator_sound_hit : i32
+gladiator_sound_miss : i32
+gladiator_sound_idle : i32
+gladiator_sound_search : i32
+gladiator_sound_sight : i32
+gladiator_move_stand : MMove
+gladiator_move_walk : MMove
+gladiator_move_run : MMove
+gladiator_move_attack_melee : MMove
+gladiator_move_attack_gun : MMove
+gladiator_move_pain : MMove
+gladiator_move_pain_air : MMove
+gladiator_move_death : MMove
+
+func gladiator_idle [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, gladiator_sound_idle, 1.0, ATTN_IDLE ]
+
+func gladiator_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, gladiator_sound_sight, 1.0, ATTN_NORM ]
+
+func gladiator_search [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, gladiator_sound_search, 1.0, ATTN_NORM ]
+
+func gladiator_cleaver_swing [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, gladiator_sound_swing, 1.0,
+             ATTN_NORM ]
+
+func gladiator_stand [ e: Edict ]
+    e.monsterinfo.currentmove = gladiator_move_stand
+
+func gladiator_walk [ e: Edict ]
+    e.monsterinfo.currentmove = gladiator_move_walk
+
+func gladiator_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = gladiator_move_stand
+    el
+        e.monsterinfo.currentmove = gladiator_move_run
+
+func gladiator_cleaver [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, e.mins.x, -4.0 ]
+    if [ fire_hit[ e, aim, 20 + (rand[] % 5), 300 ] ]
+        g.sound[ e, CHAN_AUTO, gladiator_sound_hit, 1.0,
+                 ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_AUTO, gladiator_sound_miss, 1.0,
+                 ATTN_NORM ]
+
+func gladiator_melee [ e: Edict ]
+    e.monsterinfo.currentmove = gladiator_move_attack_melee
+
+func gladiator_gun [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_GLADIATOR_RAILGUN_1 ],
+                            ax.forward, ax.right ]
+    # calc direction to where we targeted
+    dir : v_norm[ v_sub[ e.pos1, start ] ]
+    monster_fire_railgun[ e, start, dir, 50, 100,
+                          MZ2_GLADIATOR_RAILGUN_1 ]
+
+func gladiator_attack [ e: Edict ]
+    # a small safe zone
+    range : f32 [ v_len[ v_sub[ e.origin, e.enemy.origin ] ] ]
+    if [ range <= (MELEE_DISTANCE + 32.0) ] return
+    # charge up the railgun
+    g.sound[ e, CHAN_WEAPON, gladiator_sound_gun, 1.0, ATTN_NORM ]
+    # save for aiming the shot
+    e.pos1 = vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                     e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    e.monsterinfo.currentmove = gladiator_move_attack_gun
+
+func gladiator_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    mi : e.monsterinfo
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ]
+        if [ e.velocity.z > 100.0 &&
+             mi.currentmove == gladiator_move_pain ]
+            mi.currentmove = gladiator_move_pain_air
+        return
+    e.pain_debounce_time = g.level.time + 3.0
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, gladiator_sound_pain1, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, gladiator_sound_pain2, 1.0, ATTN_NORM ]
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ e.velocity.z > 100.0 ] mi.currentmove = gladiator_move_pain_air
+    el                          mi.currentmove = gladiator_move_pain
+
+func gladiator_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func gladiator_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                     damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, gladiator_sound_die, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = gladiator_move_death
+
+func sp_monster_gladiator [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    gladiator_moves[]
+    gladiator_sound_pain1 = g.soundindex[ 'gladiator/pain.wav' ]
+    gladiator_sound_pain2 = g.soundindex[ 'gladiator/gldpain2.wav' ]
+    gladiator_sound_die   = g.soundindex[ 'gladiator/glddeth2.wav' ]
+    gladiator_sound_gun   = g.soundindex[ 'gladiator/railgun.wav' ]
+    gladiator_sound_swing = g.soundindex[ 'gladiator/melee1.wav' ]
+    gladiator_sound_hit   = g.soundindex[ 'gladiator/melee2.wav' ]
+    gladiator_sound_miss  = g.soundindex[ 'gladiator/melee3.wav' ]
+    gladiator_sound_idle   = g.soundindex[ 'gladiator/gldidle1.wav' ]
+    gladiator_sound_search = g.soundindex[ 'gladiator/gldsrch1.wav' ]
+    gladiator_sound_sight  = g.soundindex[ 'gladiator/sight.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/gladiatr/tris.md2' ]
+    e.mins = vec3f [ -32.0, -32.0, -24.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 64.0 ]
+    e.health = 400
+    e.gib_health = -175
+    e.mass = 400
+    e.pain = lambda gladiator_pain[]
+    e.die  = lambda gladiator_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda gladiator_stand[]
+    mi.walk   = lambda gladiator_walk[]
+    mi.run    = lambda gladiator_run[]
+    mi.dodge  = null
+    mi.attack = lambda gladiator_attack[]
+    mi.melee  = lambda gladiator_melee[]
+    mi.sight  = lambda gladiator_sight[]
+    mi.idle   = lambda gladiator_idle[]
+    mi.search = lambda gladiator_search[]
+    g.world.link[ e ]
+    mi.currentmove = gladiator_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_gladiator.h
+func gladiator_moves []
+    if [ gladiator_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 7, lambda ai_stand[], 0.0, null ]
+    # stand1 .. stand7
+    gladiator_move_stand = MMove [
+        firstframe: 0, lastframe: 6, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 15.0, null ]
+    mf[ v, 1, lambda ai_walk[], 7.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 0.0, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.0, null ]
+    mf[ v, 1, lambda ai_walk[], 12.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.0, null ]
+    mf[ v, 2, lambda ai_walk[], 5.0, null ]
+    mf[ v, 2, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 1.0, null ]
+    mf[ v, 1, lambda ai_walk[], 8.0, null ]
+    # walk1 .. walk16
+    gladiator_move_walk = MMove [
+        firstframe: 7, lastframe: 22, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 23.0, null ]
+    mf[ v, 2, lambda ai_run[], 14.0, null ]
+    mf[ v, 1, lambda ai_run[], 21.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 1, lambda ai_run[], 13.0, null ]
+    # run1 .. run6
+    gladiator_move_run = MMove [
+        firstframe: 23, lastframe: 28, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0,
+        lambda gladiator_cleaver_swing[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gladiator_cleaver[] ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0,
+        lambda gladiator_cleaver_swing[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gladiator_cleaver[] ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    # melee1 .. melee17
+    gladiator_move_attack_melee = MMove [
+        firstframe: 29, lastframe: 45, frames: v,
+        endfunc: lambda gladiator_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda gladiator_gun[] ]
+    mf[ v, 5, lambda ai_charge[], 0.0, null ]
+    # attack1 .. attack9
+    gladiator_move_attack_gun = MMove [
+        firstframe: 46, lastframe: 54, frames: v,
+        endfunc: lambda gladiator_run[] ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    # pain1 .. pain6
+    gladiator_move_pain = MMove [
+        firstframe: 55, lastframe: 60, frames: v,
+        endfunc: lambda gladiator_run[] ]
+    v = vec MFrame []
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # painup1 .. painup7
+    gladiator_move_pain_air = MMove [
+        firstframe: 83, lastframe: 89, frames: v,
+        endfunc: lambda gladiator_run[] ]
+    v = vec MFrame []
+    mf[ v, 22, lambda ai_move[], 0.0, null ]
+    # death1 .. death22
+    gladiator_move_death = MMove [
+        firstframe: 61, lastframe: 82, frames: v,
+        endfunc: lambda gladiator_dead[] ]
+

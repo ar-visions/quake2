@@ -1,0 +1,1402 @@
+# g_monster.c, g_ai.c, m_move.c and m_flash.c: what every monster shares
+extend quake2
+
+# monster_flash_offset[]: x y z per MZ2 flash number
+# m_flash indices (q_shared.h MZ2_*)
+MZ2_TANK_BLASTER_1 : i32 [ 1 ]
+MZ2_TANK_BLASTER_2 : i32 [ 2 ]
+MZ2_TANK_BLASTER_3 : i32 [ 3 ]
+MZ2_TANK_MACHINEGUN_1 : i32 [ 4 ]
+MZ2_TANK_MACHINEGUN_2 : i32 [ 5 ]
+MZ2_TANK_MACHINEGUN_3 : i32 [ 6 ]
+MZ2_TANK_MACHINEGUN_4 : i32 [ 7 ]
+MZ2_TANK_MACHINEGUN_5 : i32 [ 8 ]
+MZ2_TANK_MACHINEGUN_6 : i32 [ 9 ]
+MZ2_TANK_MACHINEGUN_7 : i32 [ 10 ]
+MZ2_TANK_MACHINEGUN_8 : i32 [ 11 ]
+MZ2_TANK_MACHINEGUN_9 : i32 [ 12 ]
+MZ2_TANK_MACHINEGUN_10 : i32 [ 13 ]
+MZ2_TANK_MACHINEGUN_11 : i32 [ 14 ]
+MZ2_TANK_MACHINEGUN_12 : i32 [ 15 ]
+MZ2_TANK_MACHINEGUN_13 : i32 [ 16 ]
+MZ2_TANK_MACHINEGUN_14 : i32 [ 17 ]
+MZ2_TANK_MACHINEGUN_15 : i32 [ 18 ]
+MZ2_TANK_MACHINEGUN_16 : i32 [ 19 ]
+MZ2_TANK_MACHINEGUN_17 : i32 [ 20 ]
+MZ2_TANK_MACHINEGUN_18 : i32 [ 21 ]
+MZ2_TANK_MACHINEGUN_19 : i32 [ 22 ]
+MZ2_TANK_ROCKET_1 : i32 [ 23 ]
+MZ2_TANK_ROCKET_2 : i32 [ 24 ]
+MZ2_TANK_ROCKET_3 : i32 [ 25 ]
+MZ2_INFANTRY_MACHINEGUN_1 : i32 [ 26 ]
+MZ2_INFANTRY_MACHINEGUN_2 : i32 [ 27 ]
+MZ2_INFANTRY_MACHINEGUN_3 : i32 [ 28 ]
+MZ2_INFANTRY_MACHINEGUN_4 : i32 [ 29 ]
+MZ2_INFANTRY_MACHINEGUN_5 : i32 [ 30 ]
+MZ2_INFANTRY_MACHINEGUN_6 : i32 [ 31 ]
+MZ2_INFANTRY_MACHINEGUN_7 : i32 [ 32 ]
+MZ2_INFANTRY_MACHINEGUN_8 : i32 [ 33 ]
+MZ2_INFANTRY_MACHINEGUN_9 : i32 [ 34 ]
+MZ2_INFANTRY_MACHINEGUN_10 : i32 [ 35 ]
+MZ2_INFANTRY_MACHINEGUN_11 : i32 [ 36 ]
+MZ2_INFANTRY_MACHINEGUN_12 : i32 [ 37 ]
+MZ2_INFANTRY_MACHINEGUN_13 : i32 [ 38 ]
+MZ2_SOLDIER_BLASTER_1 : i32 [ 39 ]
+MZ2_SOLDIER_BLASTER_2 : i32 [ 40 ]
+MZ2_SOLDIER_SHOTGUN_1 : i32 [ 41 ]
+MZ2_SOLDIER_SHOTGUN_2 : i32 [ 42 ]
+MZ2_SOLDIER_MACHINEGUN_1 : i32 [ 43 ]
+MZ2_SOLDIER_MACHINEGUN_2 : i32 [ 44 ]
+MZ2_GUNNER_MACHINEGUN_1 : i32 [ 45 ]
+MZ2_GUNNER_MACHINEGUN_2 : i32 [ 46 ]
+MZ2_GUNNER_MACHINEGUN_3 : i32 [ 47 ]
+MZ2_GUNNER_MACHINEGUN_4 : i32 [ 48 ]
+MZ2_GUNNER_MACHINEGUN_5 : i32 [ 49 ]
+MZ2_GUNNER_MACHINEGUN_6 : i32 [ 50 ]
+MZ2_GUNNER_MACHINEGUN_7 : i32 [ 51 ]
+MZ2_GUNNER_MACHINEGUN_8 : i32 [ 52 ]
+MZ2_GUNNER_GRENADE_1 : i32 [ 53 ]
+MZ2_GUNNER_GRENADE_2 : i32 [ 54 ]
+MZ2_GUNNER_GRENADE_3 : i32 [ 55 ]
+MZ2_GUNNER_GRENADE_4 : i32 [ 56 ]
+MZ2_CHICK_ROCKET_1 : i32 [ 57 ]
+MZ2_FLYER_BLASTER_1 : i32 [ 58 ]
+MZ2_FLYER_BLASTER_2 : i32 [ 59 ]
+MZ2_MEDIC_BLASTER_1 : i32 [ 60 ]
+MZ2_GLADIATOR_RAILGUN_1 : i32 [ 61 ]
+MZ2_HOVER_BLASTER_1 : i32 [ 62 ]
+MZ2_ACTOR_MACHINEGUN_1 : i32 [ 63 ]
+MZ2_SUPERTANK_MACHINEGUN_1 : i32 [ 64 ]
+MZ2_SUPERTANK_MACHINEGUN_2 : i32 [ 65 ]
+MZ2_SUPERTANK_MACHINEGUN_3 : i32 [ 66 ]
+MZ2_SUPERTANK_MACHINEGUN_4 : i32 [ 67 ]
+MZ2_SUPERTANK_MACHINEGUN_5 : i32 [ 68 ]
+MZ2_SUPERTANK_MACHINEGUN_6 : i32 [ 69 ]
+MZ2_SUPERTANK_ROCKET_1 : i32 [ 70 ]
+MZ2_SUPERTANK_ROCKET_2 : i32 [ 71 ]
+MZ2_SUPERTANK_ROCKET_3 : i32 [ 72 ]
+MZ2_BOSS2_MACHINEGUN_L1 : i32 [ 73 ]
+MZ2_BOSS2_MACHINEGUN_L2 : i32 [ 74 ]
+MZ2_BOSS2_MACHINEGUN_L3 : i32 [ 75 ]
+MZ2_BOSS2_MACHINEGUN_L4 : i32 [ 76 ]
+MZ2_BOSS2_MACHINEGUN_L5 : i32 [ 77 ]
+MZ2_BOSS2_ROCKET_1 : i32 [ 78 ]
+MZ2_BOSS2_ROCKET_2 : i32 [ 79 ]
+MZ2_BOSS2_ROCKET_3 : i32 [ 80 ]
+MZ2_BOSS2_ROCKET_4 : i32 [ 81 ]
+MZ2_FLOAT_BLASTER_1 : i32 [ 82 ]
+MZ2_SOLDIER_BLASTER_3 : i32 [ 83 ]
+MZ2_SOLDIER_SHOTGUN_3 : i32 [ 84 ]
+MZ2_SOLDIER_MACHINEGUN_3 : i32 [ 85 ]
+MZ2_SOLDIER_BLASTER_4 : i32 [ 86 ]
+MZ2_SOLDIER_SHOTGUN_4 : i32 [ 87 ]
+MZ2_SOLDIER_MACHINEGUN_4 : i32 [ 88 ]
+MZ2_SOLDIER_BLASTER_5 : i32 [ 89 ]
+MZ2_SOLDIER_SHOTGUN_5 : i32 [ 90 ]
+MZ2_SOLDIER_MACHINEGUN_5 : i32 [ 91 ]
+MZ2_SOLDIER_BLASTER_6 : i32 [ 92 ]
+MZ2_SOLDIER_SHOTGUN_6 : i32 [ 93 ]
+MZ2_SOLDIER_MACHINEGUN_6 : i32 [ 94 ]
+MZ2_SOLDIER_BLASTER_7 : i32 [ 95 ]
+MZ2_SOLDIER_SHOTGUN_7 : i32 [ 96 ]
+MZ2_SOLDIER_MACHINEGUN_7 : i32 [ 97 ]
+MZ2_SOLDIER_BLASTER_8 : i32 [ 98 ]
+MZ2_SOLDIER_SHOTGUN_8 : i32 [ 99 ]
+MZ2_SOLDIER_MACHINEGUN_8 : i32 [ 100 ]
+MZ2_MAKRON_BFG : i32 [ 101 ]
+MZ2_MAKRON_BLASTER_1 : i32 [ 102 ]
+MZ2_MAKRON_BLASTER_2 : i32 [ 103 ]
+MZ2_MAKRON_BLASTER_3 : i32 [ 104 ]
+MZ2_MAKRON_BLASTER_4 : i32 [ 105 ]
+MZ2_MAKRON_BLASTER_5 : i32 [ 106 ]
+MZ2_MAKRON_BLASTER_6 : i32 [ 107 ]
+MZ2_MAKRON_BLASTER_7 : i32 [ 108 ]
+MZ2_MAKRON_BLASTER_8 : i32 [ 109 ]
+MZ2_MAKRON_BLASTER_9 : i32 [ 110 ]
+MZ2_MAKRON_BLASTER_10 : i32 [ 111 ]
+MZ2_MAKRON_BLASTER_11 : i32 [ 112 ]
+MZ2_MAKRON_BLASTER_12 : i32 [ 113 ]
+MZ2_MAKRON_BLASTER_13 : i32 [ 114 ]
+MZ2_MAKRON_BLASTER_14 : i32 [ 115 ]
+MZ2_MAKRON_BLASTER_15 : i32 [ 116 ]
+MZ2_MAKRON_BLASTER_16 : i32 [ 117 ]
+MZ2_MAKRON_BLASTER_17 : i32 [ 118 ]
+MZ2_MAKRON_RAILGUN_1 : i32 [ 119 ]
+MZ2_JORG_MACHINEGUN_L1 : i32 [ 120 ]
+MZ2_JORG_MACHINEGUN_L2 : i32 [ 121 ]
+MZ2_JORG_MACHINEGUN_L3 : i32 [ 122 ]
+MZ2_JORG_MACHINEGUN_L4 : i32 [ 123 ]
+MZ2_JORG_MACHINEGUN_L5 : i32 [ 124 ]
+MZ2_JORG_MACHINEGUN_L6 : i32 [ 125 ]
+MZ2_JORG_MACHINEGUN_R1 : i32 [ 126 ]
+MZ2_JORG_MACHINEGUN_R2 : i32 [ 127 ]
+MZ2_JORG_MACHINEGUN_R3 : i32 [ 128 ]
+MZ2_JORG_MACHINEGUN_R4 : i32 [ 129 ]
+MZ2_JORG_MACHINEGUN_R5 : i32 [ 130 ]
+MZ2_JORG_MACHINEGUN_R6 : i32 [ 131 ]
+MZ2_JORG_BFG_1 : i32 [ 132 ]
+MZ2_BOSS2_MACHINEGUN_R1 : i32 [ 133 ]
+MZ2_BOSS2_MACHINEGUN_R2 : i32 [ 134 ]
+MZ2_BOSS2_MACHINEGUN_R3 : i32 [ 135 ]
+MZ2_BOSS2_MACHINEGUN_R4 : i32 [ 136 ]
+MZ2_BOSS2_MACHINEGUN_R5 : i32 [ 137 ]
+MZ2_CARRIER_MACHINEGUN_L1 : i32 [ 138 ]
+MZ2_CARRIER_MACHINEGUN_R1 : i32 [ 139 ]
+MZ2_CARRIER_GRENADE : i32 [ 140 ]
+MZ2_TURRET_MACHINEGUN : i32 [ 141 ]
+MZ2_TURRET_ROCKET : i32 [ 142 ]
+MZ2_TURRET_BLASTER : i32 [ 143 ]
+MZ2_STALKER_BLASTER : i32 [ 144 ]
+MZ2_DAEDALUS_BLASTER : i32 [ 145 ]
+MZ2_MEDIC_BLASTER_2 : i32 [ 146 ]
+MZ2_CARRIER_RAILGUN : i32 [ 147 ]
+MZ2_WIDOW_DISRUPTOR : i32 [ 148 ]
+MZ2_WIDOW_BLASTER : i32 [ 149 ]
+MZ2_WIDOW_RAIL : i32 [ 150 ]
+MZ2_WIDOW_PLASMABEAM : i32 [ 151 ]
+MZ2_CARRIER_MACHINEGUN_L2 : i32 [ 152 ]
+MZ2_CARRIER_MACHINEGUN_R2 : i32 [ 153 ]
+MZ2_WIDOW_RAIL_LEFT : i32 [ 154 ]
+MZ2_WIDOW_RAIL_RIGHT : i32 [ 155 ]
+MZ2_WIDOW_BLASTER_SWEEP1 : i32 [ 156 ]
+MZ2_WIDOW_BLASTER_SWEEP2 : i32 [ 157 ]
+MZ2_WIDOW_BLASTER_SWEEP3 : i32 [ 158 ]
+MZ2_WIDOW_BLASTER_SWEEP4 : i32 [ 159 ]
+MZ2_WIDOW_BLASTER_SWEEP5 : i32 [ 160 ]
+MZ2_WIDOW_BLASTER_SWEEP6 : i32 [ 161 ]
+MZ2_WIDOW_BLASTER_SWEEP7 : i32 [ 162 ]
+MZ2_WIDOW_BLASTER_SWEEP8 : i32 [ 163 ]
+MZ2_WIDOW_BLASTER_SWEEP9 : i32 [ 164 ]
+MZ2_WIDOW_BLASTER_100 : i32 [ 165 ]
+MZ2_WIDOW_BLASTER_90 : i32 [ 166 ]
+MZ2_WIDOW_BLASTER_80 : i32 [ 167 ]
+MZ2_WIDOW_BLASTER_70 : i32 [ 168 ]
+MZ2_WIDOW_BLASTER_60 : i32 [ 169 ]
+MZ2_WIDOW_BLASTER_50 : i32 [ 170 ]
+MZ2_WIDOW_BLASTER_40 : i32 [ 171 ]
+MZ2_WIDOW_BLASTER_30 : i32 [ 172 ]
+MZ2_WIDOW_BLASTER_20 : i32 [ 173 ]
+MZ2_WIDOW_BLASTER_10 : i32 [ 174 ]
+MZ2_WIDOW_BLASTER_0 : i32 [ 175 ]
+MZ2_WIDOW_BLASTER_10L : i32 [ 176 ]
+MZ2_WIDOW_BLASTER_20L : i32 [ 177 ]
+MZ2_WIDOW_BLASTER_30L : i32 [ 178 ]
+MZ2_WIDOW_BLASTER_40L : i32 [ 179 ]
+MZ2_WIDOW_BLASTER_50L : i32 [ 180 ]
+MZ2_WIDOW_BLASTER_60L : i32 [ 181 ]
+MZ2_WIDOW_BLASTER_70L : i32 [ 182 ]
+MZ2_WIDOW_RUN_1 : i32 [ 183 ]
+MZ2_WIDOW_RUN_2 : i32 [ 184 ]
+MZ2_WIDOW_RUN_3 : i32 [ 185 ]
+MZ2_WIDOW_RUN_4 : i32 [ 186 ]
+MZ2_WIDOW_RUN_5 : i32 [ 187 ]
+MZ2_WIDOW_RUN_6 : i32 [ 188 ]
+MZ2_WIDOW_RUN_7 : i32 [ 189 ]
+MZ2_WIDOW_RUN_8 : i32 [ 190 ]
+MZ2_CARRIER_ROCKET_1 : i32 [ 191 ]
+MZ2_CARRIER_ROCKET_2 : i32 [ 192 ]
+MZ2_CARRIER_ROCKET_3 : i32 [ 193 ]
+MZ2_CARRIER_ROCKET_4 : i32 [ 194 ]
+MZ2_WIDOW2_BEAMER_1 : i32 [ 195 ]
+MZ2_WIDOW2_BEAMER_2 : i32 [ 196 ]
+MZ2_WIDOW2_BEAMER_3 : i32 [ 197 ]
+MZ2_WIDOW2_BEAMER_4 : i32 [ 198 ]
+MZ2_WIDOW2_BEAMER_5 : i32 [ 199 ]
+MZ2_WIDOW2_BEAM_SWEEP_1 : i32 [ 200 ]
+MZ2_WIDOW2_BEAM_SWEEP_2 : i32 [ 201 ]
+MZ2_WIDOW2_BEAM_SWEEP_3 : i32 [ 202 ]
+MZ2_WIDOW2_BEAM_SWEEP_4 : i32 [ 203 ]
+MZ2_WIDOW2_BEAM_SWEEP_5 : i32 [ 204 ]
+MZ2_WIDOW2_BEAM_SWEEP_6 : i32 [ 205 ]
+MZ2_WIDOW2_BEAM_SWEEP_7 : i32 [ 206 ]
+MZ2_WIDOW2_BEAM_SWEEP_8 : i32 [ 207 ]
+MZ2_WIDOW2_BEAM_SWEEP_9 : i32 [ 208 ]
+MZ2_WIDOW2_BEAM_SWEEP_10 : i32 [ 209 ]
+MZ2_WIDOW2_BEAM_SWEEP_11 : i32 [ 210 ]
+
+func init_flash_offsets []
+    g.flash_offsets = vec f32 [] [
+        0.0, 0.0, 0.0, 20.7, -18.5, 28.7, 16.6, -21.5, 30.1, 11.8, -23.9,
+        32.1, 22.9, -0.7, 25.3, 22.2, 6.2, 22.3, 19.4, 13.1, 18.6, 19.4,
+        18.8, 18.6, 17.9, 25.0, 18.6, 14.1, 30.5, 20.6, 9.3, 35.3, 22.1,
+        4.7, 38.4, 22.1, -1.1, 40.4, 24.1, -6.5, 41.2, 24.1, 3.2, 40.1,
+        24.7, 11.7, 36.7, 26.0, 18.9, 31.3, 26.0, 24.4, 24.4, 26.4, 27.1,
+        17.1, 27.2, 28.5, 9.1, 28.0, 27.1, 2.2, 28.0, 24.9, -2.8, 28.0,
+        21.6, -7.0, 26.4, 6.2, 29.1, 49.1, 6.9, 23.8, 49.1, 8.3, 17.8,
+        49.5, 26.6, 7.1, 13.1, 18.2, 7.5, 15.4, 17.2, 10.3, 17.9, 17.0,
+        12.8, 20.1, 15.1, 14.1, 21.8, 11.8, 17.2, 23.1, 11.4, 20.2, 21.0,
+        9.0, 23.0, 18.9, 13.9, 18.6, 17.7, 15.4, 15.6, 15.8, 10.2, 15.2,
+        25.1, -1.9, 15.1, 28.2, -12.4, 13.0, 20.2, 12.72, 9.24, 9.36,
+        25.32, 4.32, 22.8, 12.72, 9.24, 9.36, 25.32, 4.32, 22.8, 12.72,
+        9.24, 9.36, 25.32, 4.32, 22.8, 34.615, 4.485, 22.54, 33.465,
+        2.875, 23.805, 32.43, 2.875, 25.53, 32.43, 4.14, 25.3, 30.935,
+        2.3, 26.91, 30.475, 0.69, 23.92, 30.935, 0.575, 24.725, 33.35,
+        2.76, 22.425, 5.29, -19.32, 8.395, 5.29, -19.32, 8.395, 5.29,
+        -19.32, 8.395, 5.29, -19.32, 8.395, 24.8, -9.0, 39.0, 12.1, 13.4,
+        -14.5, 12.1, -7.4, -14.5, 12.1, 5.4, 16.5, 30.0, 18.0, 28.0, 32.5,
+        -0.8, 10.0, 18.4, 7.4, 9.6, 30.0, 30.0, 88.5, 30.0, 30.0, 88.5,
+        30.0, 30.0, 88.5, 30.0, 30.0, 88.5, 30.0, 30.0, 88.5, 30.0, 30.0,
+        88.5, 16.0, -22.5, 91.2, 16.0, -33.4, 86.7, 16.0, -42.8, 83.3,
+        32.0, -40.0, 70.0, 32.0, -40.0, 70.0, 32.0, -40.0, 70.0, 32.0,
+        -40.0, 70.0, 32.0, -40.0, 70.0, 22.0, 16.0, 10.0, 22.0, 8.0, 10.0,
+        22.0, -8.0, 10.0, 22.0, -16.0, 10.0, 32.5, -0.8, 10.0, 24.96,
+        12.12, -3.24, 24.96, 12.12, -3.24, 24.96, 12.12, -3.24, 9.12,
+        11.16, 0.96, 9.12, 11.16, 0.96, 9.12, 11.16, 0.96, 36.6, 11.88,
+        -22.44, 36.6, 11.88, -22.44, 36.6, 11.88, -22.44, 33.12, 4.08,
+        -12.48, 33.12, 4.08, -12.48, 33.12, 4.08, -12.48, 34.68, 5.52,
+        -9.72, 34.68, 5.52, -9.72, 34.68, 5.52, -9.72, 37.8, 11.52, 12.12,
+        41.4, 11.52, 7.32, 41.4, 11.52, 7.32, 17.0, -19.5, 62.9, -3.6,
+        -24.1, 59.5, -1.6, -19.3, 59.5, -0.1, -14.4, 59.5, 2.0, -7.6,
+        59.5, 3.4, 1.3, 59.5, 3.7, 11.1, 59.5, -0.3, 22.3, 59.5, -6.0,
+        33.0, 59.5, -9.3, 36.4, 59.5, -7.0, 35.0, 59.5, -2.1, 29.0, 59.5,
+        3.9, 17.3, 59.5, 6.1, 5.8, 59.5, 5.9, -4.4, 59.5, 4.2, -14.1,
+        59.5, 2.4, -18.8, 59.5, -1.8, -25.5, 59.5, -17.3, 7.8, 72.4, 78.5,
+        -47.1, 96.0, 78.5, -47.1, 96.0, 78.5, -47.1, 96.0, 78.5, -47.1,
+        96.0, 78.5, -47.1, 96.0, 78.5, -47.1, 96.0, 78.5, 46.7, 96.0,
+        78.5, 46.7, 96.0, 78.5, 46.7, 96.0, 78.5, 46.7, 96.0, 78.5, 46.7,
+        96.0, 78.5, 46.7, 96.0, 6.3, -9.0, 111.2, 32.0, 40.0, 70.0, 32.0,
+        40.0, 70.0, 32.0, 40.0, 70.0, 32.0, 40.0, 70.0, 32.0, 40.0, 70.0,
+        56.0, -32.0, 32.0, 56.0, 32.0, 32.0, 42.0, 24.0, 50.0, 16.0, 0.0,
+        0.0, 16.0, 0.0, 0.0, 16.0, 0.0, 0.0, 24.0, 0.0, 6.0, 32.5, -0.8,
+        10.0, 12.1, 5.4, 16.5, 32.0, 0.0, 6.0, 57.72, 14.50, 88.81, 56.0,
+        32.0, 32.0, 62.0, -20.0, 84.0, 32.0, 0.0, 6.0, 61.0, -32.0, 12.0,
+        61.0, 32.0, 12.0 ]
+
+func flash_offset [ flash: i32 ] -> vec3f
+    i : i32 [ flash * 3 ]
+    if [ i + 2 >= g.flash_offsets.count ] return vec3f [ 0.0, 0.0, 0.0 ]
+    return vec3f [ g.flash_offsets[ i ], g.flash_offsets[ i + 1 ],
+                   g.flash_offsets[ i + 2 ] ]
+
+# ---- g_monster.c: the monsters' firing
+func monster_fire_bullet [ e: Edict, start: vec3f, dir: vec3f,
+                           damage: i32, kick: i32, hspread: i32,
+                           vspread: i32, flashtype: i32 ]
+    fire_bullet[ e, start, dir, damage, kick, hspread, vspread,
+                 MOD_UNKNOWN ]
+    g.muzzleflash2[ e, flashtype ]
+
+func monster_fire_shotgun [ e: Edict, start: vec3f, aimdir: vec3f,
+                            damage: i32, kick: i32, hspread: i32,
+                            vspread: i32, count: i32, flashtype: i32 ]
+    fire_shotgun[ e, start, aimdir, damage, kick, hspread, vspread,
+                  count, MOD_UNKNOWN ]
+    g.muzzleflash2[ e, flashtype ]
+
+func monster_fire_blaster [ e: Edict, start: vec3f, dir: vec3f,
+                            damage: i32, speed: i32, flashtype: i32,
+                            effect: i32 ]
+    fire_blaster[ e, start, dir, damage, speed, effect, false ]
+    g.muzzleflash2[ e, flashtype ]
+
+func monster_fire_grenade [ e: Edict, start: vec3f, aimdir: vec3f,
+                            damage: i32, speed: i32, flashtype: i32 ]
+    fire_grenade[ e, start, aimdir, damage, speed, 2.5,
+                  f32[ damage + 40 ] ]
+    g.muzzleflash2[ e, flashtype ]
+
+func monster_fire_rocket [ e: Edict, start: vec3f, dir: vec3f,
+                           damage: i32, speed: i32, flashtype: i32 ]
+    fire_rocket[ e, start, dir, damage, speed, f32[ damage + 20 ], damage ]
+    g.muzzleflash2[ e, flashtype ]
+
+func monster_fire_railgun [ e: Edict, start: vec3f, aimdir: vec3f,
+                            damage: i32, kick: i32, flashtype: i32 ]
+    fire_rail[ e, start, aimdir, damage, kick ]
+    g.muzzleflash2[ e, flashtype ]
+
+func monster_fire_bfg [ e: Edict, start: vec3f, aimdir: vec3f,
+                        damage: i32, speed: i32, kick: i32,
+                        damage_radius: f32, flashtype: i32 ]
+    fire_bfg[ e, start, aimdir, damage, speed, damage_radius ]
+    g.muzzleflash2[ e, flashtype ]
+
+# ---- monster utility functions
+func m_flies_off [ e: Edict ]
+    e.effects = e.effects & ~EF_FLIES
+    e.sound = 0
+
+func m_flies_on [ e: Edict ]
+    if [ e.waterlevel != 0 ] return
+    e.effects = e.effects | EF_FLIES
+    e.sound = g.soundindex[ 'infantry/inflies1.wav' ]
+    e.think = lambda m_flies_off[]
+    e.nextthink = g.level.time + 60.0
+
+func m_fly_check [ e: Edict ]
+    if [ e.waterlevel != 0 ] return
+    if [ frand[] > 0.5 ] return
+    e.think = lambda m_flies_on[]
+    e.nextthink = g.level.time + 5.0 + 10.0 * frand[]
+
+func attack_finished [ e: Edict, time: f32 ]
+    e.monsterinfo.attack_finished = g.level.time + time
+
+func m_check_ground [ e: Edict ]
+    if [ e.flags & (FL_SWIM | FL_FLY) ] return
+    if [ e.velocity.z > 100.0 ]
+        e.groundentity = null
+        return
+    # if the hull point one-quarter unit down is solid the entity is on
+    # ground
+    point : vec3f [ e.origin.x, e.origin.y, e.origin.z - 0.25 ]
+    tr : g.world.trace[ e.origin, e.mins, e.maxs, point, e, MASK_MONSTERSOLID ]
+    # check steepness
+    if [ tr.nz < 0.7 && !tr.startsolid ]
+        e.groundentity = null
+        return
+    if [ !tr.startsolid && !tr.allsolid ]
+        e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+        e.groundentity = tr.ent
+        e.groundentity_linkcount = tr.ent.linkcount
+        e.velocity = vec3f [ e.velocity.x, e.velocity.y, 0.0 ]
+
+func m_catagorize_position [ e: Edict ]
+    # get waterlevel
+    point : vec3f [ e.origin.x, e.origin.y, e.origin.z + e.mins.z + 1.0 ]
+    cont : i32 [ g.world.point_contents[ point ] ]
+    if [ (cont & MASK_WATER) == 0 ]
+        e.waterlevel = 0
+        e.watertype = 0
+        return
+    e.watertype = cont
+    e.waterlevel = 1
+    point = vec3f [ point.x, point.y, point.z + 26.0 ]
+    cont = g.world.point_contents[ point ]
+    if [ (cont & MASK_WATER) == 0 ] return
+    e.waterlevel = 2
+    point = vec3f [ point.x, point.y, point.z + 22.0 ]
+    cont = g.world.point_contents[ point ]
+    if [ cont & MASK_WATER ] e.waterlevel = 3
+
+func m_world_effects [ e: Edict ]
+    world : g.edicts[ 0 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ e.health > 0 ]
+        if [ (e.flags & FL_SWIM) == 0 ]
+            if [ e.waterlevel < 3 ]
+                e.air_finished = g.level.time + 12.0
+            el [ e.air_finished < g.level.time ]
+                # drown!
+                if [ e.pain_debounce_time < g.level.time ]
+                    dmg : i32 [ 2 + 2 * i32[ floor[ g.level.time - e.air_finished ] ] ]
+                    if [ dmg > 15 ] dmg = 15
+                    t_damage[ e, world, world, zero, e.origin, zero, dmg, 0,
+                              DAMAGE_NO_ARMOR, MOD_WATER ]
+                    e.pain_debounce_time = g.level.time + 1.0
+        el
+            if [ e.waterlevel > 0 ]
+                e.air_finished = g.level.time + 9.0
+            el [ e.air_finished < g.level.time ]
+                # suffocate!
+                if [ e.pain_debounce_time < g.level.time ]
+                    dmg : i32 [ 2 + 2 * i32[ floor[ g.level.time - e.air_finished ] ] ]
+                    if [ dmg > 15 ] dmg = 15
+                    t_damage[ e, world, world, zero, e.origin, zero, dmg, 0,
+                              DAMAGE_NO_ARMOR, MOD_WATER ]
+                    e.pain_debounce_time = g.level.time + 1.0
+    if [ e.waterlevel == 0 ]
+        if [ e.flags & FL_INWATER ]
+            g.sound[ e, CHAN_BODY, g.soundindex[ 'player/watr_out.wav' ], 1.0,
+                     ATTN_NORM ]
+            e.flags = e.flags & ~FL_INWATER
+        return
+    if [ (e.watertype & CONTENTS_LAVA) != 0 && (e.flags & FL_IMMUNE_LAVA) == 0 ]
+        if [ e.damage_debounce_time < g.level.time ]
+            e.damage_debounce_time = g.level.time + 0.2
+            t_damage[ e, world, world, zero, e.origin, zero,
+                      10 * e.waterlevel, 0, 0, MOD_LAVA ]
+    if [ (e.watertype & CONTENTS_SLIME) != 0 && (e.flags & FL_IMMUNE_SLIME) == 0 ]
+        if [ e.damage_debounce_time < g.level.time ]
+            e.damage_debounce_time = g.level.time + 1.0
+            t_damage[ e, world, world, zero, e.origin, zero,
+                      4 * e.waterlevel, 0, 0, MOD_SLIME ]
+    if [ (e.flags & FL_INWATER) == 0 ]
+        if [ (e.svflags & SVF_DEADMONSTER) == 0 ]
+            if [ e.watertype & CONTENTS_LAVA ]
+                if [ frand[] <= 0.5 ]
+                    g.sound[ e, CHAN_BODY, g.soundindex[ 'player/lava1.wav' ], 1.0,
+                             ATTN_NORM ]
+                el
+                    g.sound[ e, CHAN_BODY, g.soundindex[ 'player/lava2.wav' ], 1.0,
+                             ATTN_NORM ]
+            el [ e.watertype & (CONTENTS_SLIME | CONTENTS_WATER) ]
+                g.sound[ e, CHAN_BODY, g.soundindex[ 'player/watr_in.wav' ], 1.0,
+                         ATTN_NORM ]
+        e.flags = e.flags | FL_INWATER
+        e.damage_debounce_time = 0.0
+
+func m_droptofloor [ e: Edict ]
+    e.origin = vec3f [ e.origin.x, e.origin.y, e.origin.z + 1.0 ]
+    endp : vec3f [ e.origin.x, e.origin.y, e.origin.z - 256.0 ]
+    tr : g.world.trace[ e.origin, e.mins, e.maxs, endp, e, MASK_MONSTERSOLID ]
+    if [ tr.fraction == 1.0 || tr.allsolid ] return
+    e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+    g.world.link[ e ]
+    m_check_ground[ e ]
+    m_catagorize_position[ e ]
+
+func m_set_effects [ e: Edict ]
+    e.effects = e.effects & ~(EF_COLOR_SHELL | EF_POWERSCREEN)
+    e.renderfx = e.renderfx & ~(RF_SHELL_RED | RF_SHELL_GREEN | RF_SHELL_BLUE)
+    if [ e.monsterinfo.aiflags & AI_RESURRECTING ]
+        e.effects = e.effects | EF_COLOR_SHELL
+        e.renderfx = e.renderfx | RF_SHELL_RED
+    if [ e.health <= 0 ] return
+    if [ e.powerarmor_time > g.level.time ]
+        if [ e.monsterinfo.power_armor_type == POWER_ARMOR_SCREEN ]
+            e.effects = e.effects | EF_POWERSCREEN
+        el [ e.monsterinfo.power_armor_type == POWER_ARMOR_SHIELD ]
+            e.effects = e.effects | EF_COLOR_SHELL
+            e.renderfx = e.renderfx | RF_SHELL_GREEN
+
+# M_MoveFrame: one frame of the current move
+# n frames alike, as the C tables list them one by one
+func mf [ v: vec MFrame, n: i32, ai: lambda none [ Edict, f32 ],
+          dist: f32, think: lambda none [ Edict ] ]
+    for [ i: i32 0, i < n, i += 1 ]
+        v.push[ MFrame [ ai: ai, dist: dist, think: think ] ]
+
+func m_move_frame [ e: Edict ]
+    mi : e.monsterinfo
+    move : mi.currentmove
+    e.nextthink = g.level.time + FRAMETIME
+    if [ mi.nextframe != 0 && mi.nextframe >= move.firstframe &&
+         mi.nextframe <= move.lastframe ]
+        e.frame = mi.nextframe
+        mi.nextframe = 0
+    el
+        if [ e.frame == move.lastframe ]
+            if [ move.endfunc ]
+                move.endfunc[ e ]
+                # regrab move, endfunc is very likely to change it
+                move = mi.currentmove
+                # check for death
+                if [ e.svflags & SVF_DEADMONSTER ] return
+        if [ e.frame < move.firstframe || e.frame > move.lastframe ]
+            mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+            e.frame = move.firstframe
+        el
+            if [ (mi.aiflags & AI_HOLD_FRAME) == 0 ]
+                e.frame += 1
+                if [ e.frame > move.lastframe ] e.frame = move.firstframe
+    index : i32 [ e.frame - move.firstframe ]
+    frame : move.frames[ index ]
+    if [ frame.ai ]
+        dist : f32 [ (mi.aiflags & AI_HOLD_FRAME) ? 0.0 : frame.dist * mi.scale ]
+        frame.ai[ e, dist ]
+    if [ frame.think ] frame.think[ e ]
+
+func monster_think [ e: Edict ]
+    m_move_frame[ e ]
+    if [ e.linkcount != e.monsterinfo.linkcount ]
+        e.monsterinfo.linkcount = e.linkcount
+        m_check_ground[ e ]
+    m_catagorize_position[ e ]
+    m_world_effects[ e ]
+    m_set_effects[ e ]
+
+# monster_use: using a monster makes it angry at the current activator
+func monster_use [ e: Edict, other: Edict, activator: Edict ]
+    if [ e.enemy ] return
+    if [ e.health <= 0 ] return
+    if [ activator.flags & FL_NOTARGET ] return
+    if [ !activator.client && (activator.monsterinfo.aiflags & AI_GOOD_GUY) == 0 ]
+        return
+    # delay reaction so if the monster is teleported, its sound is still
+    # heard
+    e.enemy = activator
+    found_target[ e ]
+
+func monster_triggered_spawn [ e: Edict ]
+    e.origin = vec3f [ e.origin.x, e.origin.y, e.origin.z + 1.0 ]
+    g.kill_box[ e ]
+    e.solid = SOLID_BBOX
+    e.movetype = MOVETYPE_STEP
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.air_finished = g.level.time + 12.0
+    g.world.link[ e ]
+    monster_start_go[ e ]
+    if [ e.enemy && (e.spawnflags & 1) == 0 && (e.enemy.flags & FL_NOTARGET) == 0 ]
+        found_target[ e ]
+    el
+        e.enemy = null
+
+func monster_triggered_spawn_use [ e: Edict, other: Edict,
+                                   activator: Edict ]
+    # we have a one frame delay here so we don't telefrag the guy who
+    # activated us
+    e.think = lambda monster_triggered_spawn[]
+    e.nextthink = g.level.time + FRAMETIME
+    if [ activator.client ] e.enemy = activator
+    e.use = lambda monster_use[]
+
+func monster_triggered_start [ e: Edict ]
+    e.solid = SOLID_NOT
+    e.movetype = MOVETYPE_NONE
+    e.svflags = e.svflags | SVF_NOCLIENT
+    e.nextthink = 0.0
+    e.use = lambda monster_triggered_spawn_use[]
+
+# monster_death_use: a dead monster fires its targets at its enemy
+func monster_death_use [ e: Edict ]
+    e.flags = e.flags & ~(FL_FLY | FL_SWIM)
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags & AI_GOOD_GUY
+    if [ e.item ]
+        drop_item[ e, e.item ]
+        e.item = null
+    if [ e.deathtarget ] e.target = e.deathtarget
+    if [ !e.target ] return
+    g.use_targets[ e, e.enemy ]
+
+func monster_start [ e: Edict ] -> bool
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return false
+    if [ (e.spawnflags & 4) != 0 && (e.monsterinfo.aiflags & AI_GOOD_GUY) == 0 ]
+        e.spawnflags = e.spawnflags & ~4
+        e.spawnflags = e.spawnflags | 1
+    if [ (e.monsterinfo.aiflags & AI_GOOD_GUY) == 0 ] g.level.total_monsters += 1
+    e.nextthink = g.level.time + FRAMETIME
+    e.svflags = e.svflags | SVF_MONSTER
+    e.renderfx = e.renderfx | RF_FRAMELERP
+    e.takedamage = DAMAGE_AIM
+    e.air_finished = g.level.time + 12.0
+    e.use = lambda monster_use[]
+    e.max_health = e.health
+    e.clipmask = MASK_MONSTERSOLID
+    e.skinnum = 0
+    e.deadflag = DEAD_NO
+    e.svflags = e.svflags & ~SVF_DEADMONSTER
+    if [ !e.monsterinfo.checkattack ]
+        e.monsterinfo.checkattack = lambda m_check_attack[]
+    e.old_origin = e.origin
+    if [ g.st.item ]
+        e.item = find_item_by_classname[ g.st.item ]
+        if [ !e.item ] g.dprintf[ '{e.classname} has bad item: {g.st.item}' ]
+    # randomize what frame they start on
+    if [ e.monsterinfo.currentmove ]
+        move : e.monsterinfo.currentmove
+        e.frame = move.firstframe
+            + (rand[] % (move.lastframe - move.firstframe + 1))
+    return true
+
+func monster_start_go [ e: Edict ]
+    if [ e.health <= 0 ] return
+    # check for target to combat_point and change to combattarget
+    if [ e.target ]
+        notcombat : bool [ false ]
+        fixup : bool [ false ]
+        target : Edict [ null ]
+        while [ true ]
+            target = g.find[ target, EField.targetname, e.target ]
+            if [ !target ] break
+            if [ target.classname == 'point_combat' ]
+                e.combattarget = e.target
+                fixup = true
+            el
+                notcombat = true
+        if [ notcombat && e.combattarget ]
+            g.dprintf[ '{e.classname} has target with mixed types' ]
+        if [ fixup ] e.target = null
+    # validate combattarget
+    if [ e.combattarget ]
+        target : Edict [ null ]
+        while [ true ]
+            target = g.find[ target, EField.targetname, e.combattarget ]
+            if [ !target ] break
+            if [ target.classname != 'point_combat' ]
+                g.dprintf[ '{e.classname} has a bad combattarget {e.combattarget}: {target.classname}' ]
+    if [ e.target ]
+        e.goalentity = g.pick_target[ e.target ]
+        e.movetarget = e.goalentity
+        if [ !e.movetarget ]
+            g.dprintf[ '{e.classname} cannot find target {e.target}' ]
+            e.target = null
+            e.monsterinfo.pausetime = 100000000.0
+            e.monsterinfo.stand[ e ]
+        el [ e.movetarget.classname == 'path_corner' ]
+            v : v_sub[ e.goalentity.origin, e.origin ]
+            e.ideal_yaw = vectoyaw[ v ]
+            e.angles = vec3f [ e.angles.x, e.ideal_yaw, e.angles.z ]
+            e.monsterinfo.walk[ e ]
+            e.target = null
+        el
+            e.goalentity = null
+            e.movetarget = null
+            e.monsterinfo.pausetime = 100000000.0
+            e.monsterinfo.stand[ e ]
+    el
+        e.monsterinfo.pausetime = 100000000.0
+        e.monsterinfo.stand[ e ]
+    e.think = lambda monster_think[]
+    e.nextthink = g.level.time + FRAMETIME
+
+func walkmonster_start_go [ e: Edict ]
+    if [ (e.spawnflags & 2) == 0 && g.level.time < 1.0 ]
+        m_droptofloor[ e ]
+        if [ e.groundentity ]
+            if [ !m_walkmove[ e, 0.0, 0.0 ] ]
+                g.dprintf[ '{e.classname} in solid' ]
+    if [ e.yaw_speed == 0.0 ] e.yaw_speed = 20.0
+    e.viewheight = 25
+    monster_start_go[ e ]
+    if [ e.spawnflags & 2 ] monster_triggered_start[ e ]
+
+func walkmonster_start [ e: Edict ]
+    e.think = lambda walkmonster_start_go[]
+    monster_start[ e ]
+
+func flymonster_start_go [ e: Edict ]
+    if [ !m_walkmove[ e, 0.0, 0.0 ] ] g.dprintf[ '{e.classname} in solid' ]
+    if [ e.yaw_speed == 0.0 ] e.yaw_speed = 10.0
+    e.viewheight = 25
+    monster_start_go[ e ]
+    if [ e.spawnflags & 2 ] monster_triggered_start[ e ]
+
+func flymonster_start [ e: Edict ]
+    e.flags = e.flags | FL_FLY
+    e.think = lambda flymonster_start_go[]
+    monster_start[ e ]
+
+func swimmonster_start_go [ e: Edict ]
+    if [ e.yaw_speed == 0.0 ] e.yaw_speed = 10.0
+    e.viewheight = 10
+    monster_start_go[ e ]
+    if [ e.spawnflags & 2 ] monster_triggered_start[ e ]
+
+func swimmonster_start [ e: Edict ]
+    e.flags = e.flags | FL_SWIM
+    e.think = lambda swimmonster_start_go[]
+    monster_start[ e ]
+
+# ---- g_ai.c
+# AI_SetSightClient: the client monsters check for this frame
+func ai_set_sight_client []
+    start : i32 [ (g.level.sight_client) ? g.level.sight_client.number : 1 ]
+    check : i32 [ start ]
+    while [ true ]
+        check += 1
+        if [ check > g.maxclients ] check = 1
+        ent : g.edicts[ check ]
+        if [ ent.inuse && ent.health > 0 && (ent.flags & FL_NOTARGET) == 0 ]
+            g.level.sight_client = ent
+            return
+        if [ check == start ]
+            g.level.sight_client = null
+            return
+
+# ai_move: move the specified distance at current facing
+func ai_move [ e: Edict, dist: f32 ]
+    m_walkmove[ e, e.angles.y, dist ]
+
+# ai_stand: standing around and looking for players
+func ai_stand [ e: Edict, dist: f32 ]
+    if [ dist != 0.0 ] m_walkmove[ e, e.angles.y, dist ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_STAND_GROUND ]
+        if [ e.enemy ]
+            v : v_sub[ e.enemy.origin, e.origin ]
+            e.ideal_yaw = vectoyaw[ v ]
+            if [ e.angles.y != e.ideal_yaw && (mi.aiflags & AI_TEMP_STAND_GROUND) != 0 ]
+                mi.aiflags = mi.aiflags & ~(AI_STAND_GROUND | AI_TEMP_STAND_GROUND)
+                mi.run[ e ]
+            m_change_yaw[ e ]
+            ai_checkattack[ e, 0.0 ]
+        el
+            find_target[ e ]
+        return
+    if [ find_target[ e ] ] return
+    if [ g.level.time > mi.pausetime ]
+        mi.walk[ e ]
+        return
+    if [ (e.spawnflags & 1) == 0 && mi.idle &&
+         g.level.time > mi.idle_time ]
+        if [ mi.idle_time != 0.0 ]
+            mi.idle[ e ]
+            mi.idle_time = g.level.time + 15.0 + frand[] * 15.0
+        el
+            mi.idle_time = g.level.time + frand[] * 15.0
+
+# ai_walk: the monster is walking its beat
+func ai_walk [ e: Edict, dist: f32 ]
+    m_move_to_goal[ e, dist ]
+    # check for noticing a player
+    if [ find_target[ e ] ] return
+    mi : e.monsterinfo
+    if [ mi.search && g.level.time > mi.idle_time ]
+        if [ mi.idle_time != 0.0 ]
+            mi.search[ e ]
+            mi.idle_time = g.level.time + 15.0 + frand[] * 15.0
+        el
+            mi.idle_time = g.level.time + frand[] * 15.0
+
+# ai_charge: turns towards target and advances
+func ai_charge [ e: Edict, dist: f32 ]
+    v : v_sub[ e.enemy.origin, e.origin ]
+    e.ideal_yaw = vectoyaw[ v ]
+    m_change_yaw[ e ]
+    if [ dist != 0.0 ] m_walkmove[ e, e.angles.y, dist ]
+
+# ai_turn: don't move, but turn towards ideal_yaw
+func ai_turn [ e: Edict, dist: f32 ]
+    if [ dist != 0.0 ] m_walkmove[ e, e.angles.y, dist ]
+    if [ find_target[ e ] ] return
+    m_change_yaw[ e ]
+
+# range: 0 melee, 1 near, 2 mid, 3 far
+func ai_range [ e: Edict, other: Edict ] -> i32
+    len : f32 [ v_len[ v_sub[ e.origin, other.origin ] ] ]
+    if [ len < MELEE_DISTANCE ] return RANGE_MELEE
+    if [ len < 500.0 ] return RANGE_NEAR
+    if [ len < 1000.0 ] return RANGE_MID
+    return RANGE_FAR
+
+# visible: a clear line between the eyes
+func visible [ e: Edict, other: Edict ] -> bool
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    spot1 : vec3f [ e.origin.x, e.origin.y, e.origin.z + f32[ e.viewheight ] ]
+    spot2 : vec3f [ other.origin.x, other.origin.y,
+                    other.origin.z + f32[ other.viewheight ] ]
+    tr : g.world.trace[ spot1, zero, zero, spot2, e, MASK_OPAQUE ]
+    return tr.fraction == 1.0
+
+# infront: within the front cone
+func infront [ e: Edict, other: Edict ] -> bool
+    ax : angle_vectors[ e.angles ]
+    dir : v_norm[ v_sub[ other.origin, e.origin ] ]
+    return v_dot[ dir, ax.forward ] > 0.3
+
+func hunt_target [ e: Edict ]
+    e.goalentity = e.enemy
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.stand[ e ]
+    el
+        e.monsterinfo.run[ e ]
+    dir : v_sub[ e.enemy.origin, e.origin ]
+    e.ideal_yaw = vectoyaw[ dir ]
+    # wait a while before first attack
+    if [ (e.monsterinfo.aiflags & AI_STAND_GROUND) == 0 ] attack_finished[ e, 1.0 ]
+
+func found_target [ e: Edict ]
+    # let other monsters see this monster for a while
+    if [ e.enemy.client ]
+        g.level.sight_entity = e
+        g.level.sight_entity_framenum = g.level.framenum
+        g.level.sight_entity.light_level = 128
+    # wake up other monsters
+    e.show_hostile = g.level.time + 1.0
+    e.monsterinfo.last_sighting = e.enemy.origin
+    e.monsterinfo.trail_time = g.level.time
+    if [ !e.combattarget ]
+        hunt_target[ e ]
+        return
+    e.goalentity = g.pick_target[ e.combattarget ]
+    e.movetarget = e.goalentity
+    if [ !e.movetarget ]
+        e.goalentity = e.enemy
+        e.movetarget = e.enemy
+        hunt_target[ e ]
+        g.dprintf[ '{e.classname}, combattarget {e.combattarget} not found' ]
+        return
+    # clear out our combattarget, these are a one shot deal
+    e.combattarget = null
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags | AI_COMBAT_POINT
+    # clear the targetname, that point is ours!
+    e.movetarget.targetname = null
+    e.monsterinfo.pausetime = 0.0
+    # run for it
+    e.monsterinfo.run[ e ]
+
+# FindTarget: self is not attacking anything; try to find a target.
+# true when an enemy was sighted
+func find_target [ e: Edict ] -> bool
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_GOOD_GUY ] return false
+    # if we're going to a combat point, just proceed
+    if [ mi.aiflags & AI_COMBAT_POINT ] return false
+    # if the first spawnflag bit is set, the monster will only wake up
+    # on really seeing the player, not another monster getting angry or
+    # hearing something
+    heardit : bool [ false ]
+    client : Edict [ null ]
+    if [ g.level.sight_entity_framenum >= g.level.framenum - 1 &&
+         (e.spawnflags & 1) == 0 ]
+        client = g.level.sight_entity
+        if [ client.enemy == e.enemy ] return false
+    el [ g.level.sound_entity_framenum >= g.level.framenum - 1 ]
+        client = g.level.sound_entity
+        heardit = true
+    el [ !e.enemy && g.level.sound2_entity_framenum >= g.level.framenum - 1 &&
+         (e.spawnflags & 1) == 0 ]
+        client = g.level.sound2_entity
+        heardit = true
+    el
+        client = g.level.sight_client
+        # no clients to get mad at
+        if [ !client ] return false
+    # if the entity went away, forget it
+    if [ !client.inuse ] return false
+    # JDC false positive
+    if [ client == e.enemy ] return true
+    if [ client.client ]
+        if [ client.flags & FL_NOTARGET ] return false
+    el [ client.svflags & SVF_MONSTER ]
+        if [ !client.enemy ] return false
+        if [ client.enemy.flags & FL_NOTARGET ] return false
+    el [ heardit ]
+        if [ client.owner.flags & FL_NOTARGET ] return false
+    el
+        return false
+    if [ !heardit ]
+        r : i32 [ ai_range[ e, client ] ]
+        if [ r == RANGE_FAR ] return false
+        # this is where we would check invisibility
+        # is client in an spot too dark to be seen?
+        if [ client.light_level <= 5 ] return false
+        if [ !visible[ e, client ] ] return false
+        if [ r == RANGE_NEAR ]
+            if [ client.show_hostile < g.level.time && !infront[ e, client ] ]
+                return false
+        el [ r == RANGE_MID ]
+            if [ !infront[ e, client ] ] return false
+        e.enemy = client
+        if [ e.enemy.classname != 'player_noise' ]
+            mi.aiflags = mi.aiflags & ~AI_SOUND_TARGET
+            if [ !e.enemy.client ]
+                e.enemy = e.enemy.enemy
+                if [ !e.enemy.client ]
+                    e.enemy = null
+                    return false
+    el
+        # heardit
+        if [ e.spawnflags & 1 ]
+            if [ !visible[ e, client ] ] return false
+        el
+            if [ !g.world.in_phs[ e.origin, client.origin ] ] return false
+        temp : v_sub[ client.origin, e.origin ]
+        # too far to hear
+        if [ v_len[ temp ] > 1000.0 ] return false
+        # check area portals - if they are different and not connected
+        # then we can't hear it
+        here : i32 [ g.bsp.area_at[ e.origin.x, e.origin.y, e.origin.z ] ]
+        there : i32 [ g.bsp.area_at[ client.origin.x, client.origin.y,
+                                     client.origin.z ] ]
+        if [ !g.bsp.areas_connected[ here, there ] ] return false
+        # hunt the sound for a bit; hopefully find the real player
+        e.ideal_yaw = vectoyaw[ temp ]
+        m_change_yaw[ e ]
+        mi.aiflags = mi.aiflags | AI_SOUND_TARGET
+        e.enemy = client
+    # got one
+    found_target[ e ]
+    if [ (mi.aiflags & AI_SOUND_TARGET) == 0 && mi.sight ]
+        mi.sight[ e, e.enemy ]
+    return true
+
+func facing_ideal [ e: Edict ] -> bool
+    delta : f32 [ anglemod[ e.angles.y - e.ideal_yaw ] ]
+    if [ delta > 45.0 && delta < 315.0 ] return false
+    return true
+
+func m_check_attack [ e: Edict ] -> bool
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    mi : e.monsterinfo
+    if [ e.enemy.health > 0 ]
+        # see if any entities are in the way of the shot
+        spot1 : vec3f [ e.origin.x, e.origin.y, e.origin.z + f32[ e.viewheight ] ]
+        spot2 : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                        e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+        tr : g.world.trace[ spot1, zero, zero, spot2, e,
+                            CONTENTS_SOLID | CONTENTS_MONSTER | CONTENTS_SLIME
+                            | CONTENTS_LAVA | CONTENTS_WINDOW ]
+        # do we have a clear shot?
+        if [ tr.ent != e.enemy ] return false
+    # melee attack
+    if [ g.enemy_range == RANGE_MELEE ]
+        # don't always melee in easy mode
+        if [ g.skill == 0 && (rand[] & 3) != 0 ] return false
+        if [ mi.melee ] mi.attack_state = AS_MELEE
+        el                         mi.attack_state = AS_MISSILE
+        return true
+    # missile attack
+    if [ !mi.attack ] return false
+    if [ g.level.time < mi.attack_finished ] return false
+    if [ g.enemy_range == RANGE_FAR ] return false
+    chance : f32 [ 0.0 ]
+    if [ mi.aiflags & AI_STAND_GROUND ]       chance = 0.4
+    el [ g.enemy_range == RANGE_MELEE ]       chance = 0.2
+    el [ g.enemy_range == RANGE_NEAR ]        chance = 0.1
+    el [ g.enemy_range == RANGE_MID ]         chance = 0.02
+    el                                        return false
+    if [ g.skill == 0 ]      chance = chance * 0.5
+    el [ g.skill >= 2 ]      chance = chance * 2.0
+    if [ frand[] < chance ]
+        mi.attack_state = AS_MISSILE
+        mi.attack_finished = g.level.time + 2.0 * frand[]
+        return true
+    if [ e.flags & FL_FLY ]
+        if [ frand[] < 0.3 ] mi.attack_state = AS_SLIDING
+        el                   mi.attack_state = AS_STRAIGHT
+    return false
+
+# ai_run_melee: turn and close until within an angle to launch a melee
+# attack
+func ai_run_melee [ e: Edict ]
+    e.ideal_yaw = g.enemy_yaw
+    m_change_yaw[ e ]
+    if [ facing_ideal[ e ] ]
+        e.monsterinfo.melee[ e ]
+        e.monsterinfo.attack_state = AS_STRAIGHT
+
+# ai_run_missile: turn in place until within an angle to launch a
+# missile attack
+func ai_run_missile [ e: Edict ]
+    e.ideal_yaw = g.enemy_yaw
+    m_change_yaw[ e ]
+    if [ facing_ideal[ e ] ]
+        e.monsterinfo.attack[ e ]
+        e.monsterinfo.attack_state = AS_STRAIGHT
+
+# ai_run_slide: strafe sideways, but stay at aproximately the same range
+func ai_run_slide [ e: Edict, distance: f32 ]
+    e.ideal_yaw = g.enemy_yaw
+    m_change_yaw[ e ]
+    ofs : f32 [ (e.monsterinfo.lefty != 0) ? 90.0 : -90.0 ]
+    if [ m_walkmove[ e, e.ideal_yaw + ofs, distance ] ] return
+    e.monsterinfo.lefty = 1 - e.monsterinfo.lefty
+    m_walkmove[ e, e.ideal_yaw - ofs, distance ]
+
+# ai_checkattack: decides if we're going to attack or do something else
+func ai_checkattack [ e: Edict, dist: f32 ] -> bool
+    mi : e.monsterinfo
+    # this causes monsters to run blindly to the combat point w/o firing
+    if [ e.goalentity ]
+        if [ mi.aiflags & AI_COMBAT_POINT ] return false
+        if [ mi.aiflags & AI_SOUND_TARGET ]
+            if [ g.level.time - e.enemy.teleport_time > 5.0 ]
+                if [ e.goalentity == e.enemy ]
+                    if [ e.movetarget ] e.goalentity = e.movetarget
+                    el                  e.goalentity = null
+                mi.aiflags = mi.aiflags & ~AI_SOUND_TARGET
+                if [ mi.aiflags & AI_TEMP_STAND_GROUND ]
+                    mi.aiflags = mi.aiflags & ~(AI_STAND_GROUND | AI_TEMP_STAND_GROUND)
+            el
+                e.show_hostile = g.level.time + 1.0
+                return false
+    g.enemy_vis = false
+    # see if the enemy is dead
+    hes_dead_jim : bool [ false ]
+    if [ !e.enemy || !e.enemy.inuse ]
+        hes_dead_jim = true
+    el [ mi.aiflags & AI_MEDIC ]
+        if [ e.enemy.health > 0 ]
+            hes_dead_jim = true
+            mi.aiflags = mi.aiflags & ~AI_MEDIC
+    el
+        if [ mi.aiflags & AI_BRUTAL ]
+            if [ e.enemy.health <= -80 ] hes_dead_jim = true
+        el
+            if [ e.enemy.health <= 0 ] hes_dead_jim = true
+    if [ hes_dead_jim ]
+        e.enemy = null
+        # FIXME: look all around for other targets
+        if [ e.oldenemy && e.oldenemy.health > 0 ]
+            e.enemy = e.oldenemy
+            e.oldenemy = null
+            hunt_target[ e ]
+        el
+            if [ e.movetarget ]
+                e.goalentity = e.movetarget
+                mi.walk[ e ]
+            el
+                # we need the pausetime otherwise the stand code will
+                # just revert to walking with no target and the monsters
+                # will wonder around aimlessly trying to hunt the world
+                # entity
+                mi.pausetime = g.level.time + 100000000.0
+                mi.stand[ e ]
+            return true
+    # wake up other monsters
+    e.show_hostile = g.level.time + 1.0
+    # check knowledge of enemy
+    g.enemy_vis = visible[ e, e.enemy ]
+    if [ g.enemy_vis ]
+        mi.search_time = g.level.time + 5.0
+        mi.last_sighting = e.enemy.origin
+    g.enemy_infront = infront[ e, e.enemy ]
+    g.enemy_range = ai_range[ e, e.enemy ]
+    temp : v_sub[ e.enemy.origin, e.origin ]
+    g.enemy_yaw = vectoyaw[ temp ]
+    # JDC self->ideal_yaw = enemy_yaw;
+    if [ mi.attack_state == AS_MISSILE ]
+        ai_run_missile[ e ]
+        return true
+    if [ mi.attack_state == AS_MELEE ]
+        ai_run_melee[ e ]
+        return true
+    # if enemy is not currently visible, we will never attack
+    if [ !g.enemy_vis ] return false
+    return mi.checkattack[ e ]
+
+# ai_run: the monster has an enemy it is trying to kill
+func ai_run [ e: Edict, dist_in: f32 ]
+    mi : e.monsterinfo
+    dist : f32 [ dist_in ]
+    # if we're going to a combat point, just proceed
+    if [ mi.aiflags & AI_COMBAT_POINT ]
+        m_move_to_goal[ e, dist ]
+        return
+    if [ mi.aiflags & AI_SOUND_TARGET ]
+        v : v_sub[ e.origin, e.enemy.origin ]
+        if [ v_len[ v ] < 64.0 ]
+            mi.aiflags = mi.aiflags | AI_STAND_GROUND | AI_TEMP_STAND_GROUND
+            mi.stand[ e ]
+            return
+        m_move_to_goal[ e, dist ]
+        if [ !find_target[ e ] ] return
+    if [ ai_checkattack[ e, dist ] ] return
+    if [ mi.attack_state == AS_SLIDING ]
+        ai_run_slide[ e, dist ]
+        return
+    if [ g.enemy_vis ]
+        m_move_to_goal[ e, dist ]
+        mi.aiflags = mi.aiflags & ~AI_LOST_SIGHT
+        mi.last_sighting = e.enemy.origin
+        mi.trail_time = g.level.time
+        return
+    # coop will change to another enemy if visible
+    if [ g.coop ]
+        # FIXME: insane guys get mad with this, which causes crashes!
+        if [ find_target[ e ] ] return
+    if [ mi.search_time != 0.0 && g.level.time > mi.search_time + 20.0 ]
+        m_move_to_goal[ e, dist ]
+        mi.search_time = 0.0
+        return
+    save : e.goalentity
+    tempgoal : g.spawn[]
+    e.goalentity = tempgoal
+    fresh : bool [ false ]
+    if [ (mi.aiflags & AI_LOST_SIGHT) == 0 ]
+        # just lost sight of the player, decide where to go first
+        mi.aiflags = mi.aiflags | AI_LOST_SIGHT | AI_PURSUIT_LAST_SEEN
+        mi.aiflags = mi.aiflags & ~(AI_PURSUE_NEXT | AI_PURSUE_TEMP)
+        fresh = true
+    if [ mi.aiflags & AI_PURSUE_NEXT ]
+        mi.aiflags = mi.aiflags & ~AI_PURSUE_NEXT
+        # give ourself more time since we got this far
+        mi.search_time = g.level.time + 5.0
+        marker : Edict [ null ]
+        if [ mi.aiflags & AI_PURSUE_TEMP ]
+            mi.aiflags = mi.aiflags & ~AI_PURSUE_TEMP
+            marker = null
+            mi.last_sighting = mi.saved_goal
+            fresh = true
+        el [ mi.aiflags & AI_PURSUIT_LAST_SEEN ]
+            mi.aiflags = mi.aiflags & ~AI_PURSUIT_LAST_SEEN
+            marker = player_trail_pick_first[ e ]
+        el
+            marker = player_trail_pick_next[ e ]
+        if [ marker ]
+            mi.last_sighting = marker.origin
+            mi.trail_time = marker.timestamp
+            e.ideal_yaw = marker.angles.y
+            e.angles = vec3f [ e.angles.x, e.ideal_yaw, e.angles.z ]
+            fresh = true
+    v : v_sub[ e.origin, mi.last_sighting ]
+    d1 : f32 [ v_len[ v ] ]
+    if [ d1 <= dist ]
+        mi.aiflags = mi.aiflags | AI_PURSUE_NEXT
+        dist = d1
+    e.goalentity.origin = mi.last_sighting
+    if [ fresh ]
+        tr : g.world.trace[ e.origin, e.mins, e.maxs, mi.last_sighting, e,
+                            MASK_PLAYERSOLID ]
+        if [ tr.fraction < 1.0 ]
+            v = v_sub[ e.goalentity.origin, e.origin ]
+            d1 = v_len[ v ]
+            center : f32 [ tr.fraction ]
+            d2 : f32 [ d1 * ((center + 1.0) / 2.0) ]
+            e.ideal_yaw = vectoyaw[ v ]
+            e.angles = vec3f [ e.angles.x, e.ideal_yaw, e.angles.z ]
+            ax : angle_vectors[ e.angles ]
+            left_target : project_source[ e.origin, vec3f [ d2, -16.0, 0.0 ],
+                                          ax.forward, ax.right ]
+            tr = g.world.trace[ e.origin, e.mins, e.maxs, left_target, e,
+                                MASK_PLAYERSOLID ]
+            left : f32 [ tr.fraction ]
+            right_target : project_source[ e.origin, vec3f [ d2, 16.0, 0.0 ],
+                                           ax.forward, ax.right ]
+            tr = g.world.trace[ e.origin, e.mins, e.maxs, right_target, e,
+                                MASK_PLAYERSOLID ]
+            right : f32 [ tr.fraction ]
+            center = (d1 * center) / d2
+            if [ left >= center && left > right ]
+                if [ left < 1.0 ]
+                    left_target = project_source[ e.origin,
+                        vec3f [ d2 * left * 0.5, -16.0, 0.0 ], ax.forward,
+                        ax.right ]
+                mi.saved_goal = mi.last_sighting
+                mi.aiflags = mi.aiflags | AI_PURSUE_TEMP
+                e.goalentity.origin = left_target
+                mi.last_sighting = left_target
+                v = v_sub[ e.goalentity.origin, e.origin ]
+                e.ideal_yaw = vectoyaw[ v ]
+                e.angles = vec3f [ e.angles.x, e.ideal_yaw, e.angles.z ]
+            el [ right >= center && right > left ]
+                if [ right < 1.0 ]
+                    right_target = project_source[ e.origin,
+                        vec3f [ d2 * right * 0.5, 16.0, 0.0 ], ax.forward,
+                        ax.right ]
+                mi.saved_goal = mi.last_sighting
+                mi.aiflags = mi.aiflags | AI_PURSUE_TEMP
+                e.goalentity.origin = right_target
+                mi.last_sighting = right_target
+                v = v_sub[ e.goalentity.origin, e.origin ]
+                e.ideal_yaw = vectoyaw[ v ]
+                e.angles = vec3f [ e.angles.x, e.ideal_yaw, e.angles.z ]
+    m_move_to_goal[ e, dist ]
+    g.free_edict[ tempgoal ]
+    e.goalentity = save
+
+# ---- m_move.c
+# M_CheckBottom: all four corners of the box have ground under them
+func m_check_bottom [ e: Edict ] -> bool
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    mins : v_add[ e.origin, e.mins ]
+    maxs : v_add[ e.origin, e.maxs ]
+    # if all of the points under the corners are solid world, don't
+    # bother with the tougher checks
+    solid : bool [ true ]
+    for [ x: i32 0, x <= 1 && solid, x += 1 ]
+        for [ y: i32 0, y <= 1 && solid, y += 1 ]
+            start : vec3f [ (x != 0) ? maxs.x : mins.x,
+                            (y != 0) ? maxs.y : mins.y, mins.z - 1.0 ]
+            if [ g.world.point_contents[ start ] != CONTENTS_SOLID ]
+                solid = false
+    if [ solid ] return true
+    # check it for real
+    sx : f32 [ (mins.x + maxs.x) * 0.5 ]
+    sy : f32 [ (mins.y + maxs.y) * 0.5 ]
+    start : vec3f [ sx, sy, mins.z ]
+    stop : vec3f [ sx, sy, mins.z - 2.0 * STEPSIZE ]
+    tr : g.world.trace[ start, zero, zero, stop, e, MASK_MONSTERSOLID ]
+    if [ tr.fraction == 1.0 ] return false
+    mid : f32 [ tr.ez ]
+    bottom : f32 [ tr.ez ]
+    # the corners must be within 16 of the midpoint
+    for [ x: i32 0, x <= 1, x += 1 ]
+        for [ y: i32 0, y <= 1, y += 1 ]
+            cx : f32 [ (x != 0) ? maxs.x : mins.x ]
+            cy : f32 [ (y != 0) ? maxs.y : mins.y ]
+            tr = g.world.trace[ vec3f [ cx, cy, mins.z ], zero, zero,
+                                vec3f [ cx, cy, mins.z - 2.0 * STEPSIZE ], e,
+                                MASK_MONSTERSOLID ]
+            if [ tr.fraction != 1.0 && tr.ez > bottom ] bottom = tr.ez
+            if [ tr.fraction == 1.0 || mid - tr.ez > STEPSIZE ] return false
+    return true
+
+# SV_movestep: adjusted for slopes and stairs; false and no move when
+# the move isn't possible
+func sv_movestep [ e: Edict, move: vec3f, relink: bool ] -> bool
+    oldorg : vec3f [ e.origin ]
+    neworg : v_add[ e.origin, move ]
+    # flying monsters don't step up
+    if [ e.flags & (FL_SWIM | FL_FLY) ]
+        # try one move with vertical motion, then one without
+        for [ i: i32 0, i < 2, i += 1 ]
+            neworg = v_add[ e.origin, move ]
+            if [ i == 0 && e.enemy ]
+                if [ !e.goalentity ] e.goalentity = e.enemy
+                dz : f32 [ e.origin.z - e.goalentity.origin.z ]
+                if [ e.goalentity.client ]
+                    if [ dz > 40.0 ] neworg = vec3f [ neworg.x, neworg.y, neworg.z - 8.0 ]
+                    if [ !((e.flags & FL_SWIM) != 0 && e.waterlevel < 2) ]
+                        if [ dz < 30.0 ] neworg = vec3f [ neworg.x, neworg.y, neworg.z + 8.0 ]
+                el
+                    if [ dz > 8.0 ]        neworg = vec3f [ neworg.x, neworg.y, neworg.z - 8.0 ]
+                    el [ dz > 0.0 ]        neworg = vec3f [ neworg.x, neworg.y, neworg.z - dz ]
+                    el [ dz < -8.0 ]       neworg = vec3f [ neworg.x, neworg.y, neworg.z + 8.0 ]
+                    el                     neworg = vec3f [ neworg.x, neworg.y, neworg.z + dz ]
+            tr : g.world.trace[ e.origin, e.mins, e.maxs, neworg, e,
+                                MASK_MONSTERSOLID ]
+            # fly monsters don't enter water voluntarily
+            if [ e.flags & FL_FLY ]
+                if [ e.waterlevel == 0 ]
+                    test : vec3f [ tr.ex, tr.ey, tr.ez + e.mins.z + 1.0 ]
+                    if [ g.world.point_contents[ test ] & MASK_WATER ] return false
+            # swim monsters don't exit water voluntarily
+            if [ e.flags & FL_SWIM ]
+                if [ e.waterlevel < 2 ]
+                    test : vec3f [ tr.ex, tr.ey, tr.ez + e.mins.z + 1.0 ]
+                    if [ (g.world.point_contents[ test ] & MASK_WATER) == 0 ]
+                        return false
+            if [ tr.fraction == 1.0 ]
+                e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+                if [ relink ]
+                    g.world.link[ e ]
+                    g.touch_triggers[ e ]
+                return true
+            if [ !e.enemy ] break
+        return false
+    # push down from a step height above the wished position
+    stepsize : f32 [ ((e.monsterinfo.aiflags & AI_NOSTEP) == 0) ? STEPSIZE : 1.0 ]
+    neworg = vec3f [ neworg.x, neworg.y, neworg.z + stepsize ]
+    endp : vec3f [ neworg.x, neworg.y, neworg.z - stepsize * 2.0 ]
+    tr : g.world.trace[ neworg, e.mins, e.maxs, endp, e, MASK_MONSTERSOLID ]
+    if [ tr.allsolid ] return false
+    if [ tr.startsolid ]
+        neworg = vec3f [ neworg.x, neworg.y, neworg.z - stepsize ]
+        tr = g.world.trace[ neworg, e.mins, e.maxs, endp, e, MASK_MONSTERSOLID ]
+        if [ tr.allsolid || tr.startsolid ] return false
+    # don't go in to water
+    if [ e.waterlevel == 0 ]
+        test : vec3f [ tr.ex, tr.ey, tr.ez + e.mins.z + 1.0 ]
+        if [ g.world.point_contents[ test ] & MASK_WATER ] return false
+    if [ tr.fraction == 1.0 ]
+        # if monster had the ground pulled out, go ahead and fall
+        if [ e.flags & FL_PARTIALGROUND ]
+            e.origin = v_add[ e.origin, move ]
+            if [ relink ]
+                g.world.link[ e ]
+                g.touch_triggers[ e ]
+            e.groundentity = null
+            return true
+        # walked off an edge
+        return false
+    # check point traces down for dangling corners
+    e.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+    if [ !m_check_bottom[ e ] ]
+        if [ e.flags & FL_PARTIALGROUND ]
+            # entity had floor mostly pulled out from underneath it and
+            # is trying to correct
+            if [ relink ]
+                g.world.link[ e ]
+                g.touch_triggers[ e ]
+            return true
+        e.origin = oldorg
+        return false
+    if [ e.flags & FL_PARTIALGROUND ] e.flags = e.flags & ~FL_PARTIALGROUND
+    e.groundentity = tr.ent
+    e.groundentity_linkcount = tr.ent.linkcount
+    # the move is ok
+    if [ relink ]
+        g.world.link[ e ]
+        g.touch_triggers[ e ]
+    return true
+
+func m_change_yaw [ e: Edict ]
+    current : f32 [ anglemod[ e.angles.y ] ]
+    ideal : f32 [ e.ideal_yaw ]
+    if [ current == ideal ] return
+    move : f32 [ ideal - current ]
+    speed : f32 [ e.yaw_speed ]
+    if [ ideal > current ]
+        if [ move >= 180.0 ] move = move - 360.0
+    el
+        if [ move <= -180.0 ] move = move + 360.0
+    if [ move > 0.0 ]
+        if [ move > speed ] move = speed
+    el
+        if [ move < 0.0 - speed ] move = 0.0 - speed
+    e.angles = vec3f [ e.angles.x, anglemod[ current + move ], e.angles.z ]
+
+# SV_StepDirection: turns to the movement direction, and walks the
+# current distance if facing it
+func sv_step_direction [ e: Edict, yaw_in: f32, dist: f32 ] -> bool
+    e.ideal_yaw = yaw_in
+    m_change_yaw[ e ]
+    yaw : f32 [ yaw_in * 3.14159265358979 * 2.0 / 360.0 ]
+    move : vec3f [ cos[ yaw ] * dist, sin[ yaw ] * dist, 0.0 ]
+    oldorigin : vec3f [ e.origin ]
+    if [ sv_movestep[ e, move, false ] ]
+        delta : f32 [ e.angles.y - e.ideal_yaw ]
+        if [ delta > 45.0 && delta < 315.0 ]
+            # not turned far enough, so don't take the step
+            e.origin = oldorigin
+        g.world.link[ e ]
+        g.touch_triggers[ e ]
+        return true
+    g.world.link[ e ]
+    g.touch_triggers[ e ]
+    return false
+
+func sv_fix_check_bottom [ e: Edict ]
+    e.flags = e.flags | FL_PARTIALGROUND
+
+DI_NODIR : f32 [ -1.0 ]
+
+func sv_new_chase_dir [ actor: Edict, enemy: Edict, dist: f32 ]
+    if [ !enemy ] return
+    olddir : f32 [ anglemod[ f32[ i32[ actor.ideal_yaw / 45.0 ] * 45 ] ] ]
+    turnaround : f32 [ anglemod[ olddir - 180.0 ] ]
+    deltax : f32 [ enemy.origin.x - actor.origin.x ]
+    deltay : f32 [ enemy.origin.y - actor.origin.y ]
+    d1 : f32 [ DI_NODIR ]
+    d2 : f32 [ DI_NODIR ]
+    if [ deltax > 10.0 ]        d1 = 0.0
+    el [ deltax < -10.0 ]       d1 = 180.0
+    if [ deltay < -10.0 ]       d2 = 270.0
+    el [ deltay > 10.0 ]        d2 = 90.0
+    # try direct route
+    if [ d1 != DI_NODIR && d2 != DI_NODIR ]
+        tdir : f32 [ 0.0 ]
+        if [ d1 == 0.0 ] tdir = (d2 == 90.0) ? 45.0 : 315.0
+        el               tdir = (d2 == 90.0) ? 135.0 : 215.0
+        if [ tdir != turnaround && sv_step_direction[ actor, tdir, dist ] ]
+            return
+    # try other directions
+    if [ ((rand[] & 3) & 1) != 0 || fabs[ deltay ] > fabs[ deltax ] ]
+        tdir : f32 [ d1 ]
+        d1 = d2
+        d2 = tdir
+    if [ d1 != DI_NODIR && d1 != turnaround &&
+         sv_step_direction[ actor, d1, dist ] ]
+        return
+    if [ d2 != DI_NODIR && d2 != turnaround &&
+         sv_step_direction[ actor, d2, dist ] ]
+        return
+    # there is no direct path to the player, so pick another direction
+    if [ olddir != DI_NODIR && sv_step_direction[ actor, olddir, dist ] ]
+        return
+    # randomly determine direction of search
+    if [ rand[] & 1 ]
+        for [ tdir: f32 0.0, tdir <= 315.0, tdir += 45.0 ]
+            if [ tdir != turnaround && sv_step_direction[ actor, tdir, dist ] ]
+                return
+    el
+        for [ tdir: f32 315.0, tdir >= 0.0, tdir -= 45.0 ]
+            if [ tdir != turnaround && sv_step_direction[ actor, tdir, dist ] ]
+                return
+    if [ turnaround != DI_NODIR && sv_step_direction[ actor, turnaround, dist ] ]
+        return
+    # can't move
+    actor.ideal_yaw = olddir
+    # if a bridge was pulled out from underneath a monster, it may not
+    # have a valid standing position at all
+    if [ !m_check_bottom[ actor ] ] sv_fix_check_bottom[ actor ]
+
+func sv_close_enough [ e: Edict, goal: Edict, dist: f32 ] -> bool
+    if [ goal.absmin.x > e.absmax.x + dist ] return false
+    if [ goal.absmin.y > e.absmax.y + dist ] return false
+    if [ goal.absmin.z > e.absmax.z + dist ] return false
+    if [ goal.absmax.x < e.absmin.x - dist ] return false
+    if [ goal.absmax.y < e.absmin.y - dist ] return false
+    if [ goal.absmax.z < e.absmin.z - dist ] return false
+    return true
+
+func m_move_to_goal [ e: Edict, dist: f32 ]
+    goal : e.goalentity
+    if [ !e.groundentity && (e.flags & (FL_FLY | FL_SWIM)) == 0 ] return
+    # if the next step hits the enemy, return immediately
+    if [ e.enemy && sv_close_enough[ e, e.enemy, dist ] ] return
+    # bump around...
+    if [ (rand[] & 3) == 1 || !sv_step_direction[ e, e.ideal_yaw, dist ] ]
+        if [ e.inuse ] sv_new_chase_dir[ e, goal, dist ]
+
+func m_walkmove [ e: Edict, yaw_in: f32, dist: f32 ] -> bool
+    if [ !e.groundentity && (e.flags & (FL_FLY | FL_SWIM)) == 0 ] return false
+    yaw : f32 [ yaw_in * 3.14159265358979 * 2.0 / 360.0 ]
+    move : vec3f [ cos[ yaw ] * dist, sin[ yaw ] * dist, 0.0 ]
+    return sv_movestep[ e, move, true ]
+

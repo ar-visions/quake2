@@ -1,0 +1,1009 @@
+# g_misc.c: the brush classes; the rest of the file comes with items
+extend quake2
+
+MASK_MONSTERSOLID : i32 [ 1 | 131072 | 2 | 33554432 ]
+
+# g_misc.c path_corner: a train's or monster's waypoint
+func sp_path_corner [ e: Edict ]
+    if [ !e.targetname ]
+        g.dprintf[ 'path_corner with no targetname' ]
+        g.free_edict[ e ]
+        return
+    e.solid = SOLID_TRIGGER
+    e.touch = lambda path_corner_touch[]
+    e.mins = vec3f [ -8.0, -8.0, -8.0 ]
+    e.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+    e.svflags = e.svflags | SVF_NOCLIENT
+    g.world.link[ e ]
+
+func path_corner_touch [ e: Edict, other: Edict ]
+    if [ other.movetarget != e ] return
+    if [ other.enemy ] return
+    if [ e.pathtarget ]
+        savetarget : string [ e.target ]
+        e.target = e.pathtarget
+        g.use_targets[ e, other ]
+        e.target = savetarget
+    next : Edict [ (e.target) ? g.pick_target[ e.target ] : null ]
+    if [ next && (next.spawnflags & 1) != 0 ]
+        other.origin = vec3f [ next.origin.x, next.origin.y,
+            next.origin.z + next.mins.z - other.mins.z ]
+        next = g.pick_target[ next.target ]
+        other.event = EV_OTHER_TELEPORT
+    other.goalentity = next
+    other.movetarget = next
+    if [ e.wait != 0.0 ]
+        other.monsterinfo.pausetime = g.level.time + e.wait
+        other.monsterinfo.stand[ other ]
+        return
+    if [ !other.movetarget ]
+        other.monsterinfo.pausetime = g.level.time + 100000000.0
+        other.monsterinfo.stand[ other ]
+    el
+        other.ideal_yaw = vectoyaw[ v_sub[ other.goalentity.origin,
+                                           other.origin ] ]
+
+
+# ---- func_wall
+func func_wall_use [ e: Edict, other: Edict, activator: Edict ]
+    if [ e.solid == SOLID_NOT ]
+        e.solid = SOLID_BSP
+        e.svflags = e.svflags & ~SVF_NOCLIENT
+        g.kill_box[ e ]
+    el
+        e.solid = SOLID_NOT
+        e.svflags = e.svflags | SVF_NOCLIENT
+    g.world.link[ e ]
+    if [ (e.spawnflags & 2) == 0 ] e.use = null
+
+func sp_func_wall [ e: Edict ]
+    e.movetype = MOVETYPE_PUSH
+    g.setmodel[ e, e.model ]
+    if [ e.spawnflags & 8 ]  e.effects = e.effects | EF_ANIM_ALL
+    if [ e.spawnflags & 16 ] e.effects = e.effects | EF_ANIM_ALLFAST
+    # just a wall
+    if [ (e.spawnflags & 7) == 0 ]
+        e.solid = SOLID_BSP
+        g.world.link[ e ]
+        return
+    # it must be TRIGGER_SPAWN
+    if [ (e.spawnflags & 1) == 0 ] e.spawnflags = e.spawnflags | 1
+    if [ (e.spawnflags & 4) != 0 && (e.spawnflags & 2) == 0 ]
+        g.dprintf[ 'func_wall START_ON without TOGGLE' ]
+        e.spawnflags = e.spawnflags | 2
+    e.use = lambda func_wall_use[]
+    if [ e.spawnflags & 4 ]
+        e.solid = SOLID_BSP
+    el
+        e.solid = SOLID_NOT
+        e.svflags = e.svflags | SVF_NOCLIENT
+    g.world.link[ e ]
+
+# ---- func_object: a brush that falls once its support goes
+func func_object_touch [ e: Edict, other: Edict ]
+    # only squash thing we fall on top of
+    if [ !g.touch_plane_on ] return
+    if [ g.touch_plane.nz < 1.0 ] return
+    if [ other.takedamage == DAMAGE_NO ] return
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    t_damage[ other, e, e, zero, e.origin, zero, e.dmg, 1, 0, MOD_CRUSH ]
+
+func func_object_release [ e: Edict ]
+    e.movetype = MOVETYPE_TOSS
+    e.touch = lambda func_object_touch[]
+
+func func_object_use [ e: Edict, other: Edict,
+                       activator: Edict ]
+    e.solid = SOLID_BSP
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.use = null
+    g.kill_box[ e ]
+    func_object_release[ e ]
+
+func sp_func_object [ e: Edict ]
+    g.setmodel[ e, e.model ]
+    e.mins = vec3f [ e.mins.x + 1.0, e.mins.y + 1.0, e.mins.z + 1.0 ]
+    e.maxs = vec3f [ e.maxs.x - 1.0, e.maxs.y - 1.0, e.maxs.z - 1.0 ]
+    if [ e.dmg == 0 ] e.dmg = 100
+    if [ e.spawnflags == 0 ]
+        e.solid = SOLID_BSP
+        e.movetype = MOVETYPE_PUSH
+        e.think = lambda func_object_release[]
+        e.nextthink = g.level.time + 2.0 * FRAMETIME
+    el
+        e.solid = SOLID_NOT
+        e.movetype = MOVETYPE_PUSH
+        e.use = lambda func_object_use[]
+        e.svflags = e.svflags | SVF_NOCLIENT
+    if [ e.spawnflags & 2 ] e.effects = e.effects | EF_ANIM_ALL
+    if [ e.spawnflags & 4 ] e.effects = e.effects | EF_ANIM_ALLFAST
+    e.clipmask = MASK_MONSTERSOLID
+    g.world.link[ e ]
+
+# ---- func_explosive
+func func_explosive_explode [ e: Edict, inflictor: Edict,
+                              attacker: Edict ]
+    # bmodel origins are 0 0 0: the centre of its box
+    size : v_scale[ e.size, 0.5 ]
+    e.origin = v_add[ e.absmin, size ]
+    e.takedamage = DAMAGE_NO
+    if [ e.dmg != 0 ]
+        t_radius_damage[ e, attacker, f32[ e.dmg ], null, f32[ e.dmg + 40 ],
+                         MOD_EXPLOSIVE ]
+    e.velocity = v_scale[ v_norm[ v_sub[ e.origin, inflictor.origin ] ],
+                          150.0 ]
+    # start chunks towards the center
+    half : v_scale[ size, 0.5 ]
+    mass : i32 [ (e.mass != 0) ? e.mass : 75 ]
+    # big chunks
+    if [ mass >= 100 ]
+        count : i32 [ mass / 100 ]
+        if [ count > 8 ] count = 8
+        for [ i: i32 0, i < count, i += 1 ]
+            chunkorigin : vec3f [ e.origin.x + crandom[] * half.x,
+                                  e.origin.y + crandom[] * half.y,
+                                  e.origin.z + crandom[] * half.z ]
+            throw_debris[ e, 'models/objects/debris1/tris.md2', 1.0,
+                          chunkorigin ]
+    # small chunks
+    count : i32 [ mass / 25 ]
+    if [ count > 16 ] count = 16
+    for [ i: i32 0, i < count, i += 1 ]
+        chunkorigin : vec3f [ e.origin.x + crandom[] * half.x,
+                              e.origin.y + crandom[] * half.y,
+                              e.origin.z + crandom[] * half.z ]
+        throw_debris[ e, 'models/objects/debris2/tris.md2', 2.0, chunkorigin ]
+    g.use_targets[ e, attacker ]
+    if [ e.dmg != 0 ] become_explosion1[ e ]
+    el                g.free_edict[ e ]
+
+func func_explosive_use [ e: Edict, other: Edict,
+                          activator: Edict ]
+    func_explosive_explode[ e, e, other ]
+
+func func_explosive_spawn [ e: Edict, other: Edict,
+                            activator: Edict ]
+    e.solid = SOLID_BSP
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.use = null
+    g.kill_box[ e ]
+    g.world.link[ e ]
+
+func sp_func_explosive [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    e.movetype = MOVETYPE_PUSH
+    g.modelindex[ 'models/objects/debris1/tris.md2' ]
+    g.modelindex[ 'models/objects/debris2/tris.md2' ]
+    g.setmodel[ e, e.model ]
+    targeted : bool [ false ]
+    if [ e.spawnflags & 1 ]
+        e.svflags = e.svflags | SVF_NOCLIENT
+        e.solid = SOLID_NOT
+        e.use = lambda func_explosive_spawn[]
+    el
+        e.solid = SOLID_BSP
+        if [ e.targetname ]
+            e.use = lambda func_explosive_use[]
+            targeted = true
+    if [ e.spawnflags & 2 ] e.effects = e.effects | EF_ANIM_ALL
+    if [ e.spawnflags & 4 ] e.effects = e.effects | EF_ANIM_ALLFAST
+    if [ !targeted ]
+        if [ e.health == 0 ] e.health = 100
+        e.die = lambda func_explosive_explode[]
+        e.takedamage = DAMAGE_YES
+    g.world.link[ e ]
+
+# ---- gibs
+func velocity_for_damage [ damage: i32 ] -> vec3f
+    v : vec3f [ 100.0 * crandom[], 100.0 * crandom[], 200.0 + 100.0 * frand[] ]
+    if [ damage < 50 ] return v_scale[ v, 0.7 ]
+    return v_scale[ v, 1.2 ]
+
+func clip_gib_velocity [ e: Edict ]
+    e.velocity = vec3f [ clamp[ e.velocity.x, -300.0, 300.0 ],
+                         clamp[ e.velocity.y, -300.0, 300.0 ],
+                         clamp[ e.velocity.z, 200.0, 500.0 ] ]
+
+func gib_think [ e: Edict ]
+    e.frame += 1
+    e.nextthink = g.level.time + FRAMETIME
+    if [ e.frame == 10 ]
+        e.think = lambda remove_edict[]
+        e.nextthink = g.level.time + 8.0 + frand[] * 10.0
+
+func gib_touch [ e: Edict, other: Edict ]
+    if [ !e.groundentity ] return
+    e.touch = null
+    if [ g.touch_plane_on ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/fhit3.wav' ], 1.0,
+                 ATTN_NORM ]
+        normal_angles : vectoangles[ touch_normal[] ]
+        ax : angle_vectors[ normal_angles ]
+        e.angles = vectoangles[ ax.right ]
+        if [ e.modelindex == g.sm_meat_index ]
+            e.frame += 1
+            e.think = lambda gib_think[]
+            e.nextthink = g.level.time + FRAMETIME
+
+func gib_die [ e: Edict, inflictor: Edict, attacker: Edict, damage: i32,
+               point: vec3f ]
+    g.free_edict[ e ]
+
+func throw_gib [ e: Edict, gibname: string, damage: i32, kind: i32 ]
+    gib : g.spawn[]
+    size : v_scale[ e.size, 0.5 ]
+    origin : v_add[ e.absmin, size ]
+    gib.origin = vec3f [ origin.x + crandom[] * size.x,
+                         origin.y + crandom[] * size.y,
+                         origin.z + crandom[] * size.z ]
+    g.setmodel[ gib, gibname ]
+    gib.solid = SOLID_NOT
+    gib.effects = gib.effects | EF_GIB
+    gib.flags = gib.flags | FL_NO_KNOCKBACK
+    gib.takedamage = DAMAGE_YES
+    gib.die = lambda gib_die[]
+    vscale : f32 [ 1.0 ]
+    if [ kind == GIB_ORGANIC ]
+        gib.movetype = MOVETYPE_TOSS
+        gib.touch = lambda gib_touch[]
+        vscale = 0.5
+    el
+        gib.movetype = MOVETYPE_BOUNCE
+    gib.velocity = v_ma[ e.velocity, vscale, velocity_for_damage[ damage ] ]
+    clip_gib_velocity[ gib ]
+    gib.avelocity = vec3f [ frand[] * 600.0, frand[] * 600.0, frand[] * 600.0 ]
+    gib.think = lambda remove_edict[]
+    gib.nextthink = g.level.time + 10.0 + frand[] * 10.0
+    g.world.link[ gib ]
+
+func throw_head [ e: Edict, gibname: string, damage: i32, kind: i32 ]
+    e.skinnum = 0
+    e.frame = 0
+    e.mins = vec3f [ 0.0, 0.0, 0.0 ]
+    e.maxs = vec3f [ 0.0, 0.0, 0.0 ]
+    e.modelindex2 = 0
+    g.setmodel[ e, gibname ]
+    e.solid = SOLID_NOT
+    e.effects = e.effects | EF_GIB
+    e.effects = e.effects & ~EF_FLIES
+    e.sound = 0
+    e.flags = e.flags | FL_NO_KNOCKBACK
+    e.svflags = e.svflags & ~SVF_MONSTER
+    e.takedamage = DAMAGE_YES
+    e.die = lambda gib_die[]
+    vscale : f32 [ 1.0 ]
+    if [ kind == GIB_ORGANIC ]
+        e.movetype = MOVETYPE_TOSS
+        e.touch = lambda gib_touch[]
+        vscale = 0.5
+    el
+        e.movetype = MOVETYPE_BOUNCE
+    e.velocity = v_ma[ e.velocity, vscale, velocity_for_damage[ damage ] ]
+    clip_gib_velocity[ e ]
+    e.avelocity = vec3f [ e.avelocity.x, crandom[] * 600.0, e.avelocity.z ]
+    e.think = lambda remove_edict[]
+    e.nextthink = g.level.time + 10.0 + frand[] * 10.0
+    g.world.link[ e ]
+
+func throw_client_head [ e: Edict, damage: i32 ]
+    gibname : string [ 'models/objects/gibs/skull/tris.md2' ]
+    if [ rand[] & 1 ]
+        gibname = 'models/objects/gibs/head2/tris.md2'
+        # second skin is player
+        e.skinnum = 1
+    el
+        e.skinnum = 0
+    e.origin = vec3f [ e.origin.x, e.origin.y, e.origin.z + 32.0 ]
+    e.frame = 0
+    g.setmodel[ e, gibname ]
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 16.0 ]
+    e.takedamage = DAMAGE_NO
+    e.solid = SOLID_NOT
+    e.effects = EF_GIB
+    e.sound = 0
+    e.flags = e.flags | FL_NO_KNOCKBACK
+    e.movetype = MOVETYPE_BOUNCE
+    e.velocity = v_add[ e.velocity, velocity_for_damage[ damage ] ]
+    if [ e.client ]
+        # bodies in the queue don't have a client anymore
+        e.client.anim_priority = ANIM_DEATH
+        e.client.anim_end = e.frame
+    el
+        e.think = null
+        e.nextthink = 0.0
+    g.world.link[ e ]
+
+# ---- debris
+func debris_die [ e: Edict, inflictor: Edict, attacker: Edict, damage: i32,
+                  point: vec3f ]
+    g.free_edict[ e ]
+
+func throw_debris [ e: Edict, modelname: string, speed: f32, origin: vec3f ]
+    chunk : g.spawn[]
+    chunk.origin = origin
+    g.setmodel[ chunk, modelname ]
+    v : vec3f [ 100.0 * crandom[], 100.0 * crandom[], 100.0 + 100.0 * crandom[] ]
+    chunk.velocity = v_ma[ e.velocity, speed, v ]
+    chunk.movetype = MOVETYPE_BOUNCE
+    chunk.solid = SOLID_NOT
+    chunk.avelocity = vec3f [ frand[] * 600.0, frand[] * 600.0,
+                              frand[] * 600.0 ]
+    chunk.think = lambda remove_edict[]
+    chunk.nextthink = g.level.time + 5.0 + frand[] * 5.0
+    chunk.frame = 0
+    chunk.flags = 0
+    chunk.classname = 'debris'
+    chunk.takedamage = DAMAGE_YES
+    chunk.die = lambda debris_die[]
+    g.world.link[ chunk ]
+
+func become_explosion1 [ e: Edict ]
+    g.temp_entity_at[ TE_EXPLOSION1, e.origin ]
+    g.free_edict[ e ]
+
+func become_explosion2 [ e: Edict ]
+    g.temp_entity_at[ TE_EXPLOSION2, e.origin ]
+    g.free_edict[ e ]
+
+# ---- point_combat
+func point_combat_touch [ e: Edict, other: Edict ]
+    if [ other.movetarget != e ] return
+    if [ e.target ]
+        other.target = e.target
+        other.goalentity = g.pick_target[ other.target ]
+        other.movetarget = other.goalentity
+        if [ !other.goalentity ]
+            g.dprintf[ '{e.classname} target {e.target} does not exist' ]
+            other.movetarget = e
+        e.target = null
+    el [ (e.spawnflags & 1) != 0 && (other.flags & (FL_SWIM | FL_FLY)) == 0 ]
+        other.monsterinfo.pausetime = g.level.time + 100000000.0
+        other.monsterinfo.aiflags = other.monsterinfo.aiflags | AI_STAND_GROUND
+        other.monsterinfo.stand[ other ]
+    if [ other.movetarget == e ]
+        other.target = null
+        other.movetarget = null
+        other.goalentity = other.enemy
+        other.monsterinfo.aiflags = other.monsterinfo.aiflags & ~AI_COMBAT_POINT
+    if [ e.pathtarget ]
+        savetarget : string [ e.target ]
+        e.target = e.pathtarget
+        activator : other
+        if [ other.enemy && other.enemy.client ]              activator = other.enemy
+        el [ other.oldenemy && other.oldenemy.client ]        activator = other.oldenemy
+        el [ other.activator && other.activator.client ]      activator = other.activator
+        g.use_targets[ e, activator ]
+        e.target = savetarget
+
+func sp_point_combat [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    e.solid = SOLID_TRIGGER
+    e.touch = lambda point_combat_touch[]
+    e.mins = vec3f [ -8.0, -8.0, -16.0 ]
+    e.maxs = vec3f [ 8.0, 8.0, 16.0 ]
+    e.svflags = SVF_NOCLIENT
+    g.world.link[ e ]
+
+# ---- viewthing
+func th_viewthing [ e: Edict ]
+    e.frame = (e.frame + 1) % 7
+    e.nextthink = g.level.time + FRAMETIME
+
+func sp_viewthing [ e: Edict ]
+    g.dprintf[ 'viewthing spawned' ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.renderfx = RF_FRAMELERP
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.modelindex = g.modelindex[ 'models/objects/banner/tris.md2' ]
+    g.world.link[ e ]
+    e.nextthink = g.level.time + 0.5
+    e.think = lambda th_viewthing[]
+
+func sp_info_notnull [ e: Edict ]
+    e.absmin = e.origin
+    e.absmax = e.origin
+
+# ---- light: a targeted light toggles its style
+func light_use [ e: Edict, other: Edict, activator: Edict ]
+    if [ e.spawnflags & 1 ]
+        g.set_lightstyle[ e.style, 109 ]
+        e.spawnflags = e.spawnflags & ~1
+    el
+        g.set_lightstyle[ e.style, 97 ]
+        e.spawnflags = e.spawnflags | 1
+
+func sp_light_point [ e: Edict ]
+    # no targeted lights in deathmatch, because they cause global messages
+    if [ !e.targetname || g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    if [ e.style >= 32 ]
+        e.use = lambda light_use[]
+        if [ e.spawnflags & 1 ] g.set_lightstyle[ e.style, 97 ]
+        el                      g.set_lightstyle[ e.style, 109 ]
+
+# ---- misc_explobox: the barrel
+func barrel_touch [ e: Edict, other: Edict ]
+    if [ !other.groundentity || other.groundentity == e ] return
+    ratio : f32 [ f32[ other.mass ] / f32[ e.mass ] ]
+    v : v_sub[ e.origin, other.origin ]
+    m_walkmove[ e, vectoyaw[ v ], 20.0 * ratio * FRAMETIME ]
+
+func barrel_chunk [ e: Edict, model: string, spd: f32 ]
+    org : vec3f [ e.origin.x + crandom[] * e.size.x,
+                  e.origin.y + crandom[] * e.size.y,
+                  e.origin.z + crandom[] * e.size.z ]
+    throw_debris[ e, model, spd, org ]
+
+func barrel_explode [ e: Edict ]
+    t_radius_damage[ e, e.activator, f32[ e.dmg ], null, f32[ e.dmg + 40 ],
+                     MOD_BARREL ]
+    save : vec3f [ e.origin ]
+    e.origin = v_ma[ e.absmin, 0.5, e.size ]
+    # a few big chunks
+    spd : f32 [ 1.5 * f32[ e.dmg ] / 200.0 ]
+    barrel_chunk[ e, 'models/objects/debris1/tris.md2', spd ]
+    barrel_chunk[ e, 'models/objects/debris1/tris.md2', spd ]
+    # bottom corners
+    spd = 1.75 * f32[ e.dmg ] / 200.0
+    org : vec3f [ e.absmin ]
+    throw_debris[ e, 'models/objects/debris3/tris.md2', spd, org ]
+    org = vec3f [ e.absmin.x + e.size.x, e.absmin.y, e.absmin.z ]
+    throw_debris[ e, 'models/objects/debris3/tris.md2', spd, org ]
+    org = vec3f [ e.absmin.x, e.absmin.y + e.size.y, e.absmin.z ]
+    throw_debris[ e, 'models/objects/debris3/tris.md2', spd, org ]
+    org = vec3f [ e.absmin.x + e.size.x, e.absmin.y + e.size.y, e.absmin.z ]
+    throw_debris[ e, 'models/objects/debris3/tris.md2', spd, org ]
+    # a bunch of little chunks
+    spd = 2.0 * f32[ e.dmg ] / 200.0
+    for [ i: i32 0, i < 8, i += 1 ]
+        barrel_chunk[ e, 'models/objects/debris2/tris.md2', spd ]
+    e.origin = save
+    if [ e.groundentity ] become_explosion2[ e ]
+    el                    become_explosion1[ e ]
+
+func barrel_delay [ e: Edict, inflictor: Edict, attacker: Edict,
+                    damage: i32, point: vec3f ]
+    e.takedamage = DAMAGE_NO
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    e.think = lambda barrel_explode[]
+    e.activator = attacker
+
+func sp_misc_explobox [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    g.modelindex[ 'models/objects/debris1/tris.md2' ]
+    g.modelindex[ 'models/objects/debris2/tris.md2' ]
+    g.modelindex[ 'models/objects/debris3/tris.md2' ]
+    e.solid = SOLID_BBOX
+    e.movetype = MOVETYPE_STEP
+    e.model = 'models/objects/barrels/tris.md2'
+    e.modelindex = g.modelindex[ e.model ]
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 40.0 ]
+    if [ e.mass == 0 ] e.mass = 400
+    if [ e.health == 0 ] e.health = 10
+    if [ e.dmg == 0 ] e.dmg = 150
+    e.die = lambda barrel_delay[]
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.aiflags = AI_NOSTEP
+    e.touch = lambda barrel_touch[]
+    e.think = lambda m_droptofloor[]
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    g.world.link[ e ]
+
+# ---- the decorations with a frame loop
+func frame_loop [ e: Edict, first: i32, last: i32 ]
+    e.frame += 1
+    if [ e.frame >= last ] e.frame = first
+    e.nextthink = g.level.time + FRAMETIME
+
+func misc_blackhole_use [ e: Edict, other: Edict, activator: Edict ]
+    g.free_edict[ e ]
+
+func misc_blackhole_think [ e: Edict ]
+    frame_loop[ e, 0, 19 ]
+
+func sp_misc_blackhole [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_NOT
+    e.mins = vec3f [ -64.0, -64.0, 0.0 ]
+    e.maxs = vec3f [ 64.0, 64.0, 8.0 ]
+    e.modelindex = g.modelindex[ 'models/objects/black/tris.md2' ]
+    e.renderfx = RF_TRANSLUCENT
+    e.use = lambda misc_blackhole_use[]
+    e.think = lambda misc_blackhole_think[]
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    g.world.link[ e ]
+
+func misc_eastertank_think [ e: Edict ]
+    frame_loop[ e, 254, 293 ]
+
+func sp_misc_eastertank [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -32.0, -32.0, -16.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 32.0 ]
+    e.modelindex = g.modelindex[ 'models/monsters/tank/tris.md2' ]
+    e.frame = 254
+    e.think = lambda misc_eastertank_think[]
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    g.world.link[ e ]
+
+func misc_easterchick_think [ e: Edict ]
+    frame_loop[ e, 208, 247 ]
+
+func sp_misc_easterchick [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -32.0, -32.0, 0.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 32.0 ]
+    e.modelindex = g.modelindex[ 'models/monsters/bitch/tris.md2' ]
+    e.frame = 208
+    e.think = lambda misc_easterchick_think[]
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    g.world.link[ e ]
+
+func misc_easterchick2_think [ e: Edict ]
+    frame_loop[ e, 248, 287 ]
+
+func sp_misc_easterchick2 [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -32.0, -32.0, 0.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 32.0 ]
+    e.modelindex = g.modelindex[ 'models/monsters/bitch/tris.md2' ]
+    e.frame = 248
+    e.think = lambda misc_easterchick2_think[]
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    g.world.link[ e ]
+
+# monster_commander_body: the tank commander's decapitated body
+func commander_body_think [ e: Edict ]
+    e.frame += 1
+    if [ e.frame < 24 ] e.nextthink = g.level.time + FRAMETIME
+    el                  e.nextthink = 0.0
+    if [ e.frame == 22 ]
+        g.sound[ e, CHAN_BODY, g.soundindex[ 'tank/thud.wav' ], 1.0, ATTN_NORM ]
+
+func commander_body_use [ e: Edict, other: Edict, activator: Edict ]
+    e.think = lambda commander_body_think[]
+    e.nextthink = g.level.time + FRAMETIME
+    g.sound[ e, CHAN_BODY, g.soundindex[ 'tank/pain.wav' ], 1.0, ATTN_NORM ]
+
+func commander_body_drop [ e: Edict ]
+    e.movetype = MOVETYPE_TOSS
+    e.origin = vec3f [ e.origin.x, e.origin.y, e.origin.z + 2.0 ]
+
+func sp_monster_commander_body [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.model = 'models/monsters/commandr/tris.md2'
+    e.modelindex = g.modelindex[ e.model ]
+    e.mins = vec3f [ -32.0, -32.0, 0.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, 48.0 ]
+    e.use = lambda commander_body_use[]
+    e.takedamage = DAMAGE_YES
+    e.flags = FL_GODMODE
+    e.renderfx = e.renderfx | RF_FRAMELERP
+    g.world.link[ e ]
+    g.soundindex[ 'tank/thud.wav' ]
+    g.soundindex[ 'tank/pain.wav' ]
+    e.think = lambda commander_body_drop[]
+    e.nextthink = g.level.time + 5.0 * FRAMETIME
+
+func misc_banner_think [ e: Edict ]
+    e.frame = (e.frame + 1) % 16
+    e.nextthink = g.level.time + FRAMETIME
+
+func sp_misc_banner [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_NOT
+    e.modelindex = g.modelindex[ 'models/objects/banner/tris.md2' ]
+    e.frame = rand[] % 16
+    g.world.link[ e ]
+    e.think = lambda misc_banner_think[]
+    e.nextthink = g.level.time + FRAMETIME
+
+# misc_deadsoldier: the dead player model in six poses
+func misc_deadsoldier_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                            damage: i32, point: vec3f ]
+    if [ e.health > -80 ] return
+    g.sound[ e, CHAN_BODY, g.soundindex[ 'misc/udeath.wav' ], 1.0, ATTN_NORM ]
+    for [ n: i32 0, n < 4, n += 1 ]
+        throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                   GIB_ORGANIC ]
+    throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage, GIB_ORGANIC ]
+
+func sp_misc_deadsoldier [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/deadbods/dude/tris.md2' ]
+    # defaults to frame 0
+    if [ e.spawnflags & 2 ]        e.frame = 1
+    el [ e.spawnflags & 4 ]        e.frame = 2
+    el [ e.spawnflags & 8 ]        e.frame = 3
+    el [ e.spawnflags & 16 ]       e.frame = 4
+    el [ e.spawnflags & 32 ]       e.frame = 5
+    el                             e.frame = 0
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 16.0 ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.svflags = e.svflags | SVF_MONSTER | SVF_DEADMONSTER
+    e.die = lambda misc_deadsoldier_die[]
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags | AI_GOOD_GUY
+    g.world.link[ e ]
+
+# misc_viper and misc_strogg_ship: flybys that ride a path like a train
+func misc_flyby_use [ e: Edict, other: Edict, activator: Edict ]
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.use = lambda train_use[]
+    train_use[ e, other, activator ]
+
+func sp_misc_flyby [ e: Edict, model: string ]
+    if [ !e.target ]
+        g.dprintf[ '{e.classname} without a target' ]
+        g.free_edict[ e ]
+        return
+    if [ e.speed == 0.0 ] e.speed = 300.0
+    e.movetype = MOVETYPE_PUSH
+    e.solid = SOLID_NOT
+    e.modelindex = g.modelindex[ model ]
+    e.mins = vec3f [ -16.0, -16.0, 0.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.think = lambda func_train_find[]
+    e.nextthink = g.level.time + FRAMETIME
+    e.use = lambda misc_flyby_use[]
+    e.svflags = e.svflags | SVF_NOCLIENT
+    e.moveinfo.accel = e.speed
+    e.moveinfo.decel = e.speed
+    e.moveinfo.speed = e.speed
+    g.world.link[ e ]
+
+func sp_misc_viper [ e: Edict ]
+    sp_misc_flyby[ e, 'models/ships/viper/tris.md2' ]
+
+func sp_misc_strogg_ship [ e: Edict ]
+    sp_misc_flyby[ e, 'models/ships/strogg1/tris.md2' ]
+
+func sp_misc_bigviper [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -176.0, -120.0, -24.0 ]
+    e.maxs = vec3f [ 176.0, 120.0, 72.0 ]
+    e.modelindex = g.modelindex[ 'models/ships/bigviper/tris.md2' ]
+    g.world.link[ e ]
+
+# misc_viper_bomb
+func misc_viper_bomb_touch [ e: Edict, other: Edict ]
+    g.use_targets[ e, e.activator ]
+    e.origin = vec3f [ e.origin.x, e.origin.y, e.absmin.z + 1.0 ]
+    t_radius_damage[ e, e, f32[ e.dmg ], null, f32[ e.dmg + 40 ], MOD_BOMB ]
+    become_explosion2[ e ]
+
+func misc_viper_bomb_prethink [ e: Edict ]
+    e.groundentity = null
+    diff : f32 [ e.timestamp - g.level.time ]
+    if [ diff < -1.0 ] diff = -1.0
+    v : v_scale[ e.moveinfo.dir, 1.0 + diff ]
+    v = vec3f [ v.x, v.y, diff ]
+    roll : f32 [ e.angles.z ]
+    e.angles = vectoangles[ v ]
+    e.angles = vec3f [ e.angles.x, e.angles.y, roll + 10.0 ]
+
+func misc_viper_bomb_use [ e: Edict, other: Edict, activator: Edict ]
+    e.solid = SOLID_BBOX
+    e.svflags = e.svflags & ~SVF_NOCLIENT
+    e.effects = e.effects | EF_ROCKET
+    e.use = null
+    e.movetype = MOVETYPE_TOSS
+    e.prethink = lambda misc_viper_bomb_prethink[]
+    e.touch = lambda misc_viper_bomb_touch[]
+    e.activator = activator
+    viper : g.find[ null, EField.classname, 'misc_viper' ]
+    if [ !viper ] return
+    e.velocity = v_scale[ viper.moveinfo.dir, viper.moveinfo.speed ]
+    e.timestamp = g.level.time
+    e.moveinfo.dir = viper.moveinfo.dir
+
+func sp_misc_viper_bomb [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_NOT
+    e.mins = vec3f [ -8.0, -8.0, -8.0 ]
+    e.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+    e.modelindex = g.modelindex[ 'models/objects/bomb/tris.md2' ]
+    if [ e.dmg == 0 ] e.dmg = 1000
+    e.use = lambda misc_viper_bomb_use[]
+    e.svflags = e.svflags | SVF_NOCLIENT
+    g.world.link[ e ]
+
+# misc_satellite_dish
+func misc_satellite_dish_think [ e: Edict ]
+    e.frame += 1
+    if [ e.frame < 38 ] e.nextthink = g.level.time + FRAMETIME
+
+func misc_satellite_dish_use [ e: Edict, other: Edict, activator: Edict ]
+    e.frame = 0
+    e.think = lambda misc_satellite_dish_think[]
+    e.nextthink = g.level.time + FRAMETIME
+
+func sp_misc_satellite_dish [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -64.0, -64.0, 0.0 ]
+    e.maxs = vec3f [ 64.0, 64.0, 128.0 ]
+    e.modelindex = g.modelindex[ 'models/objects/satellite/tris.md2' ]
+    e.use = lambda misc_satellite_dish_use[]
+    g.world.link[ e ]
+
+func sp_light_mine [ e: Edict, model: string ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ model ]
+    g.world.link[ e ]
+
+# misc_gib_arm, leg, head: for the target_spawner
+func sp_misc_gib [ e: Edict, model: string ]
+    g.setmodel[ e, model ]
+    e.solid = SOLID_NOT
+    e.effects = e.effects | EF_GIB
+    e.takedamage = DAMAGE_YES
+    e.die = lambda gib_die[]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_MONSTER
+    e.deadflag = DEAD_DEAD
+    e.avelocity = vec3f [ frand[] * 200.0, frand[] * 200.0, frand[] * 200.0 ]
+    e.think = lambda remove_edict[]
+    e.nextthink = g.level.time + 30.0
+    g.world.link[ e ]
+
+# target_character and target_string: a readout of digits
+func sp_target_character [ e: Edict ]
+    e.movetype = MOVETYPE_PUSH
+    g.setmodel[ e, e.model ]
+    e.solid = SOLID_BSP
+    e.frame = 12
+    g.world.link[ e ]
+
+func target_string_use [ e: Edict, other: Edict, activator: Edict ]
+    l : i32 [ e.message.count ]
+    t : e.teammaster
+    while [ t ]
+        if [ t.count != 0 ]
+            n : i32 [ t.count - 1 ]
+            if [ n > l ]
+                t.frame = 12
+            el
+                c : i32 [ e.message[ n ] ]
+                if [ c >= 48 && c <= 57 ]      t.frame = c - 48
+                el [ c == 45 ]                 t.frame = 10
+                el [ c == 58 ]                 t.frame = 11
+                el                             t.frame = 12
+        t = t.teamchain
+
+func sp_target_string [ e: Edict ]
+    if [ !e.message ] e.message = ''
+    e.use = lambda target_string_use[]
+
+# func_clock: a time of day clock, or a timer up or down
+func func_clock_reset [ e: Edict ]
+    e.activator = null
+    if [ e.spawnflags & 1 ]
+        e.health = 0
+        e.wait = f32[ e.count ]
+    el [ e.spawnflags & 2 ]
+        e.health = e.count
+        e.wait = 0.0
+
+func two_digits [ n: i32 ] -> string
+    if [ n < 10 ] return '0{n}'
+    return '{n}'
+
+func func_clock_format_countdown [ e: Edict ]
+    if [ e.style == 0 ]
+        e.message = '{e.health}'
+    el [ e.style == 1 ]
+        e.message = '{e.health / 60}:{two_digits[ e.health % 60 ]}'
+    el [ e.style == 2 ]
+        h : i32 [ e.health / 3600 ]
+        m : i32 [ (e.health - h * 3600) / 60 ]
+        e.message = '{h}:{two_digits[ m ]}:{two_digits[ e.health % 60 ]}'
+
+func func_clock_think [ e: Edict ]
+    if [ !e.enemy ]
+        e.enemy = g.find[ null, EField.targetname, e.target ]
+        if [ !e.enemy ] return
+    if [ e.spawnflags & 1 ]
+        func_clock_format_countdown[ e ]
+        e.health += 1
+    el [ e.spawnflags & 2 ]
+        func_clock_format_countdown[ e ]
+        e.health -= 1
+    el
+        now : i64 [ time[ null ] ]
+        secs : i32 [ now % 86400 ]
+        e.message = '{secs / 3600}:{two_digits[ (secs / 60) % 60 ]}:{two_digits[ secs % 60 ]}'
+    e.enemy.message = e.message
+    if [ e.enemy.use ] e.enemy.use[ e.enemy, e, e ]
+    if [ ((e.spawnflags & 1) != 0 && f32[ e.health ] > e.wait) ||
+         ((e.spawnflags & 2) != 0 && f32[ e.health ] < e.wait) ]
+        if [ e.pathtarget ]
+            savetarget : string [ e.target ]
+            savemessage : string [ e.message ]
+            e.target = e.pathtarget
+            e.message = null
+            g.use_targets[ e, e.activator ]
+            e.target = savetarget
+            e.message = savemessage
+        if [ (e.spawnflags & 8) == 0 ] return
+        func_clock_reset[ e ]
+        if [ e.spawnflags & 4 ] return
+    e.nextthink = g.level.time + 1.0
+
+func func_clock_use [ e: Edict, other: Edict, activator: Edict ]
+    if [ (e.spawnflags & 8) == 0 ] e.use = null
+    if [ e.activator ] return
+    e.activator = activator
+    e.think[ e ]
+
+func sp_func_clock [ e: Edict ]
+    if [ !e.target ]
+        g.dprintf[ '{e.classname} with no target' ]
+        g.free_edict[ e ]
+        return
+    if [ (e.spawnflags & 2) != 0 && e.count == 0 ]
+        g.dprintf[ '{e.classname} with no count' ]
+        g.free_edict[ e ]
+        return
+    if [ (e.spawnflags & 1) != 0 && e.count == 0 ] e.count = 60 * 60
+    func_clock_reset[ e ]
+    e.message = ''
+    e.think = lambda func_clock_think[]
+    if [ e.spawnflags & 4 ] e.use = lambda func_clock_use[]
+    el                      e.nextthink = g.level.time + 1.0
+
+# ---- the teleporter
+func teleporter_touch [ e: Edict, other: Edict ]
+    if [ !other.client ] return
+    dest : g.find[ null, EField.targetname, e.target ]
+    if [ !dest ]
+        g.dprintf[ 'Could not find destination' ]
+        return
+    # unlink to make sure it can't possibly interfere with KillBox
+    g.world.unlink[ other ]
+    other.origin = vec3f [ dest.origin.x, dest.origin.y, dest.origin.z + 10.0 ]
+    other.old_origin = other.origin
+    # clear the velocity and hold them in place briefly
+    other.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+    other.client.ps.pm_time = 160 >> 3
+    other.client.ps.pm_flags = other.client.ps.pm_flags | PMF_TIME_TELEPORT
+    # draw the teleport splash at source and on the player
+    e.owner.event = EV_PLAYER_TELEPORT
+    other.event = EV_PLAYER_TELEPORT
+    # set angles
+    other.client.ps.delta_angles = v_sub[ dest.angles,
+                                          other.client.resp.cmd_angles ]
+    other.angles = vec3f [ 0.0, 0.0, 0.0 ]
+    other.client.ps.viewangles = dest.angles
+    other.client.v_angle = dest.angles
+    # kill anything at the destination
+    g.kill_box[ other ]
+    g.world.link[ other ]
+
+func sp_misc_teleporter [ e: Edict ]
+    if [ !e.target ]
+        g.dprintf[ 'teleporter without a target.' ]
+        g.free_edict[ e ]
+        return
+    g.setmodel[ e, 'models/objects/dmspot/tris.md2' ]
+    e.skinnum = 1
+    e.effects = EF_TELEPORTER
+    e.sound = g.soundindex[ 'world/amb10.wav' ]
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -32.0, -32.0, -24.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, -16.0 ]
+    g.world.link[ e ]
+    trig : g.spawn[]
+    trig.touch = lambda teleporter_touch[]
+    trig.solid = SOLID_TRIGGER
+    trig.target = e.target
+    trig.owner = e
+    trig.origin = e.origin
+    trig.mins = vec3f [ -8.0, -8.0, 8.0 ]
+    trig.maxs = vec3f [ 8.0, 8.0, 24.0 ]
+    g.world.link[ trig ]
+
+func sp_misc_teleporter_dest [ e: Edict ]
+    g.setmodel[ e, 'models/objects/dmspot/tris.md2' ]
+    e.skinnum = 0
+    e.solid = SOLID_BBOX
+    e.mins = vec3f [ -32.0, -32.0, -24.0 ]
+    e.maxs = vec3f [ 32.0, 32.0, -16.0 ]
+    g.world.link[ e ]
+
+# ---- the spawn table for g_misc, the player spots and the monsters
+func spawn_class [ c: string, e: Edict ] -> bool
+    if [ c == 'point_combat' ]            sp_point_combat[ e ]
+    el [ c == 'viewthing' ]               sp_viewthing[ e ]
+    el [ c == 'info_notnull' ]            sp_info_notnull[ e ]
+    el [ c == 'light' ]                   sp_light_point[ e ]
+    el [ c == 'misc_explobox' ]           sp_misc_explobox[ e ]
+    el [ c == 'misc_blackhole' ]          sp_misc_blackhole[ e ]
+    el [ c == 'misc_eastertank' ]         sp_misc_eastertank[ e ]
+    el [ c == 'misc_easterchick' ]        sp_misc_easterchick[ e ]
+    el [ c == 'misc_easterchick2' ]       sp_misc_easterchick2[ e ]
+    el [ c == 'monster_commander_body' ]  sp_monster_commander_body[ e ]
+    el [ c == 'misc_banner' ]             sp_misc_banner[ e ]
+    el [ c == 'misc_deadsoldier' ]        sp_misc_deadsoldier[ e ]
+    el [ c == 'misc_viper' ]              sp_misc_viper[ e ]
+    el [ c == 'misc_bigviper' ]           sp_misc_bigviper[ e ]
+    el [ c == 'misc_viper_bomb' ]         sp_misc_viper_bomb[ e ]
+    el [ c == 'misc_strogg_ship' ]        sp_misc_strogg_ship[ e ]
+    el [ c == 'misc_satellite_dish' ]     sp_misc_satellite_dish[ e ]
+    el [ c == 'light_mine1' ]
+        sp_light_mine[ e, 'models/objects/minelite/light1/tris.md2' ]
+    el [ c == 'light_mine2' ]
+        sp_light_mine[ e, 'models/objects/minelite/light2/tris.md2' ]
+    el [ c == 'misc_gib_arm' ]
+        sp_misc_gib[ e, 'models/objects/gibs/arm/tris.md2' ]
+    el [ c == 'misc_gib_leg' ]
+        sp_misc_gib[ e, 'models/objects/gibs/leg/tris.md2' ]
+    el [ c == 'misc_gib_head' ]
+        sp_misc_gib[ e, 'models/objects/gibs/head/tris.md2' ]
+    el [ c == 'target_character' ]        sp_target_character[ e ]
+    el [ c == 'target_string' ]           sp_target_string[ e ]
+    el [ c == 'func_clock' ]              sp_func_clock[ e ]
+    el [ c == 'misc_teleporter' ]         sp_misc_teleporter[ e ]
+    el [ c == 'misc_teleporter_dest' ]    sp_misc_teleporter_dest[ e ]
+    el [ c == 'info_player_start' ]       sp_info_player_start[ e ]
+    el [ c == 'info_player_deathmatch' ]  sp_info_player_deathmatch[ e ]
+    el [ c == 'info_player_coop' ]        sp_info_player_coop[ e ]
+    el [ c == 'info_player_intermission' ] return true
+    el                                    return spawn_monster[ c, e ]
+    return true
+
+# the monsters, file by file
+func spawn_monster [ c: string, e: Edict ] -> bool
+    if [ c == 'monster_soldier_light' ]  sp_monster_soldier_light[ e ]
+    el [ c == 'monster_soldier' ]        sp_monster_soldier[ e ]
+    el [ c == 'monster_soldier_ss' ]     sp_monster_soldier_ss[ e ]
+    el [ c == 'monster_infantry' ]       sp_monster_infantry[ e ]
+    el [ c == 'monster_gunner' ]         sp_monster_gunner[ e ]
+    el [ c == 'monster_berserk' ]        sp_monster_berserk[ e ]
+    el [ c == 'monster_gladiator' ]      sp_monster_gladiator[ e ]
+    el [ c == 'monster_flipper' ]        sp_monster_flipper[ e ]
+    el [ c == 'monster_flyer' ]          sp_monster_flyer[ e ]
+    el [ c == 'monster_hover' ]          sp_monster_hover[ e ]
+    el [ c == 'monster_medic' ]          sp_monster_medic[ e ]
+    el [ c == 'monster_mutant' ]         sp_monster_mutant[ e ]
+    el [ c == 'monster_parasite' ]       sp_monster_parasite[ e ]
+    el [ c == 'monster_tank' ]           sp_monster_tank[ e ]
+    el [ c == 'monster_tank_commander' ] sp_monster_tank[ e ]
+    el [ c == 'monster_chick' ]          sp_monster_chick[ e ]
+    el [ c == 'monster_brain' ]          sp_monster_brain[ e ]
+    el [ c == 'misc_insane' ]            sp_misc_insane[ e ]
+    el [ c == 'monster_floater' ]        sp_monster_floater[ e ]
+    el [ c == 'monster_supertank' ]      sp_monster_supertank[ e ]
+    el [ c == 'misc_actor' ]             sp_misc_actor[ e ]
+    el [ c == 'target_actor' ]           sp_target_actor[ e ]
+    el [ c == 'monster_boss2' ]          sp_monster_boss2[ e ]
+    el [ c == 'monster_jorg' ]           sp_monster_jorg[ e ]
+    el [ c == 'monster_makron' ]         sp_monster_makron[ e ]
+    el [ c == 'monster_boss3_stand' ]    sp_monster_boss3_stand[ e ]
+    el [ c == 'turret_breach' ]          sp_turret_breach[ e ]
+    el [ c == 'turret_base' ]            sp_turret_base[ e ]
+    el [ c == 'turret_driver' ]          sp_turret_driver[ e ]
+    el                                   return false
+    return true

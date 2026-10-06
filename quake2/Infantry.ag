@@ -1,0 +1,423 @@
+# m_infantry.c: the infantry (machinegun, a punch up close)
+extend quake2
+
+infantry_sound_pain1 : i32
+infantry_sound_pain2 : i32
+infantry_sound_die1 : i32
+infantry_sound_die2 : i32
+infantry_sound_gunshot : i32
+infantry_sound_weapon_cock : i32
+infantry_sound_punch_swing : i32
+infantry_sound_punch_hit : i32
+infantry_sound_sight : i32
+infantry_sound_search : i32
+infantry_sound_idle : i32
+infantry_move_stand : MMove
+infantry_move_fidget : MMove
+infantry_move_walk : MMove
+infantry_move_run : MMove
+infantry_move_pain1 : MMove
+infantry_move_pain2 : MMove
+infantry_move_death1 : MMove
+infantry_move_death2 : MMove
+infantry_move_death3 : MMove
+infantry_move_duck : MMove
+infantry_move_attack1 : MMove
+infantry_move_attack2 : MMove
+
+func infantry_stand [ e: Edict ]
+    e.monsterinfo.currentmove = infantry_move_stand
+
+func infantry_fidget [ e: Edict ]
+    e.monsterinfo.currentmove = infantry_move_fidget
+    g.sound[ e, CHAN_VOICE, infantry_sound_idle, 1.0, ATTN_IDLE ]
+
+func infantry_walk [ e: Edict ]
+    e.monsterinfo.currentmove = infantry_move_walk
+
+func infantry_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = infantry_move_stand
+    el
+        e.monsterinfo.currentmove = infantry_move_run
+
+func infantry_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ (rand[] % 2) == 0 ]
+        e.monsterinfo.currentmove = infantry_move_pain1
+        g.sound[ e, CHAN_VOICE, infantry_sound_pain1, 1.0,
+                 ATTN_NORM ]
+    el
+        e.monsterinfo.currentmove = infantry_move_pain2
+        g.sound[ e, CHAN_VOICE, infantry_sound_pain2, 1.0,
+                 ATTN_NORM ]
+
+# the dying machinegun sweep: an angle per flash
+infantry_aimangles : vec f32
+
+func infantry_machinegun [ e: Edict ]
+    flash_number : i32 [ 0 ]
+    start : vec3f [ 0.0, 0.0, 0.0 ]
+    forward : vec3f [ 0.0, 0.0, 0.0 ]
+    # attak111 is 194
+    if [ e.frame == 194 ]
+        flash_number = MZ2_INFANTRY_MACHINEGUN_1
+        ax : angle_vectors[ e.angles ]
+        start = project_source[ e.origin, flash_offset[ flash_number ],
+                                ax.forward, ax.right ]
+        if [ e.enemy ]
+            target : v_ma[ e.enemy.origin, -0.2, e.enemy.velocity ]
+            target = vec3f [ target.x, target.y,
+                             target.z + f32[ e.enemy.viewheight ] ]
+            forward = v_norm[ v_sub[ target, start ] ]
+        el
+            forward = ax.forward
+    el
+        # death211 is 155
+        flash_number = MZ2_INFANTRY_MACHINEGUN_2 + (e.frame - 155)
+        ax : angle_vectors[ e.angles ]
+        start = project_source[ e.origin, flash_offset[ flash_number ],
+                                ax.forward, ax.right ]
+        i : i32 [ (flash_number - MZ2_INFANTRY_MACHINEGUN_2) * 3 ]
+        aim : vec3f [ e.angles.x - infantry_aimangles[ i ],
+                      e.angles.y - infantry_aimangles[ i + 1 ],
+                      e.angles.z - infantry_aimangles[ i + 2 ] ]
+        bx : angle_vectors[ aim ]
+        forward = bx.forward
+    monster_fire_bullet[ e, start, forward, 3, 4,
+                         DEFAULT_BULLET_HSPREAD, DEFAULT_BULLET_VSPREAD,
+                         flash_number ]
+
+func infantry_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_BODY, infantry_sound_sight, 1.0, ATTN_NORM ]
+
+func infantry_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    g.world.link[ e ]
+    m_fly_check[ e ]
+
+func infantry_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                    damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    n : i32 [ rand[] % 3 ]
+    if [ n == 0 ]
+        e.monsterinfo.currentmove = infantry_move_death1
+        g.sound[ e, CHAN_VOICE, infantry_sound_die2, 1.0, ATTN_NORM ]
+    el [ n == 1 ]
+        e.monsterinfo.currentmove = infantry_move_death2
+        g.sound[ e, CHAN_VOICE, infantry_sound_die1, 1.0, ATTN_NORM ]
+    el
+        e.monsterinfo.currentmove = infantry_move_death3
+        g.sound[ e, CHAN_VOICE, infantry_sound_die2, 1.0, ATTN_NORM ]
+
+func infantry_duck_down [ e: Edict ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_DUCKED ] return
+    mi.aiflags = mi.aiflags | AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z - 32.0 ]
+    e.takedamage = DAMAGE_YES
+    mi.pausetime = g.level.time + 1.0
+    g.world.link[ e ]
+
+func infantry_duck_hold [ e: Edict ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func infantry_duck_up [ e: Edict ]
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags & ~AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z + 32.0 ]
+    e.takedamage = DAMAGE_AIM
+    g.world.link[ e ]
+
+func infantry_dodge [ e: Edict, attacker: Edict, eta: f32 ]
+    if [ frand[] > 0.25 ] return
+    if [ !e.enemy ] e.enemy = attacker
+    e.monsterinfo.currentmove = infantry_move_duck
+
+func infantry_cock_gun [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, infantry_sound_weapon_cock, 1.0,
+             ATTN_NORM ]
+    n : i32 [ (rand[] & 15) + 3 + 7 ]
+    e.monsterinfo.pausetime = g.level.time + f32[ n ] * FRAMETIME
+
+func infantry_fire [ e: Edict ]
+    infantry_machinegun[ e ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func infantry_swing [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, infantry_sound_punch_swing, 1.0,
+             ATTN_NORM ]
+
+func infantry_smack [ e: Edict ]
+    aim : vec3f [ MELEE_DISTANCE, 0.0, 0.0 ]
+    if [ fire_hit[ e, aim, 5 + (rand[] % 5), 50 ] ]
+        g.sound[ e, CHAN_WEAPON, infantry_sound_punch_hit, 1.0,
+                 ATTN_NORM ]
+
+func infantry_attack [ e: Edict ]
+    if [ ai_range[ e, e.enemy ] == RANGE_MELEE ]
+        e.monsterinfo.currentmove = infantry_move_attack2
+    el
+        e.monsterinfo.currentmove = infantry_move_attack1
+
+func sp_monster_infantry [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    infantry_moves[]
+    infantry_sound_pain1 = g.soundindex[ 'infantry/infpain1.wav' ]
+    infantry_sound_pain2 = g.soundindex[ 'infantry/infpain2.wav' ]
+    infantry_sound_die1  = g.soundindex[ 'infantry/infdeth1.wav' ]
+    infantry_sound_die2  = g.soundindex[ 'infantry/infdeth2.wav' ]
+    infantry_sound_gunshot     = g.soundindex[ 'infantry/infatck1.wav' ]
+    infantry_sound_weapon_cock = g.soundindex[ 'infantry/infatck3.wav' ]
+    infantry_sound_punch_swing = g.soundindex[ 'infantry/infatck2.wav' ]
+    infantry_sound_punch_hit   = g.soundindex[ 'infantry/melee2.wav' ]
+    infantry_sound_sight  = g.soundindex[ 'infantry/infsght1.wav' ]
+    infantry_sound_search = g.soundindex[ 'infantry/infsrch1.wav' ]
+    infantry_sound_idle   = g.soundindex[ 'infantry/infidle1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/infantry/tris.md2' ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+    e.health = 100
+    e.gib_health = -40
+    e.mass = 200
+    e.pain = lambda infantry_pain[]
+    e.die  = lambda infantry_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda infantry_stand[]
+    mi.walk   = lambda infantry_walk[]
+    mi.run    = lambda infantry_run[]
+    mi.dodge  = lambda infantry_dodge[]
+    mi.attack = lambda infantry_attack[]
+    mi.melee  = null
+    mi.sight  = lambda infantry_sight[]
+    mi.idle   = lambda infantry_fidget[]
+    g.world.link[ e ]
+    mi.currentmove = infantry_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_infantry.h
+func infantry_moves []
+    if [ infantry_move_stand ] return
+    infantry_aimangles = vec f32 [] [ 0.0, 5.0, 0.0, 10.0, 15.0, 0.0,
+        20.0, 25.0, 0.0, 25.0, 35.0, 0.0, 30.0, 40.0, 0.0,
+        30.0, 45.0, 0.0, 25.0, 50.0, 0.0, 20.0, 40.0, 0.0,
+        15.0, 35.0, 0.0, 40.0, 35.0, 0.0, 70.0, 35.0, 0.0,
+        90.0, 35.0, 0.0 ]
+    v : vec MFrame []
+    mf[ v, 22, lambda ai_stand[], 0.0, null ]
+    # stand50 .. stand71
+    infantry_move_stand = MMove [ firstframe: 50, lastframe: 71,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 1.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 1.0, null ]
+    mf[ v, 1, lambda ai_stand[], 3.0, null ]
+    mf[ v, 1, lambda ai_stand[], 6.0, null ]
+    mf[ v, 1, lambda ai_stand[], 3.0, null ]
+    mf[ v, 4, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 1.0, null ]
+    mf[ v, 4, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 1.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -1.0, null ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 1.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -2.0, null ]
+    mf[ v, 3, lambda ai_stand[], 1.0, null ]
+    mf[ v, 1, lambda ai_stand[], -1.0, null ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -1.0, null ]
+    mf[ v, 5, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -1.0, null ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], 1.0, null ]
+    mf[ v, 2, lambda ai_stand[], 0.0, null ]
+    mf[ v, 2, lambda ai_stand[], -1.0, null ]
+    mf[ v, 1, lambda ai_stand[], 0.0, null ]
+    mf[ v, 1, lambda ai_stand[], -3.0, null ]
+    mf[ v, 1, lambda ai_stand[], -2.0, null ]
+    mf[ v, 2, lambda ai_stand[], -3.0, null ]
+    mf[ v, 1, lambda ai_stand[], -2.0, null ]
+    # stand01 .. stand49
+    infantry_move_fidget = MMove [ firstframe: 1, lastframe: 49,
+        frames: v, endfunc: lambda infantry_stand[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 2, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    mf[ v, 1, lambda ai_walk[], 6.0, null ]
+    mf[ v, 4, lambda ai_walk[], 4.0, null ]
+    mf[ v, 1, lambda ai_walk[], 5.0, null ]
+    # walk03 .. walk14
+    infantry_move_walk = MMove [ firstframe: 74, lastframe: 85,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 10.0, null ]
+    mf[ v, 1, lambda ai_run[], 20.0, null ]
+    mf[ v, 1, lambda ai_run[], 5.0, null ]
+    mf[ v, 1, lambda ai_run[], 7.0, null ]
+    mf[ v, 1, lambda ai_run[], 30.0, null ]
+    mf[ v, 1, lambda ai_run[], 35.0, null ]
+    mf[ v, 1, lambda ai_run[], 2.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    # run01 .. run08
+    infantry_move_run = MMove [ firstframe: 92, lastframe: 99,
+        frames: v, endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    # pain101 .. pain110
+    infantry_move_pain1 = MMove [ firstframe: 100, lastframe: 109,
+        frames: v, endfunc: lambda infantry_run[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    # pain201 .. pain210
+    infantry_move_pain2 = MMove [ firstframe: 110, lastframe: 119,
+        frames: v, endfunc: lambda infantry_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 2, lambda ai_move[], 2.0, null ]
+    mf[ v, 2, lambda ai_move[], 9.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 2, lambda ai_move[], -3.0, null ]
+    # death101 .. death120
+    infantry_move_death1 = MMove [ firstframe: 125, lastframe: 144,
+        frames: v, endfunc: lambda infantry_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], -2.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -3.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -1.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -2.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda infantry_machinegun[] ]
+    mf[ v, 2, lambda ai_move[], 2.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], 3.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -10.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -7.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -8.0, lambda infantry_machinegun[] ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # death201 .. death225
+    infantry_move_death2 = MMove [ firstframe: 145, lastframe: 169,
+        frames: v, endfunc: lambda infantry_dead[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -11.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -11.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    # death301 .. death309
+    infantry_move_death3 = MMove [ firstframe: 170, lastframe: 178,
+        frames: v, endfunc: lambda infantry_dead[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -2.0, lambda infantry_duck_down[] ]
+    mf[ v, 1, lambda ai_move[], -5.0, lambda infantry_duck_hold[] ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, lambda infantry_duck_up[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # duck01 .. duck05
+    infantry_move_duck = MMove [ firstframe: 120, lastframe: 124,
+        frames: v, endfunc: lambda infantry_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 2, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda infantry_cock_gun[] ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 2, lambda ai_charge[], 1.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 1.0, lambda infantry_fire[] ]
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 1, lambda ai_charge[], -1.0, null ]
+    mf[ v, 1, lambda ai_charge[], -2.0, null ]
+    mf[ v, 1, lambda ai_charge[], -3.0, null ]
+    # attak101 .. attak115
+    infantry_move_attack1 = MMove [ firstframe: 184, lastframe: 198,
+        frames: v, endfunc: lambda infantry_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 6.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda infantry_swing[] ]
+    mf[ v, 1, lambda ai_charge[], 8.0, null ]
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 1, lambda ai_charge[], 8.0, lambda infantry_smack[] ]
+    mf[ v, 1, lambda ai_charge[], 6.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    # attak201 .. attak208
+    infantry_move_attack2 = MMove [ firstframe: 199, lastframe: 206,
+        frames: v, endfunc: lambda infantry_run[] ]
+

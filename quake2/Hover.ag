@@ -1,0 +1,316 @@
+# m_hover.c: the icarus (a hovering blaster)
+extend quake2
+
+hover_sound_pain1 : i32
+hover_sound_pain2 : i32
+hover_sound_death1 : i32
+hover_sound_death2 : i32
+hover_sound_sight : i32
+hover_sound_search1 : i32
+hover_sound_search2 : i32
+hover_move_stand : MMove
+hover_move_stop1 : MMove
+hover_move_stop2 : MMove
+hover_move_takeoff : MMove
+hover_move_pain3 : MMove
+hover_move_pain2 : MMove
+hover_move_pain1 : MMove
+hover_move_land : MMove
+hover_move_forward : MMove
+hover_move_walk : MMove
+hover_move_run : MMove
+hover_move_death1 : MMove
+hover_move_backward : MMove
+hover_move_start_attack : MMove
+hover_move_attack1 : MMove
+hover_move_end_attack : MMove
+
+func hover_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, hover_sound_sight, 1.0, ATTN_NORM ]
+
+func hover_search [ e: Edict ]
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, hover_sound_search1, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, hover_sound_search2, 1.0, ATTN_NORM ]
+
+func hover_reattack [ e: Edict ]
+    if [ e.enemy.health > 0 && visible[ e, e.enemy ] && frand[] <= 0.6 ]
+        e.monsterinfo.currentmove = hover_move_attack1
+        return
+    e.monsterinfo.currentmove = hover_move_end_attack
+
+func hover_fire_blaster [ e: Edict ]
+    # attak104 is 200
+    effect : i32 [ (e.frame == 200) ? EF_HYPERBLASTER : 0 ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_HOVER_BLASTER_1 ],
+                            ax.forward, ax.right ]
+    end : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_sub[ end, start ]
+    monster_fire_blaster[ e, start, dir, 1, 1000, MZ2_HOVER_BLASTER_1,
+                          effect ]
+
+func hover_stand [ e: Edict ]
+    e.monsterinfo.currentmove = hover_move_stand
+
+func hover_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = hover_move_stand
+    el
+        e.monsterinfo.currentmove = hover_move_run
+
+func hover_walk [ e: Edict ]
+    e.monsterinfo.currentmove = hover_move_walk
+
+func hover_start_attack [ e: Edict ]
+    e.monsterinfo.currentmove = hover_move_start_attack
+
+func hover_attack [ e: Edict ]
+    e.monsterinfo.currentmove = hover_move_attack1
+
+func hover_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ damage <= 25 ]
+        if [ frand[] < 0.5 ]
+            g.sound[ e, CHAN_VOICE, hover_sound_pain1, 1.0, ATTN_NORM ]
+            e.monsterinfo.currentmove = hover_move_pain3
+        el
+            g.sound[ e, CHAN_VOICE, hover_sound_pain2, 1.0, ATTN_NORM ]
+            e.monsterinfo.currentmove = hover_move_pain2
+    el
+        g.sound[ e, CHAN_VOICE, hover_sound_pain1, 1.0, ATTN_NORM ]
+        e.monsterinfo.currentmove = hover_move_pain1
+
+func hover_deadthink [ e: Edict ]
+    if [ !e.groundentity && g.level.time < e.timestamp ]
+        e.nextthink = g.level.time + FRAMETIME
+        return
+    become_explosion1[ e ]
+
+func hover_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.think = lambda hover_deadthink[]
+    e.nextthink = g.level.time + FRAMETIME
+    e.timestamp = g.level.time + 15.0
+    g.world.link[ e ]
+
+func hover_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    if [ frand[] < 0.5 ]
+        g.sound[ e, CHAN_VOICE, hover_sound_death1, 1.0, ATTN_NORM ]
+    el
+        g.sound[ e, CHAN_VOICE, hover_sound_death2, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = hover_move_death1
+
+func sp_monster_hover [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    hover_moves[]
+    hover_sound_pain1   = g.soundindex[ 'hover/hovpain1.wav' ]
+    hover_sound_pain2   = g.soundindex[ 'hover/hovpain2.wav' ]
+    hover_sound_death1  = g.soundindex[ 'hover/hovdeth1.wav' ]
+    hover_sound_death2  = g.soundindex[ 'hover/hovdeth2.wav' ]
+    hover_sound_sight   = g.soundindex[ 'hover/hovsght1.wav' ]
+    hover_sound_search1 = g.soundindex[ 'hover/hovsrch1.wav' ]
+    hover_sound_search2 = g.soundindex[ 'hover/hovsrch2.wav' ]
+    g.soundindex[ 'hover/hovatck1.wav' ]
+    e.sound = g.soundindex[ 'hover/hovidle1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/hover/tris.md2' ]
+    e.mins = vec3f [ -24.0, -24.0, -24.0 ]
+    e.maxs = vec3f [ 24.0, 24.0, 32.0 ]
+    e.health = 240
+    e.gib_health = -100
+    e.mass = 150
+    e.pain = lambda hover_pain[]
+    e.die  = lambda hover_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda hover_stand[]
+    mi.walk   = lambda hover_walk[]
+    mi.run    = lambda hover_run[]
+    mi.attack = lambda hover_start_attack[]
+    mi.sight  = lambda hover_sight[]
+    mi.search = lambda hover_search[]
+    g.world.link[ e ]
+    mi.currentmove = hover_move_stand
+    mi.scale = 1.0
+    flymonster_start[ e ]
+
+# the moves, built once: frame numbers from m_hover.h
+func hover_moves []
+    if [ hover_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 30, lambda ai_stand[], 0.0, null ]
+    # stand01 .. stand30
+    hover_move_stand = MMove [
+        firstframe: 0, lastframe: 29, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # stop101 .. stop109
+    hover_move_stop1 = MMove [
+        firstframe: 65, lastframe: 73, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_move[], 0.0, null ]
+    # stop201 .. stop208
+    hover_move_stop2 = MMove [
+        firstframe: 74, lastframe: 81, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 3, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], 2.0, null ]
+    mf[ v, 2, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -9.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 2, lambda ai_move[], 2.0, null ]
+    mf[ v, 3, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # takeof01 .. takeof30
+    hover_move_takeoff = MMove [
+        firstframe: 82, lastframe: 111, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 9, lambda ai_move[], 0.0, null ]
+    # pain301 .. pain309
+    hover_move_pain3 = MMove [
+        firstframe: 153, lastframe: 161, frames: v,
+        endfunc: lambda hover_run[] ]
+    v = vec MFrame []
+    mf[ v, 12, lambda ai_move[], 0.0, null ]
+    # pain201 .. pain212
+    hover_move_pain2 = MMove [
+        firstframe: 141, lastframe: 152, frames: v,
+        endfunc: lambda hover_run[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], -8.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    mf[ v, 1, lambda ai_move[], 1.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    # pain101 .. pain128
+    hover_move_pain1 = MMove [
+        firstframe: 113, lastframe: 140, frames: v,
+        endfunc: lambda hover_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    # land01 .. land01
+    hover_move_land = MMove [
+        firstframe: 112, lastframe: 112, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 35, lambda ai_move[], 0.0, null ]
+    # forwrd01 .. forwrd35
+    hover_move_forward = MMove [
+        firstframe: 30, lastframe: 64, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 35, lambda ai_walk[], 4.0, null ]
+    # forwrd01 .. forwrd35
+    hover_move_walk = MMove [
+        firstframe: 30, lastframe: 64, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 35, lambda ai_run[], 10.0, null ]
+    # forwrd01 .. forwrd35
+    hover_move_run = MMove [
+        firstframe: 30, lastframe: 64, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 6, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -10.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    # death101 .. death111
+    hover_move_death1 = MMove [
+        firstframe: 162, lastframe: 172, frames: v,
+        endfunc: lambda hover_dead[] ]
+    v = vec MFrame []
+    mf[ v, 24, lambda ai_move[], 0.0, null ]
+    # backwd01 .. backwd24
+    hover_move_backward = MMove [
+        firstframe: 173, lastframe: 196, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_charge[], 1.0, null ]
+    # attak101 .. attak103
+    hover_move_start_attack = MMove [
+        firstframe: 197, lastframe: 199, frames: v,
+        endfunc: lambda hover_attack[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_charge[], -10.0, lambda hover_fire_blaster[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda hover_reattack[] ]
+    # attak104 .. attak106
+    hover_move_attack1 = MMove [
+        firstframe: 200, lastframe: 202, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_charge[], 1.0, null ]
+    # attak107 .. attak108
+    hover_move_end_attack = MMove [
+        firstframe: 203, lastframe: 204, frames: v,
+        endfunc: lambda hover_run[] ]
+

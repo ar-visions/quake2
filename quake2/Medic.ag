@@ -1,0 +1,414 @@
+# m_medic.c: the medic (blaster; a cable revives the dead)
+extend quake2
+
+medic_sound_idle1 : i32
+medic_sound_pain1 : i32
+medic_sound_pain2 : i32
+medic_sound_die : i32
+medic_sound_sight : i32
+medic_sound_search : i32
+medic_sound_hook_launch : i32
+medic_sound_hook_hit : i32
+medic_sound_hook_heal : i32
+medic_sound_hook_retract : i32
+# the cable's start for frames attack42 .. 51, x y z each
+medic_cable_offsets : vec f32
+medic_move_stand : MMove
+medic_move_walk : MMove
+medic_move_run : MMove
+medic_move_pain1 : MMove
+medic_move_pain2 : MMove
+medic_move_death : MMove
+medic_move_duck : MMove
+medic_move_attackHyperBlaster : MMove
+medic_move_attackBlaster : MMove
+medic_move_attackCable : MMove
+
+func medic_find_dead_monster [ e: Edict ] -> Edict
+    best : Edict [ null ]
+    ent : g.findradius[ null, e.origin, 1024.0 ]
+    while [ ent ]
+        if [ ent != e && (ent.svflags & SVF_MONSTER) != 0 &&
+             (ent.monsterinfo.aiflags & AI_GOOD_GUY) == 0 &&
+             !ent.owner && ent.health <= 0 && ent.nextthink == 0.0 &&
+             visible[ e, ent ] ]
+            if [ !best || ent.max_health > best.max_health ] best = ent
+        ent = g.findradius[ ent, e.origin, 1024.0 ]
+    return best
+
+func medic_idle [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, medic_sound_idle1, 1.0, ATTN_IDLE ]
+    ent : medic_find_dead_monster[ e ]
+    if [ ent ]
+        e.enemy = ent
+        e.enemy.owner = e
+        e.monsterinfo.aiflags = e.monsterinfo.aiflags | AI_MEDIC
+        found_target[ e ]
+
+func medic_search [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, medic_sound_search, 1.0, ATTN_IDLE ]
+    if [ !e.oldenemy ]
+        ent : medic_find_dead_monster[ e ]
+        if [ ent ]
+            e.oldenemy = e.enemy
+            e.enemy = ent
+            e.enemy.owner = e
+            e.monsterinfo.aiflags = e.monsterinfo.aiflags | AI_MEDIC
+            found_target[ e ]
+
+func medic_sight [ e: Edict, other: Edict ]
+    g.sound[ e, CHAN_VOICE, medic_sound_sight, 1.0, ATTN_NORM ]
+
+func medic_stand [ e: Edict ]
+    e.monsterinfo.currentmove = medic_move_stand
+
+func medic_walk [ e: Edict ]
+    e.monsterinfo.currentmove = medic_move_walk
+
+func medic_run [ e: Edict ]
+    mi : e.monsterinfo
+    if [ (mi.aiflags & AI_MEDIC) == 0 ]
+        ent : medic_find_dead_monster[ e ]
+        if [ ent ]
+            e.oldenemy = e.enemy
+            e.enemy = ent
+            e.enemy.owner = e
+            mi.aiflags = mi.aiflags | AI_MEDIC
+            found_target[ e ]
+            return
+    if [ mi.aiflags & AI_STAND_GROUND ]
+        mi.currentmove = medic_move_stand
+    el
+        mi.currentmove = medic_move_run
+
+func medic_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ frand[] < 0.5 ]
+        e.monsterinfo.currentmove = medic_move_pain1
+        g.sound[ e, CHAN_VOICE, medic_sound_pain1, 1.0, ATTN_NORM ]
+    el
+        e.monsterinfo.currentmove = medic_move_pain2
+        g.sound[ e, CHAN_VOICE, medic_sound_pain2, 1.0, ATTN_NORM ]
+
+func medic_fire_blaster [ e: Edict ]
+    # attack9 185, 12 188; 19 195, 22 198, 25 201, 28 204
+    effect : i32 [ 0 ]
+    if [ e.frame == 185 || e.frame == 188 ]
+        effect = EF_BLASTER
+    el [ e.frame == 195 || e.frame == 198 || e.frame == 201 ||
+         e.frame == 204 ]
+        effect = EF_HYPERBLASTER
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_MEDIC_BLASTER_1 ],
+                            ax.forward, ax.right ]
+    end : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_sub[ end, start ]
+    monster_fire_blaster[ e, start, dir, 2, 1000, MZ2_MEDIC_BLASTER_1,
+                          effect ]
+
+func medic_dead [ e: Edict ]
+    e.mins = vec3f [ -16.0, -16.0, -24.0 ]
+    e.maxs = vec3f [ 16.0, 16.0, -8.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func medic_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                 damage: i32, point: vec3f ]
+    # if we had a pending patient, free him up for another medic
+    if [ e.enemy && e.enemy.owner == e ] e.enemy.owner = null
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        for [ n: i32 0, n < 2, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/bone/tris.md2', damage,
+                       GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2',
+                       damage, GIB_ORGANIC ]
+        throw_head[ e, 'models/objects/gibs/head2/tris.md2', damage,
+                    GIB_ORGANIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, medic_sound_die, 1.0, ATTN_NORM ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    e.monsterinfo.currentmove = medic_move_death
+
+func medic_duck_down [ e: Edict ]
+    mi : e.monsterinfo
+    if [ mi.aiflags & AI_DUCKED ] return
+    mi.aiflags = mi.aiflags | AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z - 32.0 ]
+    e.takedamage = DAMAGE_YES
+    mi.pausetime = g.level.time + 1.0
+    g.world.link[ e ]
+
+func medic_duck_hold [ e: Edict ]
+    mi : e.monsterinfo
+    if [ g.level.time >= mi.pausetime ]
+        mi.aiflags = mi.aiflags & ~AI_HOLD_FRAME
+    el
+        mi.aiflags = mi.aiflags | AI_HOLD_FRAME
+
+func medic_duck_up [ e: Edict ]
+    e.monsterinfo.aiflags = e.monsterinfo.aiflags & ~AI_DUCKED
+    e.maxs = vec3f [ e.maxs.x, e.maxs.y, e.maxs.z + 32.0 ]
+    e.takedamage = DAMAGE_AIM
+    g.world.link[ e ]
+
+func medic_dodge [ e: Edict, attacker: Edict, eta: f32 ]
+    if [ frand[] > 0.25 ] return
+    if [ !e.enemy ] e.enemy = attacker
+    e.monsterinfo.currentmove = medic_move_duck
+
+func medic_continue [ e: Edict ]
+    if [ visible[ e, e.enemy ] && frand[] <= 0.95 ]
+        e.monsterinfo.currentmove = medic_move_attackHyperBlaster
+
+func medic_hook_launch [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, medic_sound_hook_launch, 1.0, ATTN_NORM ]
+
+func medic_cable_attack [ e: Edict ]
+    if [ !e.enemy.inuse ] return
+    ax : angle_vectors[ e.angles ]
+    # attack42 is 218
+    i : i32 [ (e.frame - 218) * 3 ]
+    offset : vec3f [ medic_cable_offsets[ i ],
+                     medic_cable_offsets[ i + 1 ],
+                     medic_cable_offsets[ i + 2 ] ]
+    start : project_source[ e.origin, offset, ax.forward, ax.right ]
+    # check for max distance
+    dir : v_sub[ start, e.enemy.origin ]
+    if [ v_len[ dir ] > 256.0 ] return
+    # check for min/max pitch
+    angles : vectoangles[ dir ]
+    if [ angles.x < -180.0 ]
+        angles = vec3f [ angles.x + 360.0, angles.y, angles.z ]
+    if [ fabs[ angles.x ] > 45.0 ] return
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    tr : g.world.trace[ start, zero, zero, e.enemy.origin, e,
+                        MASK_SHOT ]
+    if [ tr.fraction != 1.0 && tr.ent != e.enemy ] return
+    # attack43 219, attack44 220, attack50 226
+    if [ e.frame == 219 ]
+        g.sound[ e.enemy, CHAN_AUTO, medic_sound_hook_hit, 1.0,
+                 ATTN_NORM ]
+        e.enemy.monsterinfo.aiflags = e.enemy.monsterinfo.aiflags |
+                                      AI_RESURRECTING
+    el [ e.frame == 226 ]
+        e.enemy.spawnflags = 0
+        e.enemy.monsterinfo.aiflags = 0
+        e.enemy.target = null
+        e.enemy.targetname = null
+        e.enemy.combattarget = null
+        e.enemy.deathtarget = null
+        e.enemy.owner = e
+        g.call_spawn[ e.enemy ]
+        e.enemy.owner = null
+        if [ e.enemy.think ]
+            e.enemy.nextthink = g.level.time
+            e.enemy.think[ e.enemy ]
+        e.enemy.monsterinfo.aiflags = e.enemy.monsterinfo.aiflags |
+                                      AI_RESURRECTING
+        if [ e.oldenemy && e.oldenemy.client ]
+            e.enemy.enemy = e.oldenemy
+            found_target[ e.enemy ]
+    el [ e.frame == 220 ]
+        g.sound[ e, CHAN_WEAPON, medic_sound_hook_heal, 1.0, ATTN_NORM ]
+    # adjust start for beam origin being in middle of a segment
+    start = v_ma[ start, 8.0, ax.forward ]
+    # adjust end z for the end spot: the monster is dead
+    end : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.absmin.z + e.enemy.size.z / 2.0 ]
+    g.temp_entity_beam[ TE_MEDIC_CABLE_ATTACK, e, start, end ]
+
+func medic_hook_retract [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, medic_sound_hook_retract, 1.0, ATTN_NORM ]
+    e.enemy.monsterinfo.aiflags = e.enemy.monsterinfo.aiflags &
+                                  ~AI_RESURRECTING
+
+func medic_attack [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_MEDIC ]
+        e.monsterinfo.currentmove = medic_move_attackCable
+    el
+        e.monsterinfo.currentmove = medic_move_attackBlaster
+
+func medic_checkattack [ e: Edict ] -> bool
+    if [ e.monsterinfo.aiflags & AI_MEDIC ]
+        medic_attack[ e ]
+        return true
+    return m_check_attack[ e ]
+
+func sp_monster_medic [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    medic_moves[]
+    medic_sound_idle1  = g.soundindex[ 'medic/idle.wav' ]
+    medic_sound_pain1  = g.soundindex[ 'medic/medpain1.wav' ]
+    medic_sound_pain2  = g.soundindex[ 'medic/medpain2.wav' ]
+    medic_sound_die    = g.soundindex[ 'medic/meddeth1.wav' ]
+    medic_sound_sight  = g.soundindex[ 'medic/medsght1.wav' ]
+    medic_sound_search = g.soundindex[ 'medic/medsrch1.wav' ]
+    medic_sound_hook_launch  = g.soundindex[ 'medic/medatck2.wav' ]
+    medic_sound_hook_hit     = g.soundindex[ 'medic/medatck3.wav' ]
+    medic_sound_hook_heal    = g.soundindex[ 'medic/medatck4.wav' ]
+    medic_sound_hook_retract = g.soundindex[ 'medic/medatck5.wav' ]
+    g.soundindex[ 'medic/medatck1.wav' ]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    e.modelindex = g.modelindex[ 'models/monsters/medic/tris.md2' ]
+    e.mins = vec3f [ -24.0, -24.0, -24.0 ]
+    e.maxs = vec3f [ 24.0, 24.0, 32.0 ]
+    e.health = 300
+    e.gib_health = -130
+    e.mass = 400
+    e.pain = lambda medic_pain[]
+    e.die  = lambda medic_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda medic_stand[]
+    mi.walk   = lambda medic_walk[]
+    mi.run    = lambda medic_run[]
+    mi.dodge  = lambda medic_dodge[]
+    mi.attack = lambda medic_attack[]
+    mi.melee  = null
+    mi.sight  = lambda medic_sight[]
+    mi.idle   = lambda medic_idle[]
+    mi.search = lambda medic_search[]
+    mi.checkattack = lambda medic_checkattack[]
+    g.world.link[ e ]
+    mi.currentmove = medic_move_stand
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# the moves, built once: frame numbers from m_medic.h
+func medic_moves []
+    if [ medic_move_stand ] return
+    medic_cable_offsets = vec f32 [] [ 45.0, -9.2, 15.5,
+        48.4, -9.7, 15.2, 47.8, -9.8, 15.8, 47.3, -9.3, 14.3,
+        45.4, -10.1, 13.1,
+        41.9, -12.7, 12.0, 37.8, -15.8, 11.2, 34.3, -18.4, 10.7,
+        32.7, -19.7, 10.4, 32.7, -19.7, 10.4 ]
+    v : vec MFrame []
+    mf[ v, 1, lambda ai_stand[], 0.0, lambda medic_idle[] ]
+    mf[ v, 89, lambda ai_stand[], 0.0, null ]
+    # wait1 .. wait90
+    medic_move_stand = MMove [
+        firstframe: 12, lastframe: 101, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_walk[], 6.2, null ]
+    mf[ v, 1, lambda ai_walk[], 18.1, null ]
+    mf[ v, 1, lambda ai_walk[], 1.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.0, null ]
+    mf[ v, 1, lambda ai_walk[], 10.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.0, null ]
+    mf[ v, 1, lambda ai_walk[], 11.0, null ]
+    mf[ v, 1, lambda ai_walk[], 11.6, null ]
+    mf[ v, 1, lambda ai_walk[], 2.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.9, null ]
+    mf[ v, 1, lambda ai_walk[], 14.0, null ]
+    mf[ v, 1, lambda ai_walk[], 9.3, null ]
+    # walk1 .. walk12
+    medic_move_walk = MMove [
+        firstframe: 0, lastframe: 11, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 18.0, null ]
+    mf[ v, 1, lambda ai_run[], 22.5, null ]
+    mf[ v, 1, lambda ai_run[], 25.4, null ]
+    mf[ v, 1, lambda ai_run[], 23.4, null ]
+    mf[ v, 1, lambda ai_run[], 24.0, null ]
+    mf[ v, 1, lambda ai_run[], 35.6, null ]
+    # run1 .. run6
+    medic_move_run = MMove [
+        firstframe: 102, lastframe: 107, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 8, lambda ai_move[], 0.0, null ]
+    # paina1 .. paina8
+    medic_move_pain1 = MMove [
+        firstframe: 108, lastframe: 115, frames: v,
+        endfunc: lambda medic_run[] ]
+    v = vec MFrame []
+    mf[ v, 15, lambda ai_move[], 0.0, null ]
+    # painb1 .. painb15
+    medic_move_pain2 = MMove [
+        firstframe: 116, lastframe: 130, frames: v,
+        endfunc: lambda medic_run[] ]
+    v = vec MFrame []
+    mf[ v, 30, lambda ai_move[], 0.0, null ]
+    # death1 .. death30
+    medic_move_death = MMove [
+        firstframe: 147, lastframe: 176, frames: v,
+        endfunc: lambda medic_dead[] ]
+    v = vec MFrame []
+    mf[ v, 2, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, lambda medic_duck_down[] ]
+    mf[ v, 1, lambda ai_move[], -1.0, lambda medic_duck_hold[] ]
+    mf[ v, 2, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, lambda medic_duck_up[] ]
+    mf[ v, 9, lambda ai_move[], -1.0, null ]
+    # duck1 .. duck16
+    medic_move_duck = MMove [
+        firstframe: 131, lastframe: 146, frames: v,
+        endfunc: lambda medic_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 12, lambda ai_charge[], 0.0, lambda medic_fire_blaster[] ]
+    # attack15 .. attack30
+    medic_move_attackHyperBlaster = MMove [
+        firstframe: 191, lastframe: 206, frames: v,
+        endfunc: lambda medic_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 2, lambda ai_charge[], 5.0, null ]
+    mf[ v, 1, lambda ai_charge[], 3.0, null ]
+    mf[ v, 1, lambda ai_charge[], 2.0, null ]
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda medic_fire_blaster[] ]
+    mf[ v, 2, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda medic_fire_blaster[] ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda medic_continue[] ]
+    # attack1 .. attack14
+    medic_move_attackBlaster = MMove [
+        firstframe: 177, lastframe: 190, frames: v,
+        endfunc: lambda medic_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], 4.4, null ]
+    mf[ v, 1, lambda ai_charge[], 4.7, null ]
+    mf[ v, 1, lambda ai_charge[], 5.0, null ]
+    mf[ v, 1, lambda ai_charge[], 6.0, null ]
+    mf[ v, 1, lambda ai_charge[], 4.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda medic_hook_launch[] ]
+    mf[ v, 9, lambda ai_move[], 0.0, lambda medic_cable_attack[] ]
+    mf[ v, 1, lambda ai_move[], -15.0, lambda medic_hook_retract[] ]
+    mf[ v, 1, lambda ai_move[], -1.5, null ]
+    mf[ v, 1, lambda ai_move[], -1.2, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.3, null ]
+    mf[ v, 1, lambda ai_move[], 0.7, null ]
+    mf[ v, 1, lambda ai_move[], 1.2, null ]
+    mf[ v, 1, lambda ai_move[], 1.3, null ]
+    # attack33 .. attack60
+    medic_move_attackCable = MMove [
+        firstframe: 209, lastframe: 236, frames: v,
+        endfunc: lambda medic_run[] ]
+

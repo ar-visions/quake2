@@ -1,0 +1,767 @@
+# cl_fx.c and cl_tent.c: particles, explosions, beams, lights
+extend quake2
+
+MAX_PARTICLES    : i32 [ 4096 ]
+MAX_EXPLOSIONS   : i32 [ 32 ]
+PARTICLE_GRAVITY : f32 [ 40.0 ]
+EX_FREE  : i32 [ 0 ]
+EX_MISC  : i32 [ 2 ]
+EX_FLASH : i32 [ 3 ]
+EX_POLY  : i32 [ 5 ]
+
+class Explosion
+    public kind      : i32
+    public model     : Md2
+    public origin    : vec3f
+    public angles    : vec3f
+    public flags     : i32
+    public alpha     : f32
+    public frames    : i32
+    public light     : f32
+    public lightcolor : vec3f
+    public start     : f32
+    public baseframe : i32
+
+# a cable of model segments, or a laser line, alive for a while
+class Beam
+    public entity  : i32
+    public model   : Md2
+    public endtime : f32
+    public from    : vec3f
+    public to      : vec3f
+    public color   : i32
+
+class Effects
+    public md2   : Md2Set
+    public bsp   : BspMap
+    public time  : f32
+    # thirteen floats: time, org, vel, accel, colour, alpha, its rate
+    public parts  : vec f32
+    public part_n : i32
+    public explosions : vec Explosion
+    public beams  : vec Beam
+    public lasers : vec Beam
+    # the frame's lights, seven floats: x y z intensity r g b
+    public lights  : vec f32
+    public light_n : i32
+    # muzzle flashes, eight floats: x y z radius r g b die
+    public flashes : vec f32
+    # per edict, five floats: lerp origin, trail count, fly stop
+    public cent   : vec f32
+    # CL_FlyParticles' turning rates, a random three a normal
+    public avel   : vec f32
+
+    func init []
+        parts = vec f32 [ MAX_PARTICLES * 13 ]
+        explosions = vec Explosion []
+        for [ i: i32 0, i < MAX_EXPLOSIONS, i += 1 ]
+            explosions.push[ Explosion [ ] ]
+        beams  = vec Beam []
+        lasers = vec Beam []
+        lights = vec f32 [ 64 * 7 ]
+        flashes = vec f32 []
+        cent = vec f32 [ 1024 * 5 ]
+        avel = vec f32 [ 162 * 3 ]
+        for [ i: i32 0, i < 162 * 3, i += 1 ]
+            avel[ i ] = f32[ rand[] & 255 ] * 0.01
+
+    # ---- particles
+    func spawn [ org: vec3f, vel: vec3f, accel: vec3f, color: i32,
+                 alpha: f32, alphavel: f32 ]
+        if [ part_n >= MAX_PARTICLES ] return
+        o : i32 [ part_n * 13 ]
+        parts[ o ]      = time
+        parts[ o + 1 ]  = org.x
+        parts[ o + 2 ]  = org.y
+        parts[ o + 3 ]  = org.z
+        parts[ o + 4 ]  = vel.x
+        parts[ o + 5 ]  = vel.y
+        parts[ o + 6 ]  = vel.z
+        parts[ o + 7 ]  = accel.x
+        parts[ o + 8 ]  = accel.y
+        parts[ o + 9 ]  = accel.z
+        parts[ o + 10 ] = color
+        parts[ o + 11 ] = alpha
+        parts[ o + 12 ] = alphavel
+        part_n += 1
+
+    # three numbers in -scale..scale
+    func spread [ scale: f32 ] -> vec3f
+        return vec3f [ crandom[] * scale, crandom[] * scale,
+                       crandom[] * scale ]
+
+    func fall [] -> vec3f
+        return vec3f [ 0.0, 0.0, 0.0 - PARTICLE_GRAVITY ]
+
+    # a point within four units of org, pushed d along dir
+    func near [ org: vec3f, dir: vec3f, d: f32 ] -> vec3f
+        return vec3f [ org.x + f32[ (rand[] & 7) - 4 ] + d * dir.x,
+                       org.y + f32[ (rand[] & 7) - 4 ] + d * dir.y,
+                       org.z + f32[ (rand[] & 7) - 4 ] + d * dir.z ]
+
+    # CL_ParticleEffect: wall impact puffs
+    public func particle_effect [ org: vec3f, dir: vec3f, color: i32,
+                                  count: i32 ]
+        for [ i: i32 0, i < count, i += 1 ]
+            d : f32 [ rand[] & 31 ]
+            spawn[ near[ org, dir, d ], spread[ 20.0 ], fall[],
+                   color + (rand[] & 7), 1.0,
+                   -1.0 / (0.5 + frand[] * 0.3) ]
+
+    # CL_ParticleEffect2: one colour, closer in
+    func particle_effect2 [ org: vec3f, dir: vec3f, color: i32,
+                            count: i32 ]
+        for [ i: i32 0, i < count, i += 1 ]
+            d : f32 [ rand[] & 7 ]
+            spawn[ near[ org, dir, d ], spread[ 20.0 ], fall[], color,
+                   1.0, -1.0 / (0.5 + frand[] * 0.3) ]
+
+    # CL_TeleporterParticles: the pad's rising green
+    public func teleporter_particles [ at: vec3f ]
+        for [ i: i32 0, i < 8, i += 1 ]
+            org : vec3f [ at.x - 16.0 + f32[ rand[] & 31 ],
+                          at.y - 16.0 + f32[ rand[] & 31 ],
+                          at.z - 8.0 + f32[ rand[] & 7 ] ]
+            vel : vec3f [ crandom[] * 14.0, crandom[] * 14.0,
+                          80.0 + f32[ rand[] & 7 ] ]
+            spawn[ org, vel, fall[], 219, 1.0, -0.5 ]
+
+    # CL_LogoutEffect: 500 in the player's box, by the flash's kind
+    func logout_effect [ at: vec3f, kind: i32 ]
+        base : i32 [ 224 ]
+        if [ kind == MZ_LOGIN ]     base = 208
+        el [ kind == MZ_LOGIN + 1 ] base = 64
+        for [ i: i32 0, i < 500, i += 1 ]
+            org : vec3f [ at.x - 16.0 + frand[] * 32.0,
+                          at.y - 16.0 + frand[] * 32.0,
+                          at.z - 24.0 + frand[] * 56.0 ]
+            spawn[ org, spread[ 20.0 ], fall[], base + (rand[] & 7),
+                   1.0, -1.0 / (1.0 + frand[] * 0.3) ]
+
+    # CL_ItemRespawnParticles
+    public func item_respawn_particles [ at: vec3f ]
+        slow : vec3f [ 0.0, 0.0, 0.0 - PARTICLE_GRAVITY * 0.2 ]
+        for [ i: i32 0, i < 64, i += 1 ]
+            spawn[ v_add[ at, spread[ 8.0 ] ], spread[ 8.0 ], slow,
+                   212 + (rand[] & 3), 1.0,
+                   -1.0 / (1.0 + frand[] * 0.3) ]
+
+    # CL_ExplosionParticles (224) and CL_BFGExplosionParticles (208)
+    func explosion_particles [ at: vec3f, base: i32 ]
+        for [ i: i32 0, i < 256, i += 1 ]
+            org : vec3f [ at.x + f32[ rand[] % 32 - 16 ],
+                          at.y + f32[ rand[] % 32 - 16 ],
+                          at.z + f32[ rand[] % 32 - 16 ] ]
+            vel : vec3f [ rand[] % 384 - 192, rand[] % 384 - 192,
+                          rand[] % 384 - 192 ]
+            spawn[ org, vel, fall[], base + (rand[] & 7), 1.0,
+                   -0.8 / (0.5 + frand[] * 0.3) ]
+
+    # CL_BigTeleportParticles: a ring drawn in, rising
+    func big_teleport_particles [ at: vec3f ]
+        table : vec i32 [] [ 16, 104, 168, 144 ]
+        for [ i: i32 0, i < 4096, i += 1 ]
+            angle : f32 [ 6.2831853 * f32[ rand[] & 1023 ] / 1023.0 ]
+            dist : f32 [ rand[] & 31 ]
+            ca : f32 [ cos[ angle ] ]
+            sa : f32 [ sin[ angle ] ]
+            org : vec3f [ at.x + ca * dist, at.y + sa * dist,
+                          at.z + 8.0 + f32[ rand[] % 90 ] ]
+            vel : vec3f [ ca * f32[ 70 + (rand[] & 63) ],
+                          sa * f32[ 70 + (rand[] & 63) ],
+                          -100.0 + f32[ rand[] & 31 ] ]
+            accel : vec3f [ 0.0 - ca * 100.0, 0.0 - sa * 100.0,
+                            PARTICLE_GRAVITY * 4.0 ]
+            spawn[ org, vel, accel, table[ rand[] & 3 ], 1.0,
+                   -0.3 / (0.5 + frand[] * 0.3) ]
+
+    # CL_BlasterParticles: wall impact puffs, thrown off the wall
+    func blaster_particles [ org: vec3f, dir: vec3f ]
+        for [ i: i32 0, i < 40, i += 1 ]
+            d : f32 [ rand[] & 15 ]
+            vel : vec3f [ v_ma[ spread[ 40.0 ], 30.0, dir ] ]
+            spawn[ near[ org, dir, d ], vel, fall[], 224 + (rand[] & 7),
+                   1.0, -1.0 / (0.5 + frand[] * 0.3) ]
+
+    # CL_BlasterTrail: one every five units
+    func blaster_trail [ start: vec3f, finish: vec3f ]
+        dir : vec3f [ v_sub[ finish, start ] ]
+        len : f32 [ v_len[ dir ] ]
+        if [ len == 0.0 ] return
+        step : vec3f [ v_scale[ dir, 5.0 / len ] ]
+        move : vec3f [ start ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        while [ len > 0.0 ]
+            len = len - 5.0
+            spawn[ v_add[ move, spread[ 1.0 ] ], spread[ 5.0 ], zero,
+                   224, 1.0, -1.0 / (0.3 + frand[] * 0.2) ]
+            move = v_add[ move, step ]
+
+    # CL_DiminishingTrail: gibs bleed, grenades and rockets smoke
+    func diminishing_trail [ start: vec3f, finish: vec3f, n: i32,
+                             flags: i32 ]
+        dir : vec3f [ v_sub[ finish, start ] ]
+        len : f32 [ v_len[ dir ] ]
+        if [ len == 0.0 ] return
+        step : vec3f [ v_scale[ dir, 0.5 / len ] ]
+        move : vec3f [ start ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        count : f32 [ cent[ n * 5 + 3 ] ]
+        orgscale : f32 [ 1.0 ]
+        velscale : f32 [ 5.0 ]
+        if [ count > 900.0 ]
+            orgscale = 4.0
+            velscale = 15.0
+        el [ count > 800.0 ]
+            orgscale = 2.0
+            velscale = 10.0
+        while [ len > 0.0 ]
+            len = len - 0.5
+            # drop less particles as it flies
+            if [ f32[ rand[] & 1023 ] < count ]
+                org : vec3f [ v_add[ move, spread[ orgscale ] ] ]
+                vel : vec3f [ spread[ velscale ] ]
+                if [ flags & EF_GIB ]
+                    vel = v_add[ vel, fall[] ]
+                    spawn[ org, vel, zero, 232 + (rand[] & 7), 1.0,
+                           -1.0 / (1.0 + frand[] * 0.4) ]
+                el
+                    spawn[ org, vel, vec3f [ 0.0, 0.0, 20.0 ],
+                           4 + (rand[] & 7), 1.0,
+                           -1.0 / (1.0 + frand[] * 0.2) ]
+            count = count - 5.0
+            if [ count < 100.0 ] count = 100.0
+            move = v_add[ move, step ]
+        cent[ n * 5 + 3 ] = count
+
+    # CL_RocketTrail: the smoke, and fire one unit in eight
+    func rocket_trail [ start: vec3f, finish: vec3f, n: i32 ]
+        diminishing_trail[ start, finish, n, EF_ROCKET ]
+        dir : vec3f [ v_sub[ finish, start ] ]
+        len : f32 [ v_len[ dir ] ]
+        if [ len == 0.0 ] return
+        step : vec3f [ v_scale[ dir, 1.0 / len ] ]
+        move : vec3f [ start ]
+        while [ len > 0.0 ]
+            len = len - 1.0
+            if [ (rand[] & 7) == 0 ]
+                spawn[ v_add[ move, spread[ 5.0 ] ], spread[ 20.0 ],
+                       fall[], 220 + (rand[] & 3), 1.0,
+                       -1.0 / (1.0 + frand[] * 0.2) ]
+            move = v_add[ move, step ]
+
+    # CL_RailTrail: a blue spiral round a pale core
+    func rail_trail [ start: vec3f, finish: vec3f ]
+        dir : vec3f [ v_sub[ finish, start ] ]
+        len : f32 [ v_len[ dir ] ]
+        if [ len == 0.0 ] return
+        axis : vec3f [ v_scale[ dir, 1.0 / len ] ]
+        # MakeNormalVectors
+        right : vec3f [ axis.z, 0.0 - axis.x, axis.y ]
+        lean : f32 [ v_dot[ right, axis ] ]
+        right = v_norm[ v_ma[ right, 0.0 - lean, axis ] ]
+        up : vec3f [ v_cross[ right, axis ] ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        move : vec3f [ start ]
+        for [ i: i32 0, f32[ i ] < len, i += 1 ]
+            d : f32 [ f32[ i ] * 0.1 ]
+            out : vec3f [ v_ma[ v_scale[ right, cos[ d ] ], sin[ d ],
+                                up ] ]
+            spawn[ v_ma[ move, 3.0, out ], v_scale[ out, 6.0 ], zero,
+                   116 + (rand[] & 7), 1.0,
+                   -1.0 / (1.0 + frand[] * 0.2) ]
+            move = v_add[ move, axis ]
+        step : vec3f [ v_scale[ axis, 0.75 ] ]
+        move = start
+        while [ len > 0.0 ]
+            len = len - 0.75
+            spawn[ v_add[ move, spread[ 3.0 ] ], spread[ 3.0 ], zero,
+                   rand[] & 15, 1.0, -1.0 / (0.6 + frand[] * 0.2) ]
+            move = v_add[ move, step ]
+
+    # CL_BubbleTrail: one every 32 units, drifting up
+    func bubble_trail [ start: vec3f, finish: vec3f ]
+        dir : vec3f [ v_sub[ finish, start ] ]
+        len : f32 [ v_len[ dir ] ]
+        if [ len == 0.0 ] return
+        step : vec3f [ v_scale[ dir, 32.0 / len ] ]
+        move : vec3f [ start ]
+        for [ d: f32 0.0, d < len, d += 32.0 ]
+            vel : vec3f [ spread[ 5.0 ] ]
+            vel = vec3f [ vel.x, vel.y, vel.z + 6.0 ]
+            spawn[ v_add[ move, spread[ 2.0 ] ], vel,
+                   vec3f [ 0.0, 0.0, 0.0 ], 4 + (rand[] & 7), 1.0,
+                   -1.0 / (1.0 + frand[] * 0.2) ]
+            move = v_add[ move, step ]
+
+    # where normal i's fly or spark sits this instant
+    func orbit [ at: vec3f, i: i32 ] -> vec3f
+        yaw   : f32 [ time * avel[ i * 3 ] ]
+        pitch : f32 [ time * avel[ i * 3 + 1 ] ]
+        dist  : f32 [ sin[ time + f32[ i ] ] * 64.0 ]
+        cp : f32 [ cos[ pitch ] ]
+        # BEAMLENGTH 16
+        n : md2.anorms
+        return vec3f [
+            at.x + n[ i * 3 ] * dist + cp * cos[ yaw ] * 16.0,
+            at.y + n[ i * 3 + 1 ] * dist + cp * sin[ yaw ] * 16.0,
+            at.z + n[ i * 3 + 2 ] * dist - sin[ pitch ] * 16.0 ]
+
+    # CL_FlyEffect: flies gather over 20 s, stay, thin out by 60
+    func fly_effect [ n: i32, at: vec3f ]
+        stop : f32 [ cent[ n * 5 + 4 ] ]
+        begun : f32 [ stop - 60.0 ]
+        if [ stop < time ]
+            begun = time
+            stop = time + 60.0
+            cent[ n * 5 + 4 ] = stop
+        count : i32 [ 162 ]
+        if [ time - begun < 20.0 ]
+            count = (time - begun) * 162.0 / 20.0
+        el [ stop - time < 20.0 ]
+            count = (stop - time) * 162.0 / 20.0
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        for [ i: i32 0, i < count, i += 2 ]
+            spawn[ orbit[ at, i ], zero, zero, 0, 1.0, -100.0 ]
+
+    # CL_BfgParticles: the ball's green sparks, paler far out
+    func bfg_particles [ at: vec3f ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        for [ i: i32 0, i < 162, i += 1 ]
+            org : vec3f [ orbit[ at, i ] ]
+            dist : f32 [ v_len[ v_sub[ org, at ] ] / 90.0 ]
+            color : i32 [ 208.0 + dist * 7.0 ]
+            spawn[ org, zero, zero, color, 1.0 - dist, -100.0 ]
+
+    # CL_TeleportParticles: a box of sparks thrown outward
+    public func teleport_particles [ at: vec3f ]
+        for [ i: i32 -16, i <= 16, i += 4 ]
+            for [ j: i32 -16, j <= 16, j += 4 ]
+                for [ k: i32 -16, k <= 32, k += 4 ]
+                    org : vec3f [ at.x + f32[ i + (rand[] & 3) ],
+                                  at.y + f32[ j + (rand[] & 3) ],
+                                  at.z + f32[ k + (rand[] & 3) ] ]
+                    out : vec3f [ j * 8, i * 8, k * 8 ]
+                    speed : f32 [ 50 + (rand[] & 63) ]
+                    spawn[ org, v_scale[ v_norm[ out ], speed ], fall[],
+                           7 + (rand[] & 7), 1.0,
+                           -1.0 / (0.3 + f32[ rand[] & 7 ] * 0.02) ]
+
+    # ---- lights
+    # V_AddLight
+    public func light [ at: vec3f, intensity: f32, r: f32, gr: f32,
+                        b: f32 ]
+        if [ light_n >= 64 || intensity <= 0.0 ] return
+        o : i32 [ light_n * 7 ]
+        lights[ o ]     = at.x
+        lights[ o + 1 ] = at.y
+        lights[ o + 2 ] = at.z
+        lights[ o + 3 ] = intensity
+        lights[ o + 4 ] = r
+        lights[ o + 5 ] = gr
+        lights[ o + 6 ] = b
+        light_n += 1
+
+    # R_LightPoint's dynamic part: what the lights add at a point
+    public func light_at [ p: vec3f ] -> vec3f
+        sum : vec3f [ 0.0, 0.0, 0.0 ]
+        for [ i: i32 0, i < light_n, i += 1 ]
+            o : i32 [ i * 7 ]
+            from : vec3f [ lights[ o ], lights[ o + 1 ],
+                           lights[ o + 2 ] ]
+            add : f32 [ (lights[ o + 3 ] - v_len[ v_sub[ p, from ] ])
+                        / 256.0 ]
+            if [ add > 0.0 ]
+                sum = vec3f [ sum.x + add * lights[ o + 4 ],
+                              sum.y + add * lights[ o + 5 ],
+                              sum.z + add * lights[ o + 6 ] ]
+        return sum
+
+    # a muzzle flash's light; it lives until the clock passes die
+    func flash_light [ at: vec3f, radius: f32, c: vec3f, die: f32 ]
+        flashes.push[ at.x ]
+        flashes.push[ at.y ]
+        flashes.push[ at.z ]
+        flashes.push[ radius ]
+        flashes.push[ c.x ]
+        flashes.push[ c.y ]
+        flashes.push[ c.z ]
+        flashes.push[ die ]
+
+    # ---- explosions
+    # CL_AllocExplosion: a free one, else the oldest
+    func alloc_explosion [] -> Explosion
+        pick : explosions[ 0 ]
+        for [ ex: Explosion ] in explosions
+            if [ ex.kind == EX_FREE ]
+                pick = ex
+                break
+            if [ ex.start < pick.start ] pick = ex
+        pick.kind = EX_FREE
+        pick.angles = vec3f [ 0.0, 0.0, 0.0 ]
+        pick.flags = 0
+        pick.alpha = 0.0
+        pick.light = 0.0
+        pick.baseframe = 0
+        pick.start = time
+        return pick
+
+    # CL_SmokeAndFlash
+    func smoke_and_flash [ at: vec3f ]
+        ex : alloc_explosion[]
+        ex.origin = at
+        ex.kind = EX_MISC
+        ex.frames = 4
+        ex.flags = RF_TRANSLUCENT
+        ex.model = md2.named[ 'models/objects/smoke/tris.md2' ]
+        ex = alloc_explosion[]
+        ex.origin = at
+        ex.kind = EX_FLASH
+        ex.flags = RF_FULLBRIGHT
+        ex.frames = 2
+        ex.model = md2.named[ 'models/objects/flash/tris.md2' ]
+
+    # the fireball of rockets, grenades and barrels
+    func fireball [ at: vec3f, grenade: bool ]
+        ex : alloc_explosion[]
+        ex.origin = at
+        ex.kind = EX_POLY
+        ex.flags = RF_FULLBRIGHT
+        ex.light = 350.0
+        ex.lightcolor = vec3f [ 1.0, 0.5, 0.5 ]
+        ex.angles = vec3f [ 0.0, rand[] % 360, 0.0 ]
+        ex.model = md2.named[ 'models/objects/r_explode/tris.md2' ]
+        ex.frames = 15
+        if [ grenade ]
+            ex.frames = 19
+            ex.baseframe = 30
+        el [ frand[] < 0.5 ]
+            ex.baseframe = 15
+        explosion_particles[ at, 224 ]
+
+    # ---- the game's events
+    # CL_ParseMuzzleFlash: the player's flash lights the room
+    func flash [ ev: GameEvent ]
+        e : ev.ent
+        if [ !e ] return
+        weapon : i32 [ ev.index & ~MZ_SILENCED ]
+        ax : angle_vectors[ e.angles ]
+        at : vec3f [ v_ma[ v_ma[ e.origin, 18.0, ax.forward ], 16.0,
+                           ax.right ] ]
+        radius : f32 [ 200 + (rand[] & 31) ]
+        if [ ev.index & MZ_SILENCED ] radius = radius - 100.0
+        c : vec3f [ 1.0, 1.0, 0.0 ]
+        die : f32 [ time ]
+        if [ weapon == MZ_CHAINGUN1 ]       c = vec3f [ 1.0, 0.25, 0.0 ]
+        el [ weapon == MZ_CHAINGUN1 + 1 ]   c = vec3f [ 1.0, 0.5, 0.0 ]
+        el [ weapon == MZ_RAILGUN ]         c = vec3f [ 0.5, 0.5, 1.0 ]
+        el [ weapon == MZ_ROCKET ]          c = vec3f [ 1.0, 0.5, 0.2 ]
+        el [ weapon == MZ_GRENADE ]         c = vec3f [ 1.0, 0.5, 0.0 ]
+        el [ weapon == MZ_BFG ]             c = vec3f [ 0.0, 1.0, 0.0 ]
+        el [ weapon >= MZ_LOGIN && weapon <= MZ_LOGIN + 2 ]
+            # login green, logout red, respawn yellow; a second long
+            if [ weapon == MZ_LOGIN ]     c = vec3f [ 0.0, 1.0, 0.0 ]
+            el [ weapon == MZ_LOGIN + 1 ] c = vec3f [ 1.0, 0.0, 0.0 ]
+            die = time + 1.0
+            logout_effect[ e.origin, weapon ]
+        flash_light[ at, radius, c, die ]
+
+    # which of CL_ParseMuzzleFlash2's groups a monster's flash is in
+    func flash2_kind [ f: i32 ] -> i32
+        later : i32 [ (f >= 83 && f <= 100) ? (f - 83) % 3 : -1 ]
+        # 1 bullets: yellow, a puff, smoke and a flash
+        if [ (f >= 4 && f <= 22) || (f >= 26 && f <= 38) || f == 43 ||
+             (f >= 44 && f <= 52) || (f >= 63 && f <= 69) ||
+             (f >= 73 && f <= 77) || (f >= 120 && f <= 131) ||
+             (f >= 133 && f <= 137) || later == 2 ]
+            return 1
+        # 2 blasters: yellow alone
+        if [ (f >= 1 && f <= 3) || f == 39 || f == 40 || f == 58 ||
+             f == 59 || f == 60 || f == 62 || f == 82 ||
+             (f >= 102 && f <= 118) || later == 0 ]
+            return 2
+        # 3 shotguns: yellow, smoke and a flash
+        if [ f == 41 || f == 42 || later == 1 ] return 3
+        # 4 rockets, 5 grenades, 6 the rail, 7 a bfg
+        if [ (f >= 23 && f <= 25) || f == 57 || (f >= 70 && f <= 72) ||
+             (f >= 78 && f <= 81) ]
+            return 4
+        if [ f >= 53 && f <= 56 ] return 5
+        if [ f == 61 ] return 6
+        if [ f == 101 || f == 132 ] return 7
+        return 0
+
+    # CL_ParseMuzzleFlash2: a monster's flash at its gun
+    func flash2 [ ev: GameEvent ]
+        e : ev.ent
+        if [ !e ] return
+        kind : i32 [ flash2_kind[ ev.index ] ]
+        if [ kind == 0 ] return
+        ax : angle_vectors[ e.angles ]
+        at : vec3f [ project_source[ e.origin, flash_offset[ ev.index ],
+                                     ax.forward, ax.right ] ]
+        c : vec3f [ 1.0, 1.0, 0.0 ]
+        if [ kind == 4 ]      c = vec3f [ 1.0, 0.5, 0.2 ]
+        el [ kind == 5 ]      c = vec3f [ 1.0, 0.5, 0.0 ]
+        el [ kind == 6 ]      c = vec3f [ 0.5, 0.5, 1.0 ]
+        el [ kind == 7 ]      c = vec3f [ 0.5, 1.0, 0.5 ]
+        flash_light[ at, f32[ 200 + (rand[] & 31) ], c, time ]
+        if [ kind == 1 ]
+            particle_effect[ at, vec3f [ 0.0, 0.0, 0.0 ], 0, 40 ]
+        if [ kind == 1 || kind == 3 ] smoke_and_flash[ at ]
+
+    # CL_ParseBeam: the entity's cable is renewed, else a new one
+    func cable [ entity: i32, from: vec3f, to: vec3f ]
+        pick : Beam [ null ]
+        for [ b: Beam ] in beams
+            if [ b.entity == entity ] pick = b
+        if [ !pick ]
+            for [ b: Beam ] in beams
+                if [ b.endtime < time ] pick = b
+        if [ !pick ]
+            if [ beams.count >= 32 ] return
+            pick = Beam [ ]
+            beams.push[ pick ]
+        pick.entity = entity
+        pick.model = md2.named[
+            'models/monsters/parasite/segment/tris.md2' ]
+        pick.endtime = time + 0.2
+        pick.from = from
+        pick.to = to
+
+    # CL_ParseTEnt: what each temp entity shows
+    func temp [ ev: GameEvent ]
+        k : i32 [ ev.index ]
+        at : vec3f [ ev.origin ]
+        dir : vec3f [ ev.dir ]
+        if [ k == TE_BLOOD ]
+            particle_effect[ at, dir, 232, 60 ]
+        el [ k == TE_GUNSHOT ]
+            particle_effect[ at, dir, 0, 40 ]
+            smoke_and_flash[ at ]
+        el [ k == TE_SPARKS || k == TE_BULLET_SPARKS ]
+            particle_effect[ at, dir, 224, 6 ]
+            if [ k == TE_BULLET_SPARKS ] smoke_and_flash[ at ]
+        el [ k == TE_SCREEN_SPARKS ]
+            particle_effect[ at, dir, 208, 40 ]
+        el [ k == TE_SHIELD_SPARKS ]
+            particle_effect[ at, dir, 176, 40 ]
+        el [ k == TE_SHOTGUN ]
+            particle_effect[ at, dir, 0, 20 ]
+            smoke_and_flash[ at ]
+        el [ k == TE_SPLASH ]
+            # splash_color by the kind of liquid
+            table : vec i32 [] [ 0, 224, 176, 80, 208, 224, 232 ]
+            r : i32 [ ev.color ]
+            color : i32 [ (r >= 0 && r <= 6) ? table[ r ] : 0 ]
+            particle_effect[ at, dir, color, ev.count ]
+        el [ k == TE_LASER_SPARKS ]
+            particle_effect2[ at, dir, ev.color, ev.count ]
+        el [ k == TE_BLASTER ]
+            blaster_particles[ at, dir ]
+            ex : alloc_explosion[]
+            ex.origin = at
+            yaw : f32 [ 0.0 ]
+            if [ dir.x != 0.0 ]
+                yaw = atan2[ dir.y, dir.x ] * 57.29578
+            el [ dir.y > 0.0 ]
+                yaw = 90.0
+            el [ dir.y < 0.0 ]
+                yaw = 270.0
+            ex.angles = vec3f [ acos[ dir.z ] * 57.29578, yaw, 0.0 ]
+            ex.kind = EX_MISC
+            ex.flags = RF_FULLBRIGHT | RF_TRANSLUCENT
+            ex.light = 150.0
+            ex.lightcolor = vec3f [ 1.0, 1.0, 0.0 ]
+            ex.model = md2.named[ 'models/objects/explode/tris.md2' ]
+            ex.frames = 4
+        el [ k == TE_RAILTRAIL ]
+            rail_trail[ at, dir ]
+        el [ k == TE_EXPLOSION2 || k == TE_GRENADE_EXPLOSION ||
+             k == TE_GRENADE_EXPLOSION_WATER ]
+            fireball[ at, true ]
+        el [ k == TE_EXPLOSION1 || k == TE_ROCKET_EXPLOSION ||
+             k == TE_ROCKET_EXPLOSION_WATER ]
+            fireball[ at, false ]
+        el [ k == TE_BFG_EXPLOSION ]
+            ex : alloc_explosion[]
+            ex.origin = at
+            ex.kind = EX_POLY
+            ex.flags = RF_FULLBRIGHT | RF_TRANSLUCENT
+            ex.light = 350.0
+            ex.lightcolor = vec3f [ 0.0, 1.0, 0.0 ]
+            ex.model = md2.named[ 'sprites/s_bfg2.sp2' ]
+            ex.alpha = 0.3
+            ex.frames = 4
+        el [ k == TE_BFG_BIGEXPLOSION ]
+            explosion_particles[ at, 208 ]
+        el [ k == TE_BFG_LASER ]
+            # CL_ParseLaser: one of four greens, a tenth of a second
+            lasers.push[ Beam [ from: at, to: dir, endtime: time + 0.1,
+                                color: 208 + rand[] % 4 ] ]
+        el [ k == TE_BUBBLETRAIL ]
+            bubble_trail[ at, dir ]
+        el [ k == TE_PARASITE_ATTACK || k == TE_MEDIC_CABLE_ATTACK ]
+            cable[ (ev.ent) ? ev.ent.number : 0, at, dir ]
+        el [ k == TE_BOSSTPORT ]
+            big_teleport_particles[ at ]
+
+    # the frame's events, before the sounds clear them
+    public func events []
+        for [ ev: GameEvent ] in g.events
+            if [ ev.kind == EVENT_FLASH ]       flash[ ev ]
+            el [ ev.kind == EVENT_FLASH2 ]      flash2[ ev ]
+            el [ ev.kind == EVENT_TEMP ]        temp[ ev ]
+
+    # ---- the frame
+    # the clock moves; the lights start over from the live flashes
+    public func begin [ dt: f32 ]
+        time = time + dt
+        light_n = 0
+        kept : vec f32 []
+        for [ i: i32 0, i + 7 < flashes.count, i += 8 ]
+            if [ flashes[ i + 7 ] < time ] continue
+            at : vec3f [ flashes[ i ], flashes[ i + 1 ],
+                         flashes[ i + 2 ] ]
+            light[ at, flashes[ i + 3 ], flashes[ i + 4 ],
+                   flashes[ i + 5 ], flashes[ i + 6 ] ]
+            for [ k: i32 0, k < 8, k += 1 ]
+                keep : f32 [ flashes[ i + k ] ]
+                kept.push[ keep ]
+        flashes = kept
+        explosion_lights[]
+
+    # CL_AddExplosions' first half: the ended ones go, lights added
+    func explosion_lights []
+        for [ ex: Explosion ] in explosions
+            if [ ex.kind == EX_FREE ] continue
+            frac : f32 [ (time - ex.start) * 10.0 ]
+            f : i32 [ floor[ frac ] ]
+            last : i32 [ (ex.kind == EX_FLASH) ? 1 : ex.frames - 1 ]
+            if [ f >= last ]
+                ex.kind = EX_FREE
+                continue
+            if [ ex.kind == EX_MISC ]
+                ex.alpha = 1.0 - frac / f32[ ex.frames - 1 ]
+            el [ ex.kind == EX_FLASH ]
+                ex.alpha = 1.0
+            el
+                ex.alpha = (16.0 - f32[ f ]) / 16.0
+            if [ ex.light > 0.0 ]
+                light[ ex.origin, ex.light * ex.alpha, ex.lightcolor.x,
+                       ex.lightcolor.y, ex.lightcolor.z ]
+
+    # an entity's trails and lights, from where it last drew
+    public func entity [ e: Edict, n: i32, origin: vec3f, fresh: bool ]
+        while [ cent.count < (n + 1) * 5 ] cent.push[ 0.0 ]
+        o : i32 [ n * 5 ]
+        if [ fresh ]
+            cent[ o ]     = origin.x
+            cent[ o + 1 ] = origin.y
+            cent[ o + 2 ] = origin.z
+            # for diminishing rocket and grenade trails
+            cent[ o + 3 ] = 1024.0
+            cent[ o + 4 ] = 0.0
+        was : vec3f [ cent[ o ], cent[ o + 1 ], cent[ o + 2 ] ]
+        fx : i32 [ e.effects ]
+        if [ fx & EF_ROCKET ]
+            rocket_trail[ was, origin, n ]
+            light[ origin, 200.0, 1.0, 1.0, 0.0 ]
+        el [ fx & EF_BLASTER ]
+            blaster_trail[ was, origin ]
+            light[ origin, 200.0, 1.0, 1.0, 0.0 ]
+        el [ fx & EF_HYPERBLASTER ]
+            light[ origin, 200.0, 1.0, 1.0, 0.0 ]
+        el [ fx & (EF_GIB | EF_GRENADE) ]
+            diminishing_trail[ was, origin, n, fx ]
+        el [ fx & EF_FLIES ]
+            fly_effect[ n, origin ]
+        el [ fx & EF_BFG ]
+            ramp : vec f32 [] [ 300.0, 400.0, 600.0, 300.0, 150.0,
+                                75.0 ]
+            reach : f32 [ 200.0 ]
+            if [ fx & EF_ANIM_ALLFAST ]
+                bfg_particles[ origin ]
+            el [ e.frame >= 0 && e.frame < 6 ]
+                reach = ramp[ e.frame ]
+            light[ origin, reach, 0.0, 1.0, 0.0 ]
+        cent[ o ]     = origin.x
+        cent[ o + 1 ] = origin.y
+        cent[ o + 2 ] = origin.z
+
+    # CL_AddExplosions, CL_AddBeams, CL_AddLasers, CL_AddParticles
+    public func draw []
+        for [ ex: Explosion ] in explosions
+            if [ ex.kind == EX_FREE ] continue
+            frac : f32 [ (time - ex.start) * 10.0 ]
+            f : i32 [ floor[ frac ] ]
+            if [ f < 0 ] f = 0
+            flags : i32 [ ex.flags ]
+            skin : i32 [ 0 ]
+            if [ ex.kind == EX_POLY ]
+                skin = f >> 1
+                if [ f >= 10 ]
+                    flags = flags | RF_TRANSLUCENT
+                    skin = (f < 13) ? 5 : 6
+            lit : vec3f [ 1.0, 1.0, 1.0 ]
+            if [ (flags & RF_FULLBRIGHT) == 0 ]
+                lit = v_add[ bsp.light_point[ ex.origin ],
+                             light_at[ ex.origin ] ]
+            alpha : f32 [ (flags & RF_TRANSLUCENT) ? ex.alpha : 1.0 ]
+            if [ alpha >= 1.0 && (flags & RF_TRANSLUCENT) != 0 ]
+                alpha = 0.999
+            md2.add[ ex.model, skin, ex.baseframe + f + 1,
+                     ex.baseframe + f, 1.0 - (frac - f32[ f ]),
+                     ex.origin, ex.angles, lit, alpha, false ]
+        for [ b: Beam ] in beams
+            if [ b.endtime < time ] continue
+            cable_segments[ b ]
+        for [ i: i32 lasers.count - 1, i >= 0, i = i - 1 ]
+            l : lasers[ i ]
+            if [ l.endtime < time ]
+                lasers.remove[ i ]
+                continue
+            md2.beam[ l.from, l.to, 4.0, l.color, 0.3 ]
+        i : i32 [ 0 ]
+        while [ i < part_n ]
+            o : i32 [ i * 13 ]
+            t : f32 [ time - parts[ o ] ]
+            alpha : f32 [ parts[ o + 11 ] + t * parts[ o + 12 ] ]
+            if [ alpha <= 0.0 ]
+                # faded out: the last one takes its place
+                part_n -= 1
+                memcpy[ @parts[ o ], @parts[ part_n * 13 ], 13 * 4 ]
+                continue
+            if [ alpha > 1.0 ] alpha = 1.0
+            t2 : f32 [ t * t ]
+            x : f32 [ parts[ o + 1 ] + parts[ o + 4 ] * t
+                      + parts[ o + 7 ] * t2 ]
+            y : f32 [ parts[ o + 2 ] + parts[ o + 5 ] * t
+                      + parts[ o + 8 ] * t2 ]
+            z : f32 [ parts[ o + 3 ] + parts[ o + 6 ] * t
+                      + parts[ o + 9 ] * t2 ]
+            at : vec3f [ x, y, z ]
+            color : i32 [ parts[ o + 10 ] ]
+            md2.particle[ at, color, alpha ]
+            i += 1
+
+    # CL_AddBeams: the segment model end to end, each rolled at random
+    func cable_segments [ b: Beam ]
+        dist : vec3f [ v_sub[ b.to, b.from ] ]
+        d : f32 [ v_len[ dist ] ]
+        if [ d == 0.0 ] return
+        turned : vec3f [ vectoangles[ dist ] ]
+        pitch : f32 [ turned.x ]
+        dir : vec3f [ v_scale[ dist, 1.0 / d ] ]
+        # each segment is 30 long
+        steps : f32 [ ceil[ d / 30.0 ] ]
+        len : f32 [ (steps > 1.0) ? (d - 30.0) / (steps - 1.0) : 0.0 ]
+        org : vec3f [ b.from ]
+        while [ d > 0.0 ]
+            angles : vec3f [ pitch, turned.y, rand[] % 360 ]
+            lit : vec3f [ v_add[ bsp.light_point[ org ],
+                                 light_at[ org ] ] ]
+            md2.add[ b.model, 0, 0, 0, 0.0, org, angles, lit, 1.0,
+                     false ]
+            org = v_ma[ org, len, dir ]
+            d = d - 30.0

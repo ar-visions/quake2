@@ -1,0 +1,365 @@
+# cl_cin.c: the films between units, and still pictures
+extend quake2
+
+# a film shows 14 pictures a second
+CIN_RATE : f32 [ 14.0 ]
+
+class Cinematic
+    public pak     : Pak
+    # null with no sound device: the film runs silent
+    public mixer   : AudioMixer
+    public done    : bool
+    # a still picture: it stays until stop
+    public still   : bool
+    public wide    : i32
+    public high    : i32
+    # the whole file, and where the next frame's command is
+    public film    : PakData
+    public pos     : i32
+    # frames read so far: cl.cinematicframe
+    public reads   : i32
+    # seconds since the first frame call: cl.cinematictime
+    public clock   : f32
+    public begun   : bool
+    public s_rate     : i32
+    public s_width    : i32
+    public s_channels : i32
+    # 256 colours, three bytes each
+    public palette : new u8
+    # order 1 huffman: a tree for each previous byte
+    public nodes   : new i32
+    public tops    : new i32
+    public h_used  : new i32
+    public h_count : new i32
+    # the picture on screen: palette indices, then colors
+    public pic     : new u8
+    public colors  : new u8
+    public has_pic : bool
+    # colors changed since the texture last took it
+    public fresh   : bool
+    public tex     : Texture
+    public tex_wide : i32
+    public tex_high : i32
+    # the film's whole sound, and its mixer voice
+    public track   : AudioClip
+    public voice   : i32
+    # the track's samples: a new member owns them
+    public samples : new i16
+
+    # the bytes of sound that ride with frame f
+    func sound_bytes [ f: i32 ] -> i32
+        first : i32 [ f * s_rate / 14 ]
+        after : i32 [ (f + 1) * s_rate / 14 ]
+        return (after - first) * s_width * s_channels
+
+    # SmallestNode1: the unused node with the lowest count
+    func smallest [ n: i32 ] -> i32
+        best : i32 [ 99999999 ]
+        node : i32 [ -1 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            if [ h_used[ i ] != 0 || h_count[ i ] == 0 ] continue
+            if [ h_count[ i ] < best ]
+                best = h_count[ i ]
+                node = i
+        if [ node >= 0 ] h_used[ node ] = 1
+        return node
+
+    # Huff1TableInit: 256 rows of counts, a tree for each
+    func tables []
+        b : @u8 [ film.data ]
+        memset[ nodes, 0, 524288 ]
+        for [ prev: i32 0, prev < 256, prev += 1 ]
+            memset[ h_count, 0, 2048 ]
+            memset[ h_used, 0, 2048 ]
+            for [ j: i32 0, j < 256, j += 1 ]
+                h_count[ j ] = b[ pos + j ]
+            pos += 256
+            n : i32 [ 256 ]
+            while [ n != 511 ]
+                at : i32 [ prev * 512 + (n - 256) * 2 ]
+                # the two lowest counts make the next node
+                low : i32 [ smallest[ n ] ]
+                nodes[ at ] = low
+                if [ low < 0 ] break
+                other : i32 [ smallest[ n ] ]
+                nodes[ at + 1 ] = other
+                if [ other < 0 ] break
+                h_count[ n ] = h_count[ low ] + h_count[ other ]
+                n += 1
+            tops[ prev ] = n - 1
+
+    # Huff1Decompress: one frame's indices into pic
+    func decompress [ src: i32, bytes: i32 ]
+        b : @u8 [ film.data ]
+        total : i32 [ bsp_i32[ b, src ] ]
+        limit : i32 [ wide * high ]
+        if [ total > limit ] total = limit
+        input : i32 [ src + 4 ]
+        # the last symbol may come one byte past the block
+        edge : i32 [ src + bytes ]
+        # nodes 0 to 255 are not stored
+        base : i32 [ -512 ]
+        node : i32 [ tops[ 0 ] ]
+        made : i32 [ 0 ]
+        while [ made < total && input <= edge ]
+            bits : i32 [ b[ input ] ]
+            input += 1
+            for [ k: i32 0, k < 8, k += 1 ]
+                if [ node < 256 ]
+                    base = node * 512 - 512
+                    pic[ made ] = node
+                    made += 1
+                    if [ made >= total ] break
+                    node = tops[ node ]
+                node = nodes[ base + node * 2 + (bits & 1) ]
+                bits = bits >> 1
+
+    # where a frame's sound starts; -1 at the film's end
+    func sound_at [ begin: i32 ] -> i32
+        b : @u8 [ film.data ]
+        ended : i32 [ -1 ]
+        at : i32 [ begin ]
+        if [ at + 4 > film.size ] return ended
+        command : i32 [ bsp_i32[ b, at ] ]
+        at += 4
+        # 2 is the last frame marker, 1 brings a palette
+        if [ command == 2 ] return ended
+        if [ command == 1 ] at += 768
+        if [ at + 4 > film.size ] return ended
+        bytes : i32 [ bsp_i32[ b, at ] ]
+        if [ bytes < 1 || bytes > 131072 ] return ended
+        at = at + 4 + bytes
+        if [ at > film.size ] return ended
+        return at
+
+    # SCR_ReadNextFrame; a skipped frame keeps only its palette
+    func read_next [ decode: bool ] -> bool
+        b : @u8 [ film.data ]
+        after : i32 [ sound_at[ pos ] ]
+        if [ after < 0 ] return false
+        at : i32 [ pos + 4 ]
+        if [ bsp_i32[ b, pos ] == 1 ]
+            memcpy[ palette, @b[ at ], 768 ]
+            at += 768
+        if [ decode ]
+            decompress[ at + 4, bsp_i32[ b, at ] ]
+            paint[]
+        # the sound was gathered at open: step over it
+        pos = after + sound_bytes[ reads ]
+        reads += 1
+        return true
+
+    # the picture's indices through the palette
+    func paint []
+        n : i32 [ wide * high ]
+        for [ i: i32 0, i < n, i += 1 ]
+            c : i32 [ pic[ i ] ]
+            o : i32 [ i * 4 ]
+            colors[ o ]     = palette[ c * 3 ]
+            colors[ o + 1 ] = palette[ c * 3 + 1 ]
+            colors[ o + 2 ] = palette[ c * 3 + 2 ]
+            colors[ o + 3 ] = 255
+        has_pic = true
+        fresh   = true
+
+    # every frame's pcm into one clip: the file is walked once
+    func gather [ name: string ]
+        total : i32 [ 0 ]
+        at : i32 [ pos ]
+        while [ at < film.size ]
+            s : i32 [ sound_at[ at ] ]
+            if [ s < 0 ] break
+            at = s + sound_bytes[ total ]
+            if [ at > film.size ] break
+            total += 1
+        log 'cin: {name} {wide} x {high}, {total} frames'
+        if [ !mixer || total < 1 ] return
+        if [ s_rate < 1 || s_channels < 1 ] return
+        if [ s_width != 1 && s_width != 2 ] return
+        frames : i32 [ total * s_rate / 14 ]
+        cells : i32 [ frames * s_channels ]
+        if [ cells < 2 ] return
+        samples = new i16 [ cells ]
+        pcm : @i16 [ samples ]
+        b : @u8 [ film.data ]
+        put : i32 [ 0 ]
+        at = pos
+        for [ f: i32 0, f < total, f += 1 ]
+            s : i32 [ sound_at[ at ] ]
+            sb : i32 [ sound_bytes[ f ] ]
+            n : i32 [ sb / s_width ]
+            if [ s_width == 2 ]
+                memcpy[ @pcm[ put ], @b[ s ], sb ]
+            el
+                for [ i: i32 0, i < n, i += 1 ]
+                    c : i32 [ b[ s + i ] ]
+                    # S_RawSamples: one channel is unsigned
+                    if [ s_channels == 1 ] c = c - 128
+                    el [ c > 127 ]         c = c - 256
+                    pcm[ put + i ] = c * 256
+            put += n
+            at = s + sb
+        track = AudioClip [ name: name, rate: s_rate,
+                            channels: s_channels, frames: frames ]
+        track.pcm = samples
+
+    # SCR_LoadPCX: pics/<name> with the picture's own palette
+    func open_still [ name: string ] -> bool
+        d : pak.read[ 'pics/{name}' ]
+        if [ !d || d.size < 128 + 768 ]
+            log 'cin: pics/{name} not found'
+            done = true
+            return false
+        b : @u8 [ d.data ]
+        w : i32 [ bsp_i16[ b, 8 ] + 1 ]
+        h : i32 [ bsp_i16[ b, 10 ] + 1 ]
+        if [ b[ 0 ] != 10 || b[ 1 ] != 5 || b[ 2 ] != 1 ||
+             b[ 3 ] != 8 || w > 640 || h > 480 || w < 1 || h < 1 ]
+            log 'cin: bad pcx file pics/{name}'
+            done = true
+            return false
+        wide = w
+        high = h
+        buffers[]
+        memcpy[ palette, @b[ d.size - 768 ], 768 ]
+        at : i32 [ 128 ]
+        for [ y: i32 0, y < h, y += 1 ]
+            x : i32 [ 0 ]
+            while [ x < w && at < d.size ]
+                c : i32 [ b[ at ] ]
+                run : i32 [ 1 ]
+                at += 1
+                if [ (c & 192) == 192 ]
+                    run = c & 63
+                    c = b[ at ]
+                    at += 1
+                while [ run > 0 && x < w ]
+                    pic[ y * w + x ] = c
+                    x += 1
+                    run -= 1
+        still = true
+        reads = -1
+        paint[]
+        return true
+
+    # the picture's buffers at the film's size
+    func buffers []
+        cells : i32 [ wide * high ]
+        quad : i32 [ cells * 4 ]
+        pic    = new u8 [ cells ]
+        colors = new u8 [ quad ]
+        memset[ pic, 0, cells ]
+        if [ !palette ] palette = new u8 [ 768 ]
+
+    # SCR_PlayCinematic: video/<name>, or the still pics/<name>
+    public func open [ name: string ] -> bool
+        stop[]
+        done    = false
+        still   = false
+        begun   = false
+        has_pic = false
+        fresh   = false
+        reads   = 0
+        clock   = 0.0
+        n : i32 [ name.count ]
+        if [ n >= 4 && strcmp[ @name.chars[ n - 4 ], ".pcx" ] == 0 ]
+            return open_still[ name ]
+        film = pak.read[ 'video/{name}' ]
+        if [ !film || film.size < 20 + 65536 ]
+            log 'cin: video/{name} not found'
+            film = null
+            done = true
+            return false
+        b : @u8 [ film.data ]
+        wide       = bsp_i32[ b, 0 ]
+        high       = bsp_i32[ b, 4 ]
+        s_rate     = bsp_i32[ b, 8 ]
+        s_width    = bsp_i32[ b, 12 ]
+        s_channels = bsp_i32[ b, 16 ]
+        if [ wide < 1 || high < 1 || wide > 640 || high > 480 ]
+            log 'cin: bad film size {wide} x {high}'
+            film = null
+            done = true
+            return false
+        buffers[]
+        if [ !nodes ]
+            nodes   = new i32 [ 131072 ]
+            tops    = new i32 [ 256 ]
+            h_used  = new i32 [ 512 ]
+            h_count = new i32 [ 512 ]
+        pos = 20
+        tables[]
+        gather[ name ]
+        # the first picture is up before the clock starts
+        if [ !read_next[ true ] ]
+            stop[]
+            return false
+        return true
+
+    # SCR_RunCinematic: false once the film has ended
+    public func frame [ dt: f32 ] -> bool
+        if [ done ] return false
+        if [ still ] return true
+        if [ !begun ]
+            # the load's own time is not the film's
+            begun = true
+            if [ track ]
+                voice = mixer.play_voice[ track, false, SOUND_VOLUME,
+                                          1.0 ]
+            return true
+        clock = clock + dt
+        want : i32 [ clock * CIN_RATE ]
+        if [ want < reads ] return true
+        # late: the sound plays on, so pictures are skipped
+        while [ reads < want ]
+            if [ !read_next[ false ] ]
+                stop[]
+                return false
+        if [ !read_next[ true ] ]
+            stop[]
+            return false
+        return true
+
+    # SCR_DrawCinematic: black, then the picture in its shape
+    public func draw [ cv: Canvas, w: Window, width: f32,
+                       height: f32 ]
+        cv.stroke_width[ 0.0 ]
+        cv.fill_color[ '#000' ]
+        cv.fill_rect_fast[ 0.0, 0.0, width, height ]
+        cv.fill_color[ '#fff' ]
+        if [ done || !has_pic ] return
+        bytes : i32 [ wide * high * 4 ]
+        if [ !tex || tex_wide != wide || tex_high != high ]
+            img : Image [ width: wide, height: high,
+                          format: Pixel.rgba8, linear: true ]
+            px : @u8 [ img.vdata[] ]
+            memcpy[ px, colors, bytes ]
+            tex = Texture [ vk: cv.vk, w: w, sampler: img,
+                            mip_levels: 1, linear: true ]
+            tex_wide = wide
+            tex_high = high
+            fresh = false
+        if [ fresh ]
+            tex.upload_region[ 0, 0, wide, high, colors, bytes ]
+            fresh = false
+        scale : f32 [ width / wide ]
+        tall  : f32 [ height / high ]
+        if [ tall < scale ] scale = tall
+        dw : f32 [ wide * scale ]
+        dh : f32 [ high * scale ]
+        cv.draw_image[ tex,
+            rect [ x: (width - dw) / 2.0, y: (height - dh) / 2.0,
+                   w: dw, h: dh ] ]
+
+    # SCR_StopCinematic: a key skips the film; it is done
+    public func stop []
+        # a voice past its clip's end may be another sound's now
+        if [ voice != 0 && track ]
+            played : i32 [ clock * s_rate ]
+            whole  : i32 [ track.frames ]
+            if [ played < whole ] mixer.voice_stop[ voice ]
+        voice   = 0
+        track   = null
+        film    = null
+        has_pic = false
+        done    = true

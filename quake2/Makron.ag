@@ -1,0 +1,450 @@
+# m_boss32.c: the makron, the final boss (bfg, blaster sweep, rail)
+extend quake2
+
+makron_sound_pain4 : i32
+makron_sound_pain5 : i32
+makron_sound_pain6 : i32
+makron_sound_death : i32
+makron_sound_step_left : i32
+makron_sound_step_right : i32
+makron_sound_attack_bfg : i32
+makron_sound_brainsplorch : i32
+makron_sound_prerailgun : i32
+makron_sound_popup : i32
+makron_sound_taunt1 : i32
+makron_sound_taunt2 : i32
+makron_sound_taunt3 : i32
+makron_sound_hit : i32
+makron_move_stand : MMove
+makron_move_run : MMove
+makron_move_walk : MMove
+makron_move_pain6 : MMove
+makron_move_pain5 : MMove
+makron_move_pain4 : MMove
+makron_move_death2 : MMove
+makron_move_death3 : MMove
+makron_move_sight : MMove
+makron_move_attack3 : MMove
+makron_move_attack4 : MMove
+makron_move_attack5 : MMove
+
+func makron_taunt [ e: Edict ]
+    r : f32 [ frand[] ]
+    if [ r <= 0.3 ]
+        g.sound[ e, CHAN_AUTO, makron_sound_taunt1, 1.0, ATTN_NONE ]
+    el [ r <= 0.6 ]
+        g.sound[ e, CHAN_AUTO, makron_sound_taunt2, 1.0, ATTN_NONE ]
+    el
+        g.sound[ e, CHAN_AUTO, makron_sound_taunt3, 1.0, ATTN_NONE ]
+
+func makron_stand [ e: Edict ]
+    e.monsterinfo.currentmove = makron_move_stand
+
+func makron_hit [ e: Edict ]
+    g.sound[ e, CHAN_AUTO, makron_sound_hit, 1.0, ATTN_NONE ]
+
+func makron_popup [ e: Edict ]
+    g.sound[ e, CHAN_BODY, makron_sound_popup, 1.0, ATTN_NONE ]
+
+func makron_step_left [ e: Edict ]
+    g.sound[ e, CHAN_BODY, makron_sound_step_left, 1.0, ATTN_NORM ]
+
+func makron_step_right [ e: Edict ]
+    g.sound[ e, CHAN_BODY, makron_sound_step_right, 1.0, ATTN_NORM ]
+
+func makron_brainsplorch [ e: Edict ]
+    g.sound[ e, CHAN_VOICE, makron_sound_brainsplorch, 1.0, ATTN_NORM ]
+
+func makron_prerailgun [ e: Edict ]
+    g.sound[ e, CHAN_WEAPON, makron_sound_prerailgun, 1.0, ATTN_NORM ]
+
+func makron_walk [ e: Edict ]
+    e.monsterinfo.currentmove = makron_move_walk
+
+func makron_run [ e: Edict ]
+    if [ e.monsterinfo.aiflags & AI_STAND_GROUND ]
+        e.monsterinfo.currentmove = makron_move_stand
+    el
+        e.monsterinfo.currentmove = makron_move_run
+
+func makron_bfg [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ MZ2_MAKRON_BFG ],
+                            ax.forward, ax.right ]
+    aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                  e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+    dir : v_norm[ v_sub[ aim, start ] ]
+    g.sound[ e, CHAN_VOICE, makron_sound_attack_bfg, 1.0, ATTN_NORM ]
+    monster_fire_bfg[ e, start, dir, 50, 300, 100, 300.0,
+                      MZ2_MAKRON_BFG ]
+
+# MakronSaveloc: the enemy's eye, kept for aiming the rail
+func makron_saveloc [ e: Edict ]
+    e.pos1 = vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                     e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+
+func makron_railgun [ e: Edict ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin,
+                            flash_offset[ MZ2_MAKRON_RAILGUN_1 ],
+                            ax.forward, ax.right ]
+    # the direction to where we targeted
+    dir : v_norm[ v_sub[ e.pos1, start ] ]
+    monster_fire_railgun[ e, start, dir, 50, 100,
+                          MZ2_MAKRON_RAILGUN_1 ]
+
+func makron_hyperblaster [ e: Edict ]
+    # attak405 213, attak413 221, attak421 229
+    flash_number : i32 [ MZ2_MAKRON_BLASTER_1 + (e.frame - 213) ]
+    ax : angle_vectors[ e.angles ]
+    start : project_source[ e.origin, flash_offset[ flash_number ],
+                            ax.forward, ax.right ]
+    pitch : f32 [ 0.0 ]
+    if [ e.enemy ]
+        aim : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                      e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+        toward : vectoangles[ v_sub[ aim, start ] ]
+        pitch = toward.x
+    yaw : f32 [ e.angles.y ]
+    if [ e.frame <= 221 ] yaw = yaw - 10.0 * f32[ e.frame - 221 ]
+    el                    yaw = yaw + 10.0 * f32[ e.frame - 229 ]
+    sweep : angle_vectors[ vec3f [ pitch, yaw, 0.0 ] ]
+    monster_fire_blaster[ e, start, sweep.forward, 15, 1000,
+                          MZ2_MAKRON_BLASTER_1, EF_BLASTER ]
+
+func makron_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
+    if [ e.health < (e.max_health / 2) ] e.skinnum = 1
+    if [ g.level.time < e.pain_debounce_time ] return
+    # lessen the chance of him going into his pain frames
+    if [ damage <= 25 ]
+        if [ frand[] < 0.2 ] return
+    e.pain_debounce_time = g.level.time + 3.0
+    # no pain anims in nightmare
+    if [ g.skill == 3 ] return
+    if [ damage <= 40 ]
+        g.sound[ e, CHAN_VOICE, makron_sound_pain4, 1.0, ATTN_NONE ]
+        e.monsterinfo.currentmove = makron_move_pain4
+    el [ damage <= 110 ]
+        g.sound[ e, CHAN_VOICE, makron_sound_pain5, 1.0, ATTN_NONE ]
+        e.monsterinfo.currentmove = makron_move_pain5
+    el [ damage <= 150 ]
+        # C binds the source's else to the inner if: two draws
+        if [ frand[] <= 0.45 || frand[] <= 0.35 ]
+            g.sound[ e, CHAN_VOICE, makron_sound_pain6, 1.0, ATTN_NONE ]
+            e.monsterinfo.currentmove = makron_move_pain6
+
+func makron_sight [ e: Edict, other: Edict ]
+    e.monsterinfo.currentmove = makron_move_sight
+
+func makron_attack [ e: Edict ]
+    r : f32 [ frand[] ]
+    if [ r <= 0.3 ]
+        e.monsterinfo.currentmove = makron_move_attack3
+    el [ r <= 0.6 ]
+        e.monsterinfo.currentmove = makron_move_attack4
+    el
+        e.monsterinfo.currentmove = makron_move_attack5
+
+# the makron's torso, left behind when he dies: frames 346 .. 365
+func makron_torso_think [ e: Edict ]
+    e.frame += 1
+    if [ e.frame >= 365 ] e.frame = 346
+    e.nextthink = g.level.time + FRAMETIME
+
+func makron_torso [ e: Edict ]
+    e.movetype = MOVETYPE_NONE
+    e.solid = SOLID_NOT
+    e.mins = vec3f [ -8.0, -8.0, 0.0 ]
+    e.maxs = vec3f [ 8.0, 8.0, 8.0 ]
+    e.frame = 346
+    rider : 'models/monsters/boss3/rider/tris.md2'
+    e.modelindex = g.modelindex[ rider ]
+    e.think = lambda makron_torso_think[]
+    e.nextthink = g.level.time + 2.0 * FRAMETIME
+    e.sound = g.soundindex[ 'makron/spine.wav' ]
+    g.world.link[ e ]
+
+func makron_dead [ e: Edict ]
+    e.mins = vec3f [ -60.0, -60.0, 0.0 ]
+    e.maxs = vec3f [ 60.0, 60.0, 72.0 ]
+    e.movetype = MOVETYPE_TOSS
+    e.svflags = e.svflags | SVF_DEADMONSTER
+    e.nextthink = 0.0
+    g.world.link[ e ]
+
+func makron_die [ e: Edict, inflictor: Edict, attacker: Edict,
+                  damage: i32, point: vec3f ]
+    e.sound = 0
+    # check for gib
+    if [ e.health <= e.gib_health ]
+        g.sound[ e, CHAN_VOICE, g.soundindex[ 'misc/udeath.wav' ], 1.0,
+                 ATTN_NORM ]
+        throw_gib[ e, 'models/objects/gibs/sm_meat/tris.md2', damage,
+                   GIB_ORGANIC ]
+        for [ n: i32 0, n < 4, n += 1 ]
+            throw_gib[ e, 'models/objects/gibs/sm_metal/tris.md2',
+                       damage, GIB_METALLIC ]
+        throw_head[ e, 'models/objects/gibs/gear/tris.md2', damage,
+                    GIB_METALLIC ]
+        e.deadflag = DEAD_DEAD
+        return
+    if [ e.deadflag == DEAD_DEAD ] return
+    # regular death
+    g.sound[ e, CHAN_VOICE, makron_sound_death, 1.0, ATTN_NONE ]
+    e.deadflag = DEAD_DEAD
+    e.takedamage = DAMAGE_YES
+    torso : g.spawn[]
+    torso.origin = vec3f [ e.origin.x, e.origin.y - 84.0, e.origin.z ]
+    torso.angles = e.angles
+    makron_torso[ torso ]
+    e.monsterinfo.currentmove = makron_move_death2
+
+# Makron_CheckAttack; Jorg_CheckAttack is the same, line for line
+func makron_checkattack [ e: Edict ] -> bool
+    mi : e.monsterinfo
+    if [ e.enemy.health > 0 ]
+        # see if any entities are in the way of the shot
+        spot1 : vec3f [ e.origin.x, e.origin.y,
+                        e.origin.z + f32[ e.viewheight ] ]
+        spot2 : vec3f [ e.enemy.origin.x, e.enemy.origin.y,
+                        e.enemy.origin.z + f32[ e.enemy.viewheight ] ]
+        zero : vec3f [ 0.0, 0.0, 0.0 ]
+        tr : g.world.trace[ spot1, zero, zero, spot2, e,
+                            CONTENTS_SOLID | CONTENTS_MONSTER |
+                            CONTENTS_SLIME | CONTENTS_LAVA ]
+        # do we have a clear shot?
+        if [ tr.ent != e.enemy ] return false
+    enemy_range : i32 [ ai_range[ e, e.enemy ] ]
+    e.ideal_yaw = vectoyaw[ v_sub[ e.enemy.origin, e.origin ] ]
+    # melee attack
+    if [ enemy_range == RANGE_MELEE ]
+        if [ mi.melee ] mi.attack_state = AS_MELEE
+        el              mi.attack_state = AS_MISSILE
+        return true
+    # missile attack
+    if [ !mi.attack ] return false
+    if [ g.level.time < mi.attack_finished ] return false
+    if [ enemy_range == RANGE_FAR ] return false
+    chance : f32 [ 0.2 ]
+    if [ mi.aiflags & AI_STAND_GROUND ] chance = 0.4
+    el [ enemy_range == RANGE_NEAR ]    chance = 0.4
+    el [ enemy_range != RANGE_MID ]     return false
+    if [ frand[] < chance ]
+        mi.attack_state = AS_MISSILE
+        mi.attack_finished = g.level.time + 2.0 * frand[]
+        return true
+    if [ e.flags & FL_FLY ]
+        if [ frand[] < 0.3 ] mi.attack_state = AS_SLIDING
+        el                   mi.attack_state = AS_STRAIGHT
+    return false
+
+func makron_precache []
+    makron_sound_pain4 = g.soundindex[ 'makron/pain3.wav' ]
+    makron_sound_pain5 = g.soundindex[ 'makron/pain2.wav' ]
+    makron_sound_pain6 = g.soundindex[ 'makron/pain1.wav' ]
+    makron_sound_death = g.soundindex[ 'makron/death.wav' ]
+    makron_sound_step_left = g.soundindex[ 'makron/step1.wav' ]
+    makron_sound_step_right = g.soundindex[ 'makron/step2.wav' ]
+    makron_sound_attack_bfg = g.soundindex[ 'makron/bfg_fire.wav' ]
+    makron_sound_brainsplorch = g.soundindex[ 'makron/brain1.wav' ]
+    makron_sound_prerailgun = g.soundindex[ 'makron/rail_up.wav' ]
+    makron_sound_popup = g.soundindex[ 'makron/popup.wav' ]
+    makron_sound_taunt1 = g.soundindex[ 'makron/voice4.wav' ]
+    makron_sound_taunt2 = g.soundindex[ 'makron/voice3.wav' ]
+    makron_sound_taunt3 = g.soundindex[ 'makron/voice.wav' ]
+    makron_sound_hit = g.soundindex[ 'makron/bhit.wav' ]
+    g.modelindex[ 'models/monsters/boss3/rider/tris.md2' ]
+
+func sp_monster_makron [ e: Edict ]
+    if [ g.deathmatch ]
+        g.free_edict[ e ]
+        return
+    makron_moves[]
+    makron_precache[]
+    e.movetype = MOVETYPE_STEP
+    e.solid = SOLID_BBOX
+    rider : 'models/monsters/boss3/rider/tris.md2'
+    e.modelindex = g.modelindex[ rider ]
+    e.mins = vec3f [ -30.0, -30.0, 0.0 ]
+    e.maxs = vec3f [ 30.0, 30.0, 90.0 ]
+    e.health = 3000
+    e.gib_health = -2000
+    e.mass = 500
+    e.pain = lambda makron_pain[]
+    e.die  = lambda makron_die[]
+    mi : e.monsterinfo
+    mi.stand  = lambda makron_stand[]
+    mi.walk   = lambda makron_walk[]
+    mi.run    = lambda makron_run[]
+    mi.attack = lambda makron_attack[]
+    mi.sight  = lambda makron_sight[]
+    mi.checkattack = lambda makron_checkattack[]
+    g.world.link[ e ]
+    mi.currentmove = makron_move_sight
+    mi.scale = 1.0
+    walkmonster_start[ e ]
+
+# MakronSpawn: out of jorg's wreck, in a jump at the player
+func makron_spawn [ e: Edict ]
+    sp_monster_makron[ e ]
+    player : g.level.sight_client
+    if [ !player ] return
+    dir : v_sub[ player.origin, e.origin ]
+    e.angles = vec3f [ e.angles.x, vectoyaw[ dir ], e.angles.z ]
+    dir = v_norm[ dir ]
+    e.velocity = vec3f [ 400.0 * dir.x, 400.0 * dir.y, 200.0 ]
+    e.groundentity = null
+
+# MakronToss: jorg is just about dead, so launch the makron out
+func makron_toss [ e: Edict ]
+    rider : g.spawn[]
+    rider.nextthink = g.level.time + 0.8
+    rider.think = lambda makron_spawn[]
+    rider.target = e.target
+    rider.origin = e.origin
+
+# the moves, built once: frame numbers from m_boss32.h
+func makron_moves []
+    if [ makron_move_stand ] return
+    v : vec MFrame []
+    mf[ v, 60, lambda ai_stand[], 0.0, null ]
+    # stand201 .. stand260
+    makron_move_stand = MMove [
+        firstframe: 414, lastframe: 473, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 3.0, lambda makron_step_left[] ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 2, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, lambda makron_step_right[] ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 1, lambda ai_run[], 9.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    # walk204 .. walk213
+    makron_move_run = MMove [
+        firstframe: 477, lastframe: 486, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_run[], 3.0, lambda makron_step_left[] ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 2, lambda ai_run[], 8.0, null ]
+    mf[ v, 1, lambda ai_run[], 8.0, lambda makron_step_right[] ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    mf[ v, 1, lambda ai_run[], 9.0, null ]
+    mf[ v, 1, lambda ai_run[], 6.0, null ]
+    mf[ v, 1, lambda ai_run[], 12.0, null ]
+    # walk204 .. walk213; the source gives walk the run frames
+    makron_move_walk = MMove [
+        firstframe: 477, lastframe: 486, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 15, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_popup[] ]
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_taunt[] ]
+    mf[ v, 3, lambda ai_move[], 0.0, null ]
+    # pain601 .. pain627
+    makron_move_pain6 = MMove [
+        firstframe: 387, lastframe: 413, frames: v,
+        endfunc: lambda makron_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain501 .. pain504
+    makron_move_pain5 = MMove [
+        firstframe: 383, lastframe: 386, frames: v,
+        endfunc: lambda makron_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # pain401 .. pain404
+    makron_move_pain4 = MMove [
+        firstframe: 379, lastframe: 382, frames: v,
+        endfunc: lambda makron_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_move[], -15.0, null ]
+    mf[ v, 1, lambda ai_move[], 3.0, null ]
+    mf[ v, 1, lambda ai_move[], -12.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_step_left[] ]
+    mf[ v, 11, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, null ]
+    mf[ v, 1, lambda ai_move[], 12.0, null ]
+    mf[ v, 1, lambda ai_move[], 11.0, lambda makron_step_right[] ]
+    mf[ v, 15, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 5.0, null ]
+    mf[ v, 1, lambda ai_move[], 7.0, null ]
+    mf[ v, 1, lambda ai_move[], 6.0, lambda makron_step_left[] ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -1.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 13, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -6.0, lambda makron_step_right[] ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, lambda makron_step_left[] ]
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 1, lambda ai_move[], -5.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, lambda makron_step_right[] ]
+    mf[ v, 1, lambda ai_move[], -8.0, null ]
+    mf[ v, 1, lambda ai_move[], -3.0, lambda makron_step_left[] ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, null ]
+    mf[ v, 1, lambda ai_move[], -4.0, lambda makron_step_right[] ]
+    mf[ v, 1, lambda ai_move[], -6.0, null ]
+    mf[ v, 1, lambda ai_move[], -7.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_step_left[] ]
+    mf[ v, 12, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], -2.0, null ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 2.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, null ]
+    mf[ v, 1, lambda ai_move[], 27.0, lambda makron_hit[] ]
+    mf[ v, 1, lambda ai_move[], 26.0, null ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_brainsplorch[] ]
+    mf[ v, 2, lambda ai_move[], 0.0, null ]
+    # death201 .. death295
+    makron_move_death2 = MMove [
+        firstframe: 251, lastframe: 345, frames: v,
+        endfunc: lambda makron_dead[] ]
+    v = vec MFrame []
+    mf[ v, 20, lambda ai_move[], 0.0, null ]
+    # death301 .. death320
+    makron_move_death3 = MMove [
+        firstframe: 346, lastframe: 365, frames: v,
+        endfunc: null ]
+    v = vec MFrame []
+    mf[ v, 13, lambda ai_move[], 0.0, null ]
+    # active01 .. active13
+    makron_move_sight = MMove [
+        firstframe: 188, lastframe: 200, frames: v,
+        endfunc: lambda makron_run[] ]
+    v = vec MFrame []
+    mf[ v, 3, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda makron_bfg[] ]
+    mf[ v, 4, lambda ai_move[], 0.0, null ]
+    # attak301 .. attak308
+    makron_move_attack3 = MMove [
+        firstframe: 201, lastframe: 208, frames: v,
+        endfunc: lambda makron_run[] ]
+    v = vec MFrame []
+    mf[ v, 4, lambda ai_charge[], 0.0, null ]
+    mf[ v, 17, lambda ai_move[], 0.0, lambda makron_hyperblaster[] ]
+    mf[ v, 5, lambda ai_move[], 0.0, null ]
+    # attak401 .. attak426
+    makron_move_attack4 = MMove [
+        firstframe: 209, lastframe: 234, frames: v,
+        endfunc: lambda makron_run[] ]
+    v = vec MFrame []
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda makron_prerailgun[] ]
+    mf[ v, 6, lambda ai_charge[], 0.0, null ]
+    mf[ v, 1, lambda ai_charge[], 0.0, lambda makron_saveloc[] ]
+    mf[ v, 1, lambda ai_move[], 0.0, lambda makron_railgun[] ]
+    mf[ v, 7, lambda ai_move[], 0.0, null ]
+    # attak501 .. attak516
+    makron_move_attack5 = MMove [
+        firstframe: 235, lastframe: 250, frames: v,
+        endfunc: lambda makron_run[] ]
+

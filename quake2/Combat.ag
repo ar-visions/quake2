@@ -1,0 +1,278 @@
+# g_combat.c: damage
+extend quake2
+
+# CanDamage: a straight line from the inflictor to the target
+func can_damage [ targ: Edict, inflictor: Edict ] -> bool
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    # bmodels need special checking because their origin is 0,0,0
+    if [ targ.movetype == MOVETYPE_PUSH ]
+        dest : v_scale[ v_add[ targ.absmin, targ.absmax ], 0.5 ]
+        tr : g.world.trace[ inflictor.origin, zero, zero, dest, inflictor,
+                            MASK_SOLID ]
+        if [ tr.fraction == 1.0 ] return true
+        if [ tr.ent == targ ] return true
+        return false
+    tr : g.world.trace[ inflictor.origin, zero, zero, targ.origin,
+                        inflictor, MASK_SOLID ]
+    if [ tr.fraction == 1.0 ] return true
+    for [ i: i32 0, i < 4, i += 1 ]
+        dx : f32 [ (i < 2) ? 15.0 : -15.0 ]
+        dy : f32 [ (i % 2 == 0) ? 15.0 : -15.0 ]
+        dest : vec3f [ targ.origin.x + dx, targ.origin.y + dy, targ.origin.z ]
+        tr = g.world.trace[ inflictor.origin, zero, zero, dest, inflictor,
+                            MASK_SOLID ]
+        if [ tr.fraction == 1.0 ] return true
+    return false
+
+func killed [ targ: Edict, inflictor: Edict, attacker: Edict,
+              damage: i32, point: vec3f ]
+    if [ targ.health < -999 ] targ.health = -999
+    targ.enemy = attacker
+    if [ (targ.svflags & SVF_MONSTER) != 0 && targ.deadflag != DEAD_DEAD ]
+        if [ (targ.monsterinfo.aiflags & AI_GOOD_GUY) == 0 ]
+            g.level.killed_monsters += 1
+            if [ g.coop && attacker.client ] attacker.client.resp.score += 1
+            # medics won't heal monsters that they kill themselves
+            if [ attacker.classname == 'monster_medic' ] targ.owner = attacker
+    if [ targ.movetype == MOVETYPE_PUSH || targ.movetype == MOVETYPE_STOP ||
+         targ.movetype == MOVETYPE_NONE ]
+        # doors, triggers, etc
+        if [ targ.die ] targ.die[ targ, inflictor, attacker, damage, point ]
+        return
+    if [ (targ.svflags & SVF_MONSTER) != 0 && targ.deadflag != DEAD_DEAD ]
+        targ.touch = null
+        monster_death_use[ targ ]
+    if [ targ.die ] targ.die[ targ, inflictor, attacker, damage, point ]
+
+func spawn_damage [ kind: i32, origin: vec3f, normal: vec3f,
+                    damage: i32 ]
+    d : i32 [ (damage > 255) ? 255 : damage ]
+    g.temp_entity[ kind, origin, normal, d, 0 ]
+
+func check_power_armor [ e: Edict, point: vec3f, normal: vec3f,
+                         damage_in: i32, dflags: i32 ] -> i32
+    if [ damage_in == 0 ] return 0
+    if [ dflags & DAMAGE_NO_ARMOR ] return 0
+    client : e.client
+    pa_type : i32 [ POWER_ARMOR_NONE ]
+    power : i32 [ 0 ]
+    index : i32 [ 0 ]
+    if [ client ]
+        pa_type = power_armor_type[ e ]
+        if [ pa_type != POWER_ARMOR_NONE ]
+            index = find_item[ 'Cells' ].index
+            power = client.pers.inventory[ index ]
+    el [ e.svflags & SVF_MONSTER ]
+        pa_type = e.monsterinfo.power_armor_type
+        power = e.monsterinfo.power_armor_power
+    el
+        return 0
+    if [ pa_type == POWER_ARMOR_NONE ] return 0
+    if [ power == 0 ] return 0
+    damage : i32 [ damage_in ]
+    damage_per_cell : i32 [ 2 ]
+    pa_te_type : i32 [ TE_SHIELD_SPARKS ]
+    if [ pa_type == POWER_ARMOR_SCREEN ]
+        # only works if damage point is in front
+        ax : angle_vectors[ e.angles ]
+        dir : v_norm[ v_sub[ point, e.origin ] ]
+        if [ v_dot[ dir, ax.forward ] <= 0.3 ] return 0
+        damage_per_cell = 1
+        pa_te_type = TE_SCREEN_SPARKS
+        damage = damage / 3
+    el
+        damage = (2 * damage) / 3
+    save : i32 [ power * damage_per_cell ]
+    if [ save == 0 ] return 0
+    if [ save > damage ] save = damage
+    spawn_damage[ pa_te_type, point, normal, save ]
+    e.powerarmor_time = g.level.time + 0.2
+    power_used : i32 [ save / damage_per_cell ]
+    if [ client ]
+        client.pers.inventory[ index ] = client.pers.inventory[ index ]
+            - power_used
+    el
+        e.monsterinfo.power_armor_power -= power_used
+    return save
+
+func check_armor [ e: Edict, point: vec3f, normal: vec3f,
+                   damage: i32, te_sparks: i32, dflags: i32 ] -> i32
+    if [ damage == 0 ] return 0
+    client : e.client
+    if [ !client ] return 0
+    if [ dflags & DAMAGE_NO_ARMOR ] return 0
+    index : i32 [ armor_index[ e ] ]
+    if [ index == 0 ] return 0
+    armor : g.items[ index ]
+    save : i32 [ 0 ]
+    if [ dflags & DAMAGE_ENERGY ]
+        save = ceil[ armor.energy_protection * f32[ damage ] ]
+    el
+        save = ceil[ armor.normal_protection * f32[ damage ] ]
+    if [ save >= client.pers.inventory[ index ] ]
+        save = client.pers.inventory[ index ]
+    if [ save == 0 ] return 0
+    client.pers.inventory[ index ] = client.pers.inventory[ index ] - save
+    spawn_damage[ te_sparks, point, normal, save ]
+    return save
+
+func m_react_to_damage [ targ: Edict, attacker: Edict ]
+    if [ !attacker.client && (attacker.svflags & SVF_MONSTER) == 0 ] return
+    if [ attacker == targ || attacker == targ.enemy ] return
+    # if we are a good guy monster and our attacker is a player
+    # or another good guy, do not get mad at them
+    if [ targ.monsterinfo.aiflags & AI_GOOD_GUY ]
+        if [ attacker.client || (attacker.monsterinfo.aiflags & AI_GOOD_GUY) != 0 ]
+            return
+    # we now know that we are not both good guys
+    # if attacker is a client, get mad at them because he's good and
+    # we're not
+    if [ attacker.client ]
+        targ.monsterinfo.aiflags = targ.monsterinfo.aiflags & ~AI_SOUND_TARGET
+        # this can only happen in coop (both new and old enemies are
+        # clients) only switch if can't see the current enemy
+        if [ targ.enemy && targ.enemy.client ]
+            if [ visible[ targ, targ.enemy ] ]
+                targ.oldenemy = attacker
+                return
+            targ.oldenemy = targ.enemy
+        targ.enemy = attacker
+        if [ (targ.monsterinfo.aiflags & AI_DUCKED) == 0 ] found_target[ targ ]
+        return
+    # it's the same base (walk/swim/fly) type and a different classname
+    # and it's not a tank (they shoot at anything)
+    same_base : bool [ (targ.flags & (FL_FLY | FL_SWIM))
+                       == (attacker.flags & (FL_FLY | FL_SWIM)) ]
+    if [ same_base && targ.classname != attacker.classname &&
+         attacker.classname != 'monster_tank' &&
+         attacker.classname != 'monster_supertank' &&
+         attacker.classname != 'monster_makron' &&
+         attacker.classname != 'monster_jorg' ]
+        if [ targ.enemy && targ.enemy.client ] targ.oldenemy = targ.enemy
+        targ.enemy = attacker
+        if [ (targ.monsterinfo.aiflags & AI_DUCKED) == 0 ] found_target[ targ ]
+    el [ attacker.enemy == targ ]
+        # if they *meant* to shoot us, then shoot back
+        if [ targ.enemy && targ.enemy.client ] targ.oldenemy = targ.enemy
+        targ.enemy = attacker
+        if [ (targ.monsterinfo.aiflags & AI_DUCKED) == 0 ] found_target[ targ ]
+    el [ attacker.enemy && attacker.enemy != targ ]
+        # otherwise get mad at whoever they are mad at (help our buddy)
+        if [ targ.enemy && targ.enemy.client ] targ.oldenemy = targ.enemy
+        targ.enemy = attacker.enemy
+        if [ (targ.monsterinfo.aiflags & AI_DUCKED) == 0 ] found_target[ targ ]
+
+# T_Damage: what inflictor did to targ for attacker
+func t_damage [ targ: Edict, inflictor: Edict, attacker: Edict,
+                dir_in: vec3f, point: vec3f, normal: vec3f, damage_in: i32,
+                knockback_in: i32, dflags: i32, means: i32 ]
+    if [ targ.takedamage == DAMAGE_NO ] return
+    damage : i32 [ damage_in ]
+    knockback : i32 [ knockback_in ]
+    mod : i32 [ means ]
+    # friendly fire avoidance: coop and team deathmatch
+    if [ targ != attacker && g.coop ]
+        # OnSameTeam is false without model or skin teams
+        mod = mod
+    g.means_of_death = mod
+    # easy mode takes half damage
+    if [ g.skill == 0 && !g.deathmatch && targ.client ]
+        damage = damage / 2
+        if [ damage == 0 ] damage = 1
+    client : targ.client
+    te_sparks : i32 [ (dflags & DAMAGE_BULLET) ? TE_BULLET_SPARKS : TE_SPARKS ]
+    dir : v_norm[ dir_in ]
+    # bonus damage for suprising a monster
+    if [ (dflags & DAMAGE_RADIUS) == 0 && (targ.svflags & SVF_MONSTER) != 0 &&
+         attacker.client && !targ.enemy && targ.health > 0 ]
+        damage = damage * 2
+    if [ targ.flags & FL_NO_KNOCKBACK ] knockback = 0
+    # figure momentum add
+    if [ (dflags & DAMAGE_NO_KNOCKBACK) == 0 ]
+        if [ knockback != 0 && targ.movetype != MOVETYPE_NONE &&
+             targ.movetype != MOVETYPE_BOUNCE &&
+             targ.movetype != MOVETYPE_PUSH &&
+             targ.movetype != MOVETYPE_STOP ]
+            mass : f32 [ (targ.mass < 50) ? 50.0 : f32[ targ.mass ] ]
+            kvel : vec3f [ 0.0, 0.0, 0.0 ]
+            if [ targ.client && attacker == targ ]
+                # the rocket jump hack
+                kvel = v_scale[ dir, 1600.0 * f32[ knockback ] / mass ]
+            el
+                kvel = v_scale[ dir, 500.0 * f32[ knockback ] / mass ]
+            targ.velocity = v_add[ targ.velocity, kvel ]
+    take : i32 [ damage ]
+    save : i32 [ 0 ]
+    # check for godmode
+    if [ (targ.flags & FL_GODMODE) != 0 && (dflags & DAMAGE_NO_PROTECTION) == 0 ]
+        take = 0
+        save = damage
+        spawn_damage[ te_sparks, point, normal, save ]
+    # check for invincibility
+    if [ client && client.invincible_framenum > f32[ g.level.framenum ] &&
+         (dflags & DAMAGE_NO_PROTECTION) == 0 ]
+        if [ targ.pain_debounce_time < g.level.time ]
+            g.sound[ targ, CHAN_ITEM, g.soundindex[ 'items/protect4.wav' ],
+                     1.0, ATTN_NORM ]
+            targ.pain_debounce_time = g.level.time + 2.0
+        take = 0
+        save = damage
+    psave : i32 [ check_power_armor[ targ, point, normal, take, dflags ] ]
+    take -= psave
+    asave : i32 [ check_armor[ targ, point, normal, take, te_sparks,
+                               dflags ] ]
+    take -= asave
+    # treat cheat/powerup savings the same as armor
+    asave += save
+    # do the damage
+    if [ take != 0 ]
+        if [ (targ.svflags & SVF_MONSTER) != 0 || client ]
+            spawn_damage[ TE_BLOOD, point, normal, take ]
+        el
+            spawn_damage[ te_sparks, point, normal, take ]
+        targ.health = targ.health - take
+        if [ targ.health <= 0 ]
+            if [ (targ.svflags & SVF_MONSTER) != 0 || client ]
+                targ.flags = targ.flags | FL_NO_KNOCKBACK
+            killed[ targ, inflictor, attacker, take, point ]
+            return
+    if [ targ.svflags & SVF_MONSTER ]
+        m_react_to_damage[ targ, attacker ]
+        if [ (targ.monsterinfo.aiflags & AI_DUCKED) == 0 && take != 0 ]
+            if [ targ.pain ] targ.pain[ targ, attacker, f32[ knockback ], take ]
+            # nightmare mode monsters don't go into pain frames often
+            if [ g.skill == 3 ] targ.pain_debounce_time = g.level.time + 5.0
+    el [ client ]
+        if [ (targ.flags & FL_GODMODE) == 0 && take != 0 ]
+            if [ targ.pain ] targ.pain[ targ, attacker, f32[ knockback ], take ]
+    el [ take != 0 ]
+        if [ targ.pain ] targ.pain[ targ, attacker, f32[ knockback ], take ]
+    # add to the damage inflicted on a player this frame
+    # the total will be turned into screen blends and view angle kicks
+    # at the end of the frame
+    if [ client ]
+        client.damage_parmor += psave
+        client.damage_armor += asave
+        client.damage_blood += take
+        client.damage_knockback += knockback
+        client.damage_from = point
+
+func t_radius_damage [ inflictor: Edict, attacker: Edict,
+                       damage: f32, ignore: Edict, radius: f32, means: i32 ]
+    zero : vec3f [ 0.0, 0.0, 0.0 ]
+    ent : Edict [ null ]
+    while [ true ]
+        ent = g.findradius[ ent, inflictor.origin, radius ]
+        if [ !ent ] break
+        if [ ent == ignore ] continue
+        if [ ent.takedamage == DAMAGE_NO ] continue
+        v : v_ma[ ent.origin, 0.5, v_add[ ent.mins, ent.maxs ] ]
+        v = v_sub[ inflictor.origin, v ]
+        points : f32 [ damage - 0.5 * v_len[ v ] ]
+        if [ ent == attacker ] points = points * 0.5
+        if [ points > 0.0 ]
+            if [ can_damage[ ent, inflictor ] ]
+                dir : v_sub[ ent.origin, inflictor.origin ]
+                t_damage[ ent, inflictor, attacker, dir, inflictor.origin,
+                          zero, i32[ points ], i32[ points ], DAMAGE_RADIUS,
+                          means ]
