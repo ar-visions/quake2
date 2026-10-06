@@ -41,6 +41,7 @@ class Trace
     public ex         : f32
     public ey         : f32
     public ez         : f32
+    public ent        : Edict
 
 func bsp_i32 [ d: @u8, off: i32 ] -> i32
     v : i32 [ 0 ]
@@ -142,6 +143,16 @@ class BspMap
     public model_face : vec i32
     # false for triggers and area portals: never clipped or drawn
     public model_solid : vec bool
+    # the box hull cmodel.c appends: 6 nodes, 12 planes, a brush
+    public box_headnode : i32
+    public box_planes   : i32
+    public empty_leaf   : i32
+    # the lightmap atlas cursor, shared by every mesh built
+    public lm_x       : i32
+    public lm_y       : i32
+    public lm_row     : i32
+    # the inline model each node of build_models draws
+    public node_model : vec i32
 
     public func load [ pak: Pak, map: string ] -> bool
         name = map
@@ -180,6 +191,7 @@ class BspMap
         tr_mins = vec f32 [ 3 ]
         tr_maxs = vec f32 [ 3 ]
         tr_ext  = vec f32 [ 3 ]
+        init_box_hull[]
         vl : i32 [ lump_len[ b, 3 ] ]
         vd : new u8 [ vl ]
         memcpy[ vd, @b[ lump_off[ b, 3 ] ], vl ]
@@ -542,62 +554,167 @@ class BspMap
                     box_leafs_test[ c0, x0, y0, z0, x1, y1, z1 ]
                     n = c1
 
-    # CM_BoxTrace through the world, quake axes; mask as contents
-    public func box_trace [ sx: f32, sy: f32, sz: f32,
-                            ex: f32, ey: f32, ez: f32,
-                            mins: vec f32, maxs: vec f32,
-                            mask: i32 ] -> Trace
+    # CM_InitBoxHull: a six sided hull whose planes move per call
+    func init_box_hull []
+        empty_leaf = 0
+        for [ i: i32 0, i < leaf_contents.count, i += 1 ]
+            if [ leaf_contents[ i ] == 0 ]
+                empty_leaf = i
+                break
+        box_headnode = nodes.count / 3
+        box_planes = planes.count / 4
+        box_brush : i32 [ brushes.count / 3 ]
+        box_leaf : i32 [ leaf_contents.count ]
+        side0 : i32 [ brushsides.count ]
+        brushes.push[ side0 ]
+        brushes.push[ 6 ]
+        brushes.push[ 33554432 ]
+        brush_check.push[ 0 ]
+        leaf_contents.push[ 33554432 ]
+        leaf_cluster.push[ -1 ]
+        leaf_first.push[ 0 ]
+        leaf_count.push[ 0 ]
+        lb0 : i32 [ leafbrushes.count ]
+        leaf_bfirst.push[ lb0 ]
+        leaf_bcount.push[ 1 ]
+        leafbrushes.push[ box_brush ]
+        for [ i: i32 0, i < 6, i += 1 ]
+            side : i32 [ i & 1 ]
+            pside : i32 [ box_planes + i * 2 + side ]
+            brushsides.push[ pside ]
+            # the node: its plane, the empty leaf on one side
+            c0 : i32 [ 0 ]
+            c1 : i32 [ 0 ]
+            next : i32 [ (i != 5) ? box_headnode + i + 1 : 0 - 1 - box_leaf ]
+            if [ side == 0 ]
+                c0 = 0 - 1 - empty_leaf
+                c1 = next
+            el
+                c1 = 0 - 1 - empty_leaf
+                c0 = next
+            pnode : i32 [ box_planes + i * 2 ]
+            nodes.push[ pnode ]
+            nodes.push[ c0 ]
+            nodes.push[ c1 ]
+            axis : i32 [ i >> 1 ]
+            for [ k: i32 0, k < 2, k += 1 ]
+                sign : f32 [ (k == 0) ? 1.0 : -1.0 ]
+                nx : f32 [ (axis == 0) ? sign : 0.0 ]
+                ny : f32 [ (axis == 1) ? sign : 0.0 ]
+                nz : f32 [ (axis == 2) ? sign : 0.0 ]
+                zero : f32 [ 0.0 ]
+                planes.push[ nx ]
+                planes.push[ ny ]
+                planes.push[ nz ]
+                planes.push[ zero ]
+
+    # CM_HeadnodeForBox: the hull's planes set to this box
+    public func headnode_for_box [ mins: vec3f, maxs: vec3f ] -> i32
+        p : i32 [ box_planes * 4 + 3 ]
+        planes[ p ]      = maxs.x
+        planes[ p + 4 ]  = 0.0 - maxs.x
+        planes[ p + 8 ]  = mins.x
+        planes[ p + 12 ] = 0.0 - mins.x
+        planes[ p + 16 ] = maxs.y
+        planes[ p + 20 ] = 0.0 - maxs.y
+        planes[ p + 24 ] = mins.y
+        planes[ p + 28 ] = 0.0 - mins.y
+        planes[ p + 32 ] = maxs.z
+        planes[ p + 36 ] = 0.0 - maxs.z
+        planes[ p + 40 ] = mins.z
+        planes[ p + 44 ] = 0.0 - mins.z
+        return box_headnode
+
+    # CM_BoxTrace through one hull, quake axes; mask as contents
+    public func trace_hull [ head: i32, start: vec3f, end: vec3f,
+                             mins: vec3f, maxs: vec3f,
+                             mask: i32 ] -> Trace
         checkcount += 1
         tr = Trace [ fraction: 1.0 ]
         tr_contents = mask
-        tr_sx = sx
-        tr_sy = sy
-        tr_sz = sz
-        tr_ex = ex
-        tr_ey = ey
-        tr_ez = ez
+        tr_sx = start.x
+        tr_sy = start.y
+        tr_sz = start.z
+        tr_ex = end.x
+        tr_ey = end.y
+        tr_ez = end.z
+        tr_mins[ 0 ] = mins.x
+        tr_mins[ 1 ] = mins.y
+        tr_mins[ 2 ] = mins.z
+        tr_maxs[ 0 ] = maxs.x
+        tr_maxs[ 1 ] = maxs.y
+        tr_maxs[ 2 ] = maxs.z
         for [ i: i32 0, i < 3, i += 1 ]
-            tr_mins[ i ] = mins[ i ]
-            tr_maxs[ i ] = maxs[ i ]
-            tr_ext[ i ] = (0.0 - mins[ i ] > maxs[ i ]) ? 0.0 - mins[ i ]
-                                                         : maxs[ i ]
-        tr_point = mins[ 0 ] == 0.0 && mins[ 1 ] == 0.0 &&
-            mins[ 2 ] == 0.0 && maxs[ 0 ] == 0.0 && maxs[ 1 ] == 0.0 &&
-            maxs[ 2 ] == 0.0
-        # the sweep's bounds, for the inline models' boxes
-        bx0 : f32 [ ((sx < ex) ? sx : ex) + mins[ 0 ] - 1.0 ]
-        by0 : f32 [ ((sy < ey) ? sy : ey) + mins[ 1 ] - 1.0 ]
-        bz0 : f32 [ ((sz < ez) ? sz : ez) + mins[ 2 ] - 1.0 ]
-        bx1 : f32 [ ((sx > ex) ? sx : ex) + maxs[ 0 ] + 1.0 ]
-        by1 : f32 [ ((sy > ey) ? sy : ey) + maxs[ 1 ] + 1.0 ]
-        bz1 : f32 [ ((sz > ez) ? sz : ez) + maxs[ 2 ] + 1.0 ]
-        still : bool [ sx == ex && sy == ey && sz == ez ]
-        # the world, then the inline models at their map place
-        for [ m: i32 0, m < model_head.count, m += 1 ]
-            if [ m > 0 ]
-                if [ !model_solid[ m ] ] continue
-                mb : i32 [ m * 6 ]
-                if [ model_box[ mb ] > bx1 || model_box[ mb + 3 ] < bx0 ||
-                     model_box[ mb + 1 ] > by1 || model_box[ mb + 4 ] < by0 ||
-                     model_box[ mb + 2 ] > bz1 || model_box[ mb + 5 ] < bz0 ]
-                    continue
-            if [ still ]
-                # the position test: is the box in anything
-                box_leafs_test[ model_head[ m ], bx0, by0, bz0,
-                                bx1, by1, bz1 ]
-            el
-                hull_check[ model_head[ m ], 0.0, 1.0, sx, sy, sz,
-                            ex, ey, ez ]
-            if [ tr.allsolid ] break
-        if [ still ]
-            tr.ex = sx
-            tr.ey = sy
-            tr.ez = sz
-            return tr
-        tr.ex = sx + tr.fraction * (ex - sx)
-        tr.ey = sy + tr.fraction * (ey - sy)
-        tr.ez = sz + tr.fraction * (ez - sz)
-        return tr
+            tr_ext[ i ] = (0.0 - tr_mins[ i ] > tr_maxs[ i ])
+                ? 0.0 - tr_mins[ i ] : tr_maxs[ i ]
+        tr_point = v_zero[ mins ] && v_zero[ maxs ]
+        if [ v_eq[ start, end ] ]
+            # the position test: is the box in anything
+            box_leafs_test[ head,
+                start.x + mins.x - 1.0, start.y + mins.y - 1.0,
+                start.z + mins.z - 1.0,
+                start.x + maxs.x + 1.0, start.y + maxs.y + 1.0,
+                start.z + maxs.z + 1.0 ]
+            tr.ex = start.x
+            tr.ey = start.y
+            tr.ez = start.z
+            return trace_copy[]
+        hull_check[ head, 0.0, 1.0, start.x, start.y, start.z,
+                    end.x, end.y, end.z ]
+        tr.ex = start.x + tr.fraction * (end.x - start.x)
+        tr.ey = start.y + tr.fraction * (end.y - start.y)
+        tr.ez = start.z + tr.fraction * (end.z - start.z)
+        return trace_copy[]
+
+    # the trace by value: the member is reused by the next call
+    func trace_copy [] -> Trace
+        return Trace [ fraction: tr.fraction, allsolid: tr.allsolid,
+                       startsolid: tr.startsolid, contents: tr.contents,
+                       nx: tr.nx, ny: tr.ny, nz: tr.nz,
+                       ex: tr.ex, ey: tr.ey, ez: tr.ez ]
+
+    # CM_TransformedBoxTrace: a hull placed at origin, turned by angles
+    public func transformed_trace [ start: vec3f, end: vec3f,
+                                    mins: vec3f, maxs: vec3f, head: i32,
+                                    mask: i32, origin: vec3f,
+                                    angles: vec3f ] -> Trace
+        sl : v_sub[ start, origin ]
+        endl : v_sub[ end, origin ]
+        rotated : bool [ head != box_headnode && !v_zero[ angles ] ]
+        if [ rotated ]
+            ax : angle_vectors[ angles ]
+            sl = vec3f [ v_dot[ sl, ax.forward ], 0.0 - v_dot[ sl, ax.right ],
+                         v_dot[ sl, ax.up ] ]
+            endl = vec3f [ v_dot[ endl, ax.forward ],
+                           0.0 - v_dot[ endl, ax.right ],
+                           v_dot[ endl, ax.up ] ]
+        t : trace_hull[ head, sl, endl, mins, maxs, mask ]
+        if [ rotated && t.fraction != 1.0 ]
+            ax : angle_vectors[ v_neg[ angles ] ]
+            n : vec3f [ t.nx, t.ny, t.nz ]
+            t.nx = v_dot[ n, ax.forward ]
+            t.ny = 0.0 - v_dot[ n, ax.right ]
+            t.nz = v_dot[ n, ax.up ]
+        t.ex = start.x + t.fraction * (end.x - start.x)
+        t.ey = start.y + t.fraction * (end.y - start.y)
+        t.ez = start.z + t.fraction * (end.z - start.z)
+        return t
+
+    # CM_PointContents
+    public func point_contents [ p: vec3f, head: i32 ] -> i32
+        l : i32 [ leaf_from[ head, p.x, p.y, p.z ] ]
+        if [ l < 0 || l >= leaf_contents.count ] return 0
+        return leaf_contents[ l ]
+
+    public func transformed_point_contents [ p: vec3f, head: i32,
+                                             origin: vec3f,
+                                             angles: vec3f ] -> i32
+        pl : v_sub[ p, origin ]
+        if [ head != box_headnode && !v_zero[ angles ] ]
+            ax : angle_vectors[ angles ]
+            pl = vec3f [ v_dot[ pl, ax.forward ], 0.0 - v_dot[ pl, ax.right ],
+                         v_dot[ pl, ax.up ] ]
+        return point_contents[ pl, head ]
 
     func load_leaffaces [ b: @u8, off: i32, cnt: i32 ]
         n : i32 [ cnt / 2 ]
@@ -607,7 +724,10 @@ class BspMap
 
     # the leaf holding a point, quake axes
     public func leaf_at [ x: f32, y: f32, z: f32 ] -> i32
-        node : i32 [ headnode ]
+        return leaf_from[ headnode, x, y, z ]
+
+    public func leaf_from [ head: i32, x: f32, y: f32, z: f32 ] -> i32
+        node : i32 [ head ]
         while [ node >= 0 ]
             pl : i32 [ nodes[ node * 3 ] * 4 ]
             d : f32 [ x * planes[ pl ] + y * planes[ pl + 1 ]
@@ -663,16 +783,6 @@ class BspMap
                 if [ face_first[ f ] < 0 ] continue
                 if [ face_mark[ f ] == mark_gen ] continue
                 face_mark[ f ] = mark_gen
-                cnt : i32 [ face_tris[ f ] * 3 ]
-                memcpy[ @out[ n ], @idx_all[ face_first[ f ] ], cnt * 4 ]
-                n += cnt
-        # the inline models (doors, lifts) always, until they move
-        for [ m: i32 1, m < model_head.count, m += 1 ]
-            if [ !model_solid[ m ] ] continue
-            mf : i32 [ model_face[ m * 2 ] ]
-            for [ i: i32 0, i < model_face[ m * 2 + 1 ], i += 1 ]
-                f : i32 [ mf + i ]
-                if [ face_first[ f ] < 0 ] continue
                 cnt : i32 [ face_tris[ f ] * 3 ]
                 memcpy[ @out[ n ], @idx_all[ face_first[ f ] ], cnt * 4 ]
                 n += cnt
@@ -809,136 +919,114 @@ class BspMap
         if [ e >= 0 ] return edges[ e * 2 ]
         return edges[ (0 - e) * 2 + 1 ]
 
-    # the world as one mesh: position, texture uv in texels of
-    # the wal, lightmap uv in the atlas, the wal's atlas rect
-    public func build [] -> GltfModel
+    # verts and indices a run of faces needs: out[0] verts, out[1] indices
+    func count_faces [ f0: i32, n: i32, out: vec i32 ]
         nv : i32 [ 0 ]
         ni : i32 [ 0 ]
-        for [ fi: i32 0, fi < faces.count, fi += 1 ]
+        for [ fi: i32 f0, fi < f0 + n, fi += 1 ]
             f : faces[ fi ]
             if [ !face_drawn[ f ] ] continue
             nv = nv + f.num_edges
             ni = ni + (f.num_edges - 2) * 3
-        pb : i32 [ nv * 12 ]
-        ub : i32 [ nv * 8 ]
-        rb : i32 [ nv * 16 ]
-        ib : i32 [ ni * 4 ]
-        tsz : i32 [ pb + ub + ub + rb + ib ]
-        data : new u8 [ tsz ]
-        pf : @f32 [ data ]
-        uf : @f32 [ @data[ pb ] ]
-        lf : @f32 [ @data[ pb + ub ] ]
-        rf : @f32 [ @data[ pb + ub + ub ] ]
-        iu : @u32 [ @data[ pb + ub + ub + rb ] ]
-        # lightmap atlas: blocks shelf-packed in rows of lm_w
-        lm_h = 2048
-        lm_atlas = Image [ width: lm_w, height: lm_h,
-                           format: Pixel.rgba8, linear: true ]
-        ld : @u8 [ lm_atlas.vdata[] ]
-        lmn : i32 [ lm_w * lm_h * 4 ]
-        memset[ ld, 255, lmn ]
-        lx : i32 [ 0 ]
-        ly : i32 [ 0 ]
-        lrow : i32 [ 0 ]
-        v : i32 [ 0 ]
-        k : i32 [ 0 ]
-        face_first = vec i32 [ faces.count ]
-        face_tris  = vec i32 [ faces.count ]
-        face_mark  = vec i32 [ faces.count ]
-        for [ i: i32 0, i < faces.count, i += 1 ] face_first[ i ] = -1
-        idx_all = iu
-        idx_n   = ni
+        out[ 0 ] = nv
+        out[ 1 ] = ni
+
+    # one face's vertices at v: position, wal uv, lightmap uv, rect
+    func emit_face [ fi: i32, pf: @f32, uf: @f32, lf: @f32, rf: @f32,
+                     v: i32 ]
+        f : faces[ fi ]
+        ti : texinfos[ f.texinfo ]
+        t  : texs[ ti.tex ]
+        n  : i32 [ f.num_edges ]
         aw : f32 [ atlas_w ]
         ah : f32 [ atlas_h ]
-        for [ fi: i32 0, fi < faces.count, fi += 1 ]
-            f : faces[ fi ]
-            if [ !face_drawn[ f ] ] continue
-            ti : texinfos[ f.texinfo ]
-            t  : texs[ ti.tex ]
-            n  : i32 [ f.num_edges ]
-            # texture extents in texels, as CalcSurfaceExtents
-            smin : f32 [ 999999.0 ]
-            smax : f32 [ -999999.0 ]
-            tmin : f32 [ 999999.0 ]
-            tmax : f32 [ -999999.0 ]
-            base : i32 [ v ]
-            for [ i: i32 0, i < n, i += 1 ]
-                vi : i32 [ face_vert[ f, i ] * 3 ]
-                x : f32 [ verts[ vi ] ]
-                y : f32 [ verts[ vi + 1 ] ]
-                z : f32 [ verts[ vi + 2 ] ]
-                s : f32 [ x * ti.sx + y * ti.sy + z * ti.sz + ti.so ]
-                tt : f32 [ x * ti.tx + y * ti.ty + z * ti.tz + ti.to ]
-                if [ s < smin ] smin = s
-                if [ s > smax ] smax = s
-                if [ tt < tmin ] tmin = tt
-                if [ tt > tmax ] tmax = tt
-                at : i32 [ (v + i) * 3 ]
-                # quake z up to trinity y up
-                pf[ at ]     = x
-                pf[ at + 1 ] = z
-                pf[ at + 2 ] = 0.0 - y
-                ut : i32 [ (v + i) * 2 ]
-                uf[ ut ]     = s / f32[ t.width ]
-                uf[ ut + 1 ] = tt / f32[ t.height ]
-                rt : i32 [ (v + i) * 4 ]
-                rf[ rt ]     = f32[ t.ax ] / aw
-                rf[ rt + 1 ] = f32[ t.ay ] / ah
-                rf[ rt + 2 ] = f32[ t.width ] / aw
-                rf[ rt + 3 ] = f32[ t.height ] / ah
-            bs0 : i32 [ i32[ floor[ smin / 16.0 ] ] ]
-            bs1 : i32 [ i32[ ceil[ smax / 16.0 ] ] ]
-            bt0 : i32 [ i32[ floor[ tmin / 16.0 ] ] ]
-            bt1 : i32 [ i32[ ceil[ tmax / 16.0 ] ] ]
-            bw : i32 [ bs1 - bs0 + 1 ]
-            bh : i32 [ bt1 - bt0 + 1 ]
-            lit : bool [ f.lightofs >= 0 && bw <= 34 && bh <= 34 &&
-                (ti.flags & surf_warp[]) == 0 ]
+        # texture extents in texels, as CalcSurfaceExtents
+        smin : f32 [ 999999.0 ]
+        smax : f32 [ -999999.0 ]
+        tmin : f32 [ 999999.0 ]
+        tmax : f32 [ -999999.0 ]
+        for [ i: i32 0, i < n, i += 1 ]
+            vi : i32 [ face_vert[ f, i ] * 3 ]
+            x : f32 [ verts[ vi ] ]
+            y : f32 [ verts[ vi + 1 ] ]
+            z : f32 [ verts[ vi + 2 ] ]
+            s : f32 [ x * ti.sx + y * ti.sy + z * ti.sz + ti.so ]
+            tt : f32 [ x * ti.tx + y * ti.ty + z * ti.tz + ti.to ]
+            if [ s < smin ] smin = s
+            if [ s > smax ] smax = s
+            if [ tt < tmin ] tmin = tt
+            if [ tt > tmax ] tmax = tt
+            at : i32 [ (v + i) * 3 ]
+            # quake z up to trinity y up
+            pf[ at ]     = x
+            pf[ at + 1 ] = z
+            pf[ at + 2 ] = 0.0 - y
+            ut : i32 [ (v + i) * 2 ]
+            uf[ ut ]     = s / f32[ t.width ]
+            uf[ ut + 1 ] = tt / f32[ t.height ]
+            rt : i32 [ (v + i) * 4 ]
+            rf[ rt ]     = f32[ t.ax ] / aw
+            rf[ rt + 1 ] = f32[ t.ay ] / ah
+            rf[ rt + 2 ] = f32[ t.width ] / aw
+            rf[ rt + 3 ] = f32[ t.height ] / ah
+        bs0 : i32 [ i32[ floor[ smin / 16.0 ] ] ]
+        bs1 : i32 [ i32[ ceil[ smax / 16.0 ] ] ]
+        bt0 : i32 [ i32[ floor[ tmin / 16.0 ] ] ]
+        bt1 : i32 [ i32[ ceil[ tmax / 16.0 ] ] ]
+        bw : i32 [ bs1 - bs0 + 1 ]
+        bh : i32 [ bt1 - bt0 + 1 ]
+        lit : bool [ f.lightofs >= 0 && bw <= 34 && bh <= 34 &&
+            (ti.flags & surf_warp[]) == 0 ]
+        ld : @u8 [ lm_atlas.vdata[] ]
+        if [ lit ]
+            if [ lm_x + bw > lm_w ]
+                lm_x = 0
+                lm_y = lm_y + lm_row
+                lm_row = 0
+            if [ lm_y + bh > lm_h ] lit = false
+        if [ lit ]
+            for [ r: i32 0, r < bh, r += 1 ]
+                for [ c: i32 0, c < bw, c += 1 ]
+                    si : i32 [ f.lightofs + (r * bw + c) * 3 ]
+                    di : i32 [ ((lm_y + r) * lm_w + lm_x + c) * 4 ]
+                    ld[ di ]     = lighting.data[ si ]
+                    ld[ di + 1 ] = lighting.data[ si + 1 ]
+                    ld[ di + 2 ] = lighting.data[ si + 2 ]
+                    ld[ di + 3 ] = 255
+        for [ i: i32 0, i < n, i += 1 ]
+            vi : i32 [ face_vert[ f, i ] * 3 ]
+            x : f32 [ verts[ vi ] ]
+            y : f32 [ verts[ vi + 1 ] ]
+            z : f32 [ verts[ vi + 2 ] ]
+            s : f32 [ x * ti.sx + y * ti.sy + z * ti.sz + ti.so ]
+            tt : f32 [ x * ti.tx + y * ti.ty + z * ti.tz + ti.to ]
+            lt : i32 [ (v + i) * 2 ]
             if [ lit ]
-                if [ lx + bw > lm_w ]
-                    lx = 0
-                    ly = ly + lrow
-                    lrow = 0
-                if [ ly + bh > lm_h ] lit = false
-            if [ lit ]
-                for [ r: i32 0, r < bh, r += 1 ]
-                    for [ c: i32 0, c < bw, c += 1 ]
-                        si : i32 [ f.lightofs + (r * bw + c) * 3 ]
-                        di : i32 [ ((ly + r) * lm_w + lx + c) * 4 ]
-                        ld[ di ]     = lighting.data[ si ]
-                        ld[ di + 1 ] = lighting.data[ si + 1 ]
-                        ld[ di + 2 ] = lighting.data[ si + 2 ]
-                        ld[ di + 3 ] = 255
-            for [ i: i32 0, i < n, i += 1 ]
-                vi : i32 [ face_vert[ f, i ] * 3 ]
-                x : f32 [ verts[ vi ] ]
-                y : f32 [ verts[ vi + 1 ] ]
-                z : f32 [ verts[ vi + 2 ] ]
-                s : f32 [ x * ti.sx + y * ti.sy + z * ti.sz + ti.so ]
-                tt : f32 [ x * ti.tx + y * ti.ty + z * ti.tz + ti.to ]
-                lt : i32 [ (v + i) * 2 ]
-                if [ lit ]
-                    # texel centre inside the block, then the atlas
-                    ls : f32 [ (s - f32[ bs0 * 16 ]) / 16.0 + 0.5 ]
-                    lu : f32 [ (tt - f32[ bt0 * 16 ]) / 16.0 + 0.5 ]
-                    lf[ lt ]     = (f32[ lx ] + ls) / f32[ lm_w ]
-                    lf[ lt + 1 ] = (f32[ ly ] + lu) / f32[ lm_h ]
-                el
-                    lf[ lt ]     = -1.0
-                    lf[ lt + 1 ] = -1.0
-            if [ lit ]
-                lx = lx + bw
-                if [ bh > lrow ] lrow = bh
-            face_first[ fi ] = k
-            face_tris[ fi ]  = n - 2
-            for [ i: i32 1, i + 1 < n, i += 1 ]
-                iu[ k ]     = u32[ base ]
-                iu[ k + 1 ] = u32[ base + i ]
-                iu[ k + 2 ] = u32[ base + i + 1 ]
-                k += 3
-            v = v + n
-        tri_count = ni / 3
-        log 'bsp: mesh {nv} verts, {tri_count} triangles, lightmap rows to {ly + lrow}'
+                # texel centre inside the block, then the atlas
+                ls : f32 [ (s - f32[ bs0 * 16 ]) / 16.0 + 0.5 ]
+                lu : f32 [ (tt - f32[ bt0 * 16 ]) / 16.0 + 0.5 ]
+                lf[ lt ]     = (f32[ lm_x ] + ls) / f32[ lm_w ]
+                lf[ lt + 1 ] = (f32[ lm_y ] + lu) / f32[ lm_h ]
+            el
+                lf[ lt ]     = -1.0
+                lf[ lt + 1 ] = -1.0
+        if [ lit ]
+            lm_x = lm_x + bw
+            if [ bh > lm_row ] lm_row = bh
+
+    # a face's fan triangles into iu at k; the index count added
+    func emit_fan [ iu: @u32, k: i32, base: i32, n: i32 ] -> i32
+        j : i32 [ k ]
+        for [ i: i32 1, i + 1 < n, i += 1 ]
+            iu[ j ]     = u32[ base ]
+            iu[ j + 1 ] = u32[ base + i ]
+            iu[ j + 2 ] = u32[ base + i + 1 ]
+            j += 3
+        return j - k
+
+    # the gltf: four vertex streams, one index range per node
+    func assemble [ data: vec u8, tsz: i32, nv: i32, pb: i32, ub: i32,
+                    rb: i32, ranges: vec i32, names: vec string ] -> GltfModel
         bufs : vec GltfBuffer []
         bufs += GltfBuffer [ byteLength: u64[ tsz ], data: data ]
         views : vec BufferView []
@@ -948,8 +1036,6 @@ class BspMap
                               byteLength: ub ]
         views += BufferView [ buffer: 0, byteOffset: pb + ub + ub,
                               byteLength: rb ]
-        views += BufferView [ buffer: 0, byteOffset: pb + ub + ub + rb,
-                              byteLength: ib ]
         accs : vec Accessor []
         accs += Accessor [ bufferView: 0,
                            componentType: ComponentType.FLOAT,
@@ -963,30 +1049,138 @@ class BspMap
         accs += Accessor [ bufferView: 3,
                            componentType: ComponentType.FLOAT,
                            type: CompoundType.VEC4, count: nv ]
-        accs += Accessor [ bufferView: 4,
-                           componentType: ComponentType.UNSIGNED_INT,
-                           type: CompoundType.SCALAR, count: ni ]
-        am : map i64 [ string ] [ ]
-        am[ 'POSITION' ]   = i64[ 0 ]
-        am[ 'TEXCOORD_0' ] = i64[ 1 ]
-        am[ 'TEXCOORD_1' ] = i64[ 2 ]
-        am[ 'TEXCOORD_2' ] = i64[ 3 ]
-        prs : vec Primitive []
-        prs += Primitive [ name: 'world', attributes: am,
-                           indices: u64[ 4 ], material: 0,
-                           mode: Mode.TRIANGLES ]
+        ib : i32 [ pb + ub + ub + rb ]
         mshs : vec Mesh []
-        mshs += Mesh [ name: 'world', primitives: prs ]
         nds : vec Node []
-        nds += Node [ name: 'world', mesh: 0 ]
         sn : vec i64 []
-        sn += 0
+        nr : i32 [ ranges.count / 2 ]
+        for [ r: i32 0, r < nr, r += 1 ]
+            off : i32 [ ranges[ r * 2 ] ]
+            cnt : i32 [ ranges[ r * 2 + 1 ] ]
+            views += BufferView [ buffer: 0, byteOffset: ib + off * 4,
+                                  byteLength: cnt * 4 ]
+            accs += Accessor [ bufferView: 4 + r,
+                               componentType: ComponentType.UNSIGNED_INT,
+                               type: CompoundType.SCALAR, count: cnt ]
+            am : map i64 [ string ] [ ]
+            am[ 'POSITION' ]   = i64[ 0 ]
+            am[ 'TEXCOORD_0' ] = i64[ 1 ]
+            am[ 'TEXCOORD_1' ] = i64[ 2 ]
+            am[ 'TEXCOORD_2' ] = i64[ 3 ]
+            prs : vec Primitive []
+            prs += Primitive [ name: names[ r ], attributes: am,
+                               indices: u64[ 4 + r ], material: 0,
+                               mode: Mode.TRIANGLES ]
+            mshs += Mesh [ name: names[ r ], primitives: prs ]
+            nds += Node [ name: names[ r ], mesh: r ]
+            sn += i64[ r ]
         scns : vec Scene []
         scns += Scene [ name: 'scene', nodes: sn ]
         gm : GltfModel [ nodes: nds, meshes: mshs, scenes: scns,
             scene: 0, buffers: bufs, bufferViews: views,
             accessors: accs ]
         return gm
+
+    func lm_begin []
+        if [ lm_atlas ] return
+        lm_h = 2048
+        lm_atlas = Image [ width: lm_w, height: lm_h,
+                           format: Pixel.rgba8, linear: true ]
+        ld : @u8 [ lm_atlas.vdata[] ]
+        memset[ ld, 255, lm_w * lm_h * 4 ]
+        lm_x = 0
+        lm_y = 0
+        lm_row = 0
+
+    # the world as one mesh: position, texture uv in texels of
+    # the wal, lightmap uv in the atlas, the wal's atlas rect
+    public func build [] -> GltfModel
+        cnt : vec i32 [ 2 ]
+        count_faces[ first_face, num_faces, cnt ]
+        nv : i32 [ cnt[ 0 ] ]
+        ni : i32 [ cnt[ 1 ] ]
+        pb : i32 [ nv * 12 ]
+        ub : i32 [ nv * 8 ]
+        rb : i32 [ nv * 16 ]
+        ib : i32 [ ni * 4 ]
+        tsz : i32 [ pb + ub + ub + rb + ib ]
+        data : new u8 [ tsz ]
+        pf : @f32 [ data ]
+        uf : @f32 [ @data[ pb ] ]
+        lf : @f32 [ @data[ pb + ub ] ]
+        rf : @f32 [ @data[ pb + ub + ub ] ]
+        iu : @u32 [ @data[ pb + ub + ub + rb ] ]
+        lm_begin[]
+        face_first = vec i32 [ faces.count ]
+        face_tris  = vec i32 [ faces.count ]
+        face_mark  = vec i32 [ faces.count ]
+        for [ i: i32 0, i < faces.count, i += 1 ] face_first[ i ] = -1
+        idx_all = iu
+        idx_n   = ni
+        v : i32 [ 0 ]
+        k : i32 [ 0 ]
+        for [ fi: i32 first_face, fi < first_face + num_faces, fi += 1 ]
+            f : faces[ fi ]
+            if [ !face_drawn[ f ] ] continue
+            emit_face[ fi, pf, uf, lf, rf, v ]
+            face_first[ fi ] = k
+            face_tris[ fi ]  = f.num_edges - 2
+            k += emit_fan[ iu, k, v, f.num_edges ]
+            v = v + f.num_edges
+        tri_count = ni / 3
+        log 'bsp: mesh {nv} verts, {tri_count} triangles, lightmap rows to {lm_y + lm_row}'
+        ranges : vec i32 [] [ 0, ni ]
+        names : vec string [] [ 'world' ]
+        return assemble[ data, tsz, nv, pb, ub, rb, ranges, names ]
+
+    # every solid inline model as its own node, so it can move
+    public func build_models [] -> GltfModel
+        nm : i32 [ model_head.count ]
+        nv : i32 [ 0 ]
+        ni : i32 [ 0 ]
+        cnt : vec i32 [ 2 ]
+        for [ m: i32 1, m < nm, m += 1 ]
+            if [ !model_solid[ m ] ] continue
+            count_faces[ model_face[ m * 2 ], model_face[ m * 2 + 1 ], cnt ]
+            nv = nv + cnt[ 0 ]
+            ni = ni + cnt[ 1 ]
+        if [ nv == 0 ] return null
+        pb : i32 [ nv * 12 ]
+        ub : i32 [ nv * 8 ]
+        rb : i32 [ nv * 16 ]
+        ib : i32 [ ni * 4 ]
+        tsz : i32 [ pb + ub + ub + rb + ib ]
+        data : new u8 [ tsz ]
+        pf : @f32 [ data ]
+        uf : @f32 [ @data[ pb ] ]
+        lf : @f32 [ @data[ pb + ub ] ]
+        rf : @f32 [ @data[ pb + ub + ub ] ]
+        iu : @u32 [ @data[ pb + ub + ub + rb ] ]
+        lm_begin[]
+        ranges : vec i32 []
+        names : vec string []
+        node_model = vec i32 []
+        v : i32 [ 0 ]
+        k : i32 [ 0 ]
+        for [ m: i32 1, m < nm, m += 1 ]
+            if [ !model_solid[ m ] ] continue
+            k0 : i32 [ k ]
+            f0 : i32 [ model_face[ m * 2 ] ]
+            for [ fi: i32 f0, fi < f0 + model_face[ m * 2 + 1 ], fi += 1 ]
+                f : faces[ fi ]
+                if [ !face_drawn[ f ] ] continue
+                emit_face[ fi, pf, uf, lf, rf, v ]
+                k += emit_fan[ iu, k, v, f.num_edges ]
+                v = v + f.num_edges
+            if [ k == k0 ] continue
+            kn : i32 [ k - k0 ]
+            ranges.push[ k0 ]
+            ranges.push[ kn ]
+            names.push[ '*{m}' ]
+            mi : i32 [ m ]
+            node_model.push[ mi ]
+        log 'bsp: {node_model.count} inline models, {nv} verts, {ni / 3} triangles'
+        return assemble[ data, tsz, nv, pb, ub, rb, ranges, names ]
 
     # the sky faces alone: positions, fan triangles
     public func build_sky [] -> GltfModel

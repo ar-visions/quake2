@@ -1,0 +1,423 @@
+# g_func.c: the movers; doors first
+extend quake2
+
+DOOR_START_OPEN : i32 [ 1 ]
+DOOR_REVERSE    : i32 [ 2 ]
+DOOR_CRUSHER    : i32 [ 4 ]
+DOOR_NOMONSTER  : i32 [ 8 ]
+DOOR_TOGGLE     : i32 [ 32 ]
+DOOR_X_AXIS     : i32 [ 64 ]
+DOOR_Y_AXIS     : i32 [ 128 ]
+
+# ---- linear movement
+func move_done [ g: Game, e: Edict ]
+    e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+    call_endfunc[ g, e ]
+
+func move_final [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    if [ mi.remaining_distance == 0.0 ]
+        move_done[ g, e ]
+        return
+    e.velocity = v_scale[ mi.dir, mi.remaining_distance / FRAMETIME ]
+    e.think = Fn.move_done
+    e.nextthink = g.level.time + FRAMETIME
+
+func move_begin [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    if [ mi.speed * FRAMETIME >= mi.remaining_distance ]
+        move_final[ g, e ]
+        return
+    e.velocity = v_scale[ mi.dir, mi.speed ]
+    frames : f32 [ floor[ (mi.remaining_distance / mi.speed) / FRAMETIME ] ]
+    mi.remaining_distance = mi.remaining_distance
+        - frames * mi.speed * FRAMETIME
+    e.nextthink = g.level.time + frames * FRAMETIME
+    e.think = Fn.move_final
+
+func move_calc [ g: Game, e: Edict, dest: vec3f, endfunc: Fn ]
+    mi : e.moveinfo
+    e.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+    d : v_sub[ dest, e.origin ]
+    mi.remaining_distance = v_len[ d ]
+    mi.dir = v_norm[ d ]
+    mi.endfunc = endfunc
+    if [ mi.speed == mi.accel && mi.speed == mi.decel ]
+        lead : Edict [ (e.flags & FL_TEAMSLAVE) ? e.teammaster : e ]
+        if [ g.level.current_entity == lead ]
+            move_begin[ g, e ]
+        el
+            e.nextthink = g.level.time + FRAMETIME
+            e.think = Fn.move_begin
+    el
+        mi.current_speed = 0.0
+        e.think = Fn.think_accel_move
+        e.nextthink = g.level.time + FRAMETIME
+
+# ---- angular movement
+func angle_move_done [ g: Game, e: Edict ]
+    e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
+    call_endfunc[ g, e ]
+
+func angle_move_final [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    move : vec3f [ (mi.state == STATE_UP)
+        ? v_sub[ mi.end_angles, e.angles ]
+        : v_sub[ mi.start_angles, e.angles ] ]
+    if [ v_zero[ move ] ]
+        angle_move_done[ g, e ]
+        return
+    e.avelocity = v_scale[ move, 1.0 / FRAMETIME ]
+    e.think = Fn.angle_move_done
+    e.nextthink = g.level.time + FRAMETIME
+
+func angle_move_begin [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    destdelta : vec3f [ (mi.state == STATE_UP)
+        ? v_sub[ mi.end_angles, e.angles ]
+        : v_sub[ mi.start_angles, e.angles ] ]
+    len : f32 [ v_len[ destdelta ] ]
+    traveltime : f32 [ len / mi.speed ]
+    if [ traveltime < FRAMETIME ]
+        angle_move_final[ g, e ]
+        return
+    frames : f32 [ floor[ traveltime / FRAMETIME ] ]
+    e.avelocity = v_scale[ destdelta, 1.0 / traveltime ]
+    e.nextthink = g.level.time + frames * FRAMETIME
+    e.think = Fn.angle_move_final
+
+func angle_move_calc [ g: Game, e: Edict, endfunc: Fn ]
+    e.avelocity = vec3f [ 0.0, 0.0, 0.0 ]
+    e.moveinfo.endfunc = endfunc
+    lead : Edict [ (e.flags & FL_TEAMSLAVE) ? e.teammaster : e ]
+    if [ g.level.current_entity == lead ]
+        angle_move_begin[ g, e ]
+    el
+        e.nextthink = g.level.time + FRAMETIME
+        e.think = Fn.angle_move_begin
+
+# ---- accelerated movement (plats, doors with accel or decel)
+func accel_distance [ target: f32, rate: f32 ] -> f32
+    return target * ((target / rate) + 1.0) / 2.0
+
+func plat_calc_accelerated_move [ mi: MoveInfo ]
+    mi.move_speed = mi.speed
+    if [ mi.remaining_distance < mi.accel ]
+        mi.current_speed = mi.remaining_distance
+        return
+    accel_dist : f32 [ accel_distance[ mi.speed, mi.accel ] ]
+    decel_dist : f32 [ accel_distance[ mi.speed, mi.decel ] ]
+    if [ mi.remaining_distance - accel_dist - decel_dist < 0.0 ]
+        f : f32 [ (mi.accel + mi.decel) / (mi.accel * mi.decel) ]
+        mi.move_speed = (-2.0 + sqrt[ 4.0 - 4.0 * f *
+            (-2.0 * mi.remaining_distance) ]) / (2.0 * f)
+        decel_dist = accel_distance[ mi.move_speed, mi.decel ]
+    mi.decel_distance = decel_dist
+
+func plat_accelerate [ mi: MoveInfo ]
+    if [ mi.remaining_distance <= mi.decel_distance ]
+        if [ mi.remaining_distance < mi.decel_distance ]
+            if [ mi.next_speed != 0.0 ]
+                mi.current_speed = mi.next_speed
+                mi.next_speed = 0.0
+                return
+            if [ mi.current_speed > mi.decel ]
+                mi.current_speed = mi.current_speed - mi.decel
+        return
+    if [ mi.current_speed == mi.move_speed ]
+        if [ mi.remaining_distance - mi.current_speed < mi.decel_distance ]
+            p1 : f32 [ mi.remaining_distance - mi.decel_distance ]
+            p2 : f32 [ mi.move_speed * (1.0 - p1 / mi.move_speed) ]
+            distance : f32 [ p1 + p2 ]
+            mi.current_speed = mi.move_speed
+            mi.next_speed = mi.move_speed - mi.decel * (p2 / distance)
+            return
+    if [ mi.current_speed < mi.speed ]
+        old_speed : f32 [ mi.current_speed ]
+        mi.current_speed = mi.current_speed + mi.accel
+        if [ mi.current_speed > mi.speed ] mi.current_speed = mi.speed
+        if [ mi.remaining_distance - mi.current_speed >= mi.decel_distance ]
+            return
+        p1 : f32 [ mi.remaining_distance - mi.decel_distance ]
+        p1_speed : f32 [ (old_speed + mi.move_speed) / 2.0 ]
+        p2 : f32 [ mi.move_speed * (1.0 - p1 / p1_speed) ]
+        distance : f32 [ p1 + p2 ]
+        mi.current_speed = p1_speed * (p1 / distance)
+            + mi.move_speed * (p2 / distance)
+        mi.next_speed = mi.move_speed - mi.decel * (p2 / distance)
+
+func think_accel_move [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    mi.remaining_distance = mi.remaining_distance - mi.current_speed
+    if [ mi.current_speed == 0.0 ] plat_calc_accelerated_move[ mi ]
+    plat_accelerate[ mi ]
+    if [ mi.remaining_distance <= mi.current_speed ]
+        move_final[ g, e ]
+        return
+    e.velocity = v_scale[ mi.dir, mi.current_speed * 10.0 ]
+    e.nextthink = g.level.time + FRAMETIME
+    e.think = Fn.think_accel_move
+
+func call_endfunc [ g: Game, e: Edict ]
+    fn : Fn [ e.moveinfo.endfunc ]
+    if [ fn == Fn.none ] return
+    g.call_think[ fn, e ]
+
+# ---- doors
+func door_use_areaportals [ g: Game, e: Edict, open: bool ]
+    if [ !e.target ] return
+    t : Edict [ null ]
+    while [ true ]
+        t = g.find[ t, EField.targetname, e.target ]
+        if [ !t ] break
+        if [ t.classname == 'func_areaportal' ]
+            g.set_areaportal[ t.style, open ]
+
+func door_hit_top [ g: Game, e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
+    e.moveinfo.state = STATE_TOP
+    if [ e.spawnflags & DOOR_TOGGLE ] return
+    if [ e.moveinfo.wait >= 0.0 ]
+        e.think = Fn.door_go_down
+        e.nextthink = g.level.time + e.moveinfo.wait
+
+func door_hit_bottom [ g: Game, e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = 0
+    e.moveinfo.state = STATE_BOTTOM
+    door_use_areaportals[ g, e, false ]
+
+func door_go_down [ g: Game, e: Edict ]
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = e.moveinfo.sound_middle
+    if [ e.max_health != 0 ]
+        e.takedamage = DAMAGE_YES
+        e.health = e.max_health
+    e.moveinfo.state = STATE_DOWN
+    if [ e.classname == 'func_door' ]
+        move_calc[ g, e, e.moveinfo.start_origin, Fn.door_hit_bottom ]
+    el [ e.classname == 'func_door_rotating' ]
+        angle_move_calc[ g, e, Fn.door_hit_bottom ]
+
+func door_go_up [ g: Game, e: Edict, activator: Edict ]
+    if [ e.moveinfo.state == STATE_UP ] return
+    if [ e.moveinfo.state == STATE_TOP ]
+        if [ e.moveinfo.wait >= 0.0 ]
+            e.nextthink = g.level.time + e.moveinfo.wait
+        return
+    if [ (e.flags & FL_TEAMSLAVE) == 0 ] e.sound = e.moveinfo.sound_middle
+    e.moveinfo.state = STATE_UP
+    if [ e.classname == 'func_door' ]
+        move_calc[ g, e, e.moveinfo.end_origin, Fn.door_hit_top ]
+    el [ e.classname == 'func_door_rotating' ]
+        angle_move_calc[ g, e, Fn.door_hit_top ]
+    g.use_targets[ e, activator ]
+    door_use_areaportals[ g, e, true ]
+
+func door_use [ g: Game, e: Edict, other: Edict, activator: Edict ]
+    if [ e.flags & FL_TEAMSLAVE ] return
+    if [ e.spawnflags & DOOR_TOGGLE ]
+        if [ e.moveinfo.state == STATE_UP || e.moveinfo.state == STATE_TOP ]
+            ent : Edict [ e ]
+            while [ ent ]
+                ent.message = null
+                ent.touch = Fn.none
+                door_go_down[ g, ent ]
+                ent = ent.teamchain
+            return
+    ent : Edict [ e ]
+    while [ ent ]
+        ent.message = null
+        ent.touch = Fn.none
+        door_go_up[ g, ent, activator ]
+        ent = ent.teamchain
+
+func touch_door_trigger [ g: Game, e: Edict, other: Edict ]
+    if [ other.health <= 0 ] return
+    if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ] return
+    if [ (e.owner.spawnflags & DOOR_NOMONSTER) != 0 &&
+         (other.svflags & SVF_MONSTER) != 0 ]
+        return
+    if [ g.level.time < e.touch_debounce_time ] return
+    e.touch_debounce_time = g.level.time + 1.0
+    door_use[ g, e.owner, other, other ]
+
+# every door of a team finishes its move at the same moment
+func think_calc_move_speed [ g: Game, e: Edict ]
+    if [ e.flags & FL_TEAMSLAVE ] return
+    min : f32 [ fabs[ e.moveinfo.distance ] ]
+    ent : Edict [ e.teamchain ]
+    while [ ent ]
+        dist : f32 [ fabs[ ent.moveinfo.distance ] ]
+        if [ dist < min ] min = dist
+        ent = ent.teamchain
+    time : f32 [ min / e.moveinfo.speed ]
+    ent = e
+    while [ ent ]
+        mi : ent.moveinfo
+        newspeed : f32 [ fabs[ mi.distance ] / time ]
+        ratio : f32 [ newspeed / mi.speed ]
+        if [ mi.accel == mi.speed ] mi.accel = newspeed
+        el                          mi.accel = mi.accel * ratio
+        if [ mi.decel == mi.speed ] mi.decel = newspeed
+        el                          mi.decel = mi.decel * ratio
+        mi.speed = newspeed
+        ent = ent.teamchain
+
+# the trigger field round a door team, 60 units out to the sides
+func think_spawn_door_trigger [ g: Game, e: Edict ]
+    if [ e.flags & FL_TEAMSLAVE ] return
+    mins : vec3f [ e.absmin ]
+    maxs : vec3f [ e.absmax ]
+    other : Edict [ e.teamchain ]
+    while [ other ]
+        mins = vec3f [ (other.absmin.x < mins.x) ? other.absmin.x : mins.x,
+                       (other.absmin.y < mins.y) ? other.absmin.y : mins.y,
+                       (other.absmin.z < mins.z) ? other.absmin.z : mins.z ]
+        maxs = vec3f [ (other.absmax.x > maxs.x) ? other.absmax.x : maxs.x,
+                       (other.absmax.y > maxs.y) ? other.absmax.y : maxs.y,
+                       (other.absmax.z > maxs.z) ? other.absmax.z : maxs.z ]
+        other = other.teamchain
+    mins = vec3f [ mins.x - 60.0, mins.y - 60.0, mins.z ]
+    maxs = vec3f [ maxs.x + 60.0, maxs.y + 60.0, maxs.z ]
+    other = g.spawn[]
+    other.mins = mins
+    other.maxs = maxs
+    other.owner = e
+    other.solid = SOLID_TRIGGER
+    other.movetype = MOVETYPE_NONE
+    other.touch = Fn.touch_door_trigger
+    g.world.link[ other ]
+    if [ e.spawnflags & DOOR_START_OPEN ] door_use_areaportals[ g, e, true ]
+    think_calc_move_speed[ g, e ]
+
+func door_blocked [ g: Game, e: Edict, other: Edict ]
+    if [ (other.svflags & SVF_MONSTER) == 0 && !other.client ]
+        # T_Damage and BecomeExplosion1: the combat port's
+        return
+    # T_Damage dmg to the blocker: the combat port's
+    if [ e.spawnflags & DOOR_CRUSHER ] return
+    if [ e.moveinfo.wait >= 0.0 ]
+        if [ e.moveinfo.state == STATE_DOWN ]
+            ent : Edict [ e.teammaster ]
+            while [ ent ]
+                door_go_up[ g, ent, ent.activator ]
+                ent = ent.teamchain
+        el
+            ent : Edict [ e.teammaster ]
+            while [ ent ]
+                door_go_down[ g, ent ]
+                ent = ent.teamchain
+
+func door_touch [ g: Game, e: Edict, other: Edict ]
+    if [ !other.client ] return
+    if [ g.level.time < e.touch_debounce_time ] return
+    e.touch_debounce_time = g.level.time + 5.0
+    g.dprintf[ 'centerprint: {e.message}' ]
+
+func sp_func_door [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    if [ e.sounds != 1 ]
+        mi.sound_start  = 1
+        mi.sound_middle = 2
+        mi.sound_end    = 3
+    g.set_movedir[ e ]
+    e.movetype = MOVETYPE_PUSH
+    e.solid = SOLID_BSP
+    g.setmodel[ e, e.model ]
+    e.blocked = Fn.door_blocked
+    e.use = Fn.door_use
+    if [ e.speed == 0.0 ] e.speed = 100.0
+    if [ g.deathmatch ] e.speed = e.speed * 2.0
+    if [ e.accel == 0.0 ] e.accel = e.speed
+    if [ e.decel == 0.0 ] e.decel = e.speed
+    if [ e.wait == 0.0 ] e.wait = 3.0
+    if [ g.st.lip == 0 ] g.st.lip = 8
+    if [ e.dmg == 0 ] e.dmg = 2
+    # the second position: the size along the move, less the lip
+    e.pos1 = e.origin
+    mi.distance = fabs[ e.movedir.x ] * e.size.x
+        + fabs[ e.movedir.y ] * e.size.y
+        + fabs[ e.movedir.z ] * e.size.z - f32[ g.st.lip ]
+    e.pos2 = v_ma[ e.pos1, mi.distance, e.movedir ]
+    if [ e.spawnflags & DOOR_START_OPEN ]
+        e.origin = e.pos2
+        e.pos2 = e.pos1
+        e.pos1 = e.origin
+    mi.state = STATE_BOTTOM
+    if [ e.health != 0 ]
+        e.takedamage = DAMAGE_YES
+        e.max_health = e.health
+    el
+        if [ e.targetname && e.message ] e.touch = Fn.door_touch
+    mi.speed = e.speed
+    mi.accel = e.accel
+    mi.decel = e.decel
+    mi.wait  = e.wait
+    mi.start_origin = e.pos1
+    mi.start_angles = e.angles
+    mi.end_origin   = e.pos2
+    mi.end_angles   = e.angles
+    if [ !e.team ] e.teammaster = e
+    g.world.link[ e ]
+    e.nextthink = g.level.time + FRAMETIME
+    if [ e.health != 0 || e.targetname ]
+        e.think = Fn.think_calc_move_speed
+    el
+        e.think = Fn.think_spawn_door_trigger
+
+func sp_func_door_rotating [ g: Game, e: Edict ]
+    mi : e.moveinfo
+    e.angles = vec3f [ 0.0, 0.0, 0.0 ]
+    # the axis of rotation
+    e.movedir = vec3f [ 0.0, 0.0, 0.0 ]
+    if [ e.spawnflags & DOOR_X_AXIS ]
+        e.movedir = vec3f [ 0.0, 0.0, 1.0 ]
+    el [ e.spawnflags & DOOR_Y_AXIS ]
+        e.movedir = vec3f [ 1.0, 0.0, 0.0 ]
+    el
+        e.movedir = vec3f [ 0.0, 1.0, 0.0 ]
+    if [ e.spawnflags & DOOR_REVERSE ] e.movedir = v_neg[ e.movedir ]
+    if [ g.st.distance == 0 ]
+        g.dprintf[ '{e.classname} with no distance set' ]
+        g.st.distance = 90
+    e.pos1 = e.angles
+    e.pos2 = v_ma[ e.angles, f32[ g.st.distance ], e.movedir ]
+    mi.distance = f32[ g.st.distance ]
+    e.movetype = MOVETYPE_PUSH
+    e.solid = SOLID_BSP
+    g.setmodel[ e, e.model ]
+    e.blocked = Fn.door_blocked
+    e.use = Fn.door_use
+    if [ e.speed == 0.0 ] e.speed = 100.0
+    if [ e.accel == 0.0 ] e.accel = e.speed
+    if [ e.decel == 0.0 ] e.decel = e.speed
+    if [ e.wait == 0.0 ] e.wait = 3.0
+    if [ e.dmg == 0 ] e.dmg = 2
+    if [ e.sounds != 1 ]
+        mi.sound_start  = 1
+        mi.sound_middle = 2
+        mi.sound_end    = 3
+    if [ e.spawnflags & DOOR_START_OPEN ]
+        e.angles = e.pos2
+        e.pos2 = e.pos1
+        e.pos1 = e.angles
+        e.movedir = v_neg[ e.movedir ]
+    if [ e.health != 0 ]
+        e.takedamage = DAMAGE_YES
+        e.max_health = e.health
+    if [ e.targetname && e.message ] e.touch = Fn.door_touch
+    mi.state = STATE_BOTTOM
+    mi.speed = e.speed
+    mi.accel = e.accel
+    mi.decel = e.decel
+    mi.wait  = e.wait
+    mi.start_origin = e.origin
+    mi.start_angles = e.pos1
+    mi.end_origin   = e.origin
+    mi.end_angles   = e.pos2
+    if [ !e.team ] e.teammaster = e
+    g.world.link[ e ]
+    e.nextthink = g.level.time + FRAMETIME
+    if [ e.health != 0 || e.targetname ]
+        e.think = Fn.think_calc_move_speed
+    el
+        e.think = Fn.think_spawn_door_trigger

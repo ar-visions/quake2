@@ -1,0 +1,1031 @@
+# the game dll: edicts, spawning, utilities, triggers, the frame
+extend quake2
+
+FRAMETIME : f32 [ 0.1 ]
+
+# solid_t
+SOLID_NOT     : i32 [ 0 ]
+SOLID_TRIGGER : i32 [ 1 ]
+SOLID_BBOX    : i32 [ 2 ]
+SOLID_BSP     : i32 [ 3 ]
+
+# movetype_t
+MOVETYPE_NONE   : i32 [ 0 ]
+MOVETYPE_NOCLIP : i32 [ 1 ]
+MOVETYPE_PUSH   : i32 [ 2 ]
+MOVETYPE_STOP   : i32 [ 3 ]
+MOVETYPE_WALK   : i32 [ 4 ]
+MOVETYPE_STEP   : i32 [ 5 ]
+MOVETYPE_FLY    : i32 [ 6 ]
+MOVETYPE_TOSS   : i32 [ 7 ]
+
+# edict flags, svflags, contents
+FL_TEAMSLAVE    : i32 [ 1024 ]
+SVF_NOCLIENT    : i32 [ 1 ]
+SVF_MONSTER     : i32 [ 4 ]
+CONTENTS_SOLID   : i32 [ 1 ]
+CONTENTS_WINDOW  : i32 [ 2 ]
+CONTENTS_MONSTER : i32 [ 33554432 ]
+MASK_SOLID       : i32 [ 3 ]
+MASK_PLAYERSOLID : i32 [ 1 | 65536 | 2 | 33554432 ]
+AREA_SOLID    : i32 [ 1 ]
+AREA_TRIGGERS : i32 [ 2 ]
+DAMAGE_NO  : i32 [ 0 ]
+DAMAGE_YES : i32 [ 1 ]
+STATE_TOP    : i32 [ 0 ]
+STATE_BOTTOM : i32 [ 1 ]
+STATE_UP     : i32 [ 2 ]
+STATE_DOWN   : i32 [ 3 ]
+SPAWNFLAG_NOT_EASY       : i32 [ 256 ]
+SPAWNFLAG_NOT_MEDIUM     : i32 [ 512 ]
+SPAWNFLAG_NOT_HARD       : i32 [ 1024 ]
+SPAWNFLAG_NOT_DEATHMATCH : i32 [ 2048 ]
+SPAWNFLAG_NOT_COOP       : i32 [ 4096 ]
+
+# the functions an edict can point at (think, touch, use ...)
+enum Fn
+    none                    : 0
+    move_begin              : 1
+    move_final              : 2
+    move_done               : 3
+    angle_move_begin        : 4
+    angle_move_final        : 5
+    angle_move_done         : 6
+    think_accel_move        : 7
+    door_go_down            : 8
+    door_hit_top            : 9
+    door_hit_bottom         : 10
+    door_use                : 11
+    touch_door_trigger      : 12
+    think_calc_move_speed   : 13
+    think_spawn_door_trigger : 14
+    door_blocked            : 15
+    door_touch              : 16
+    think_delay             : 17
+    multi_wait              : 18
+    free_edict              : 19
+    use_multi               : 20
+    touch_multi             : 21
+    trigger_enable          : 22
+    use_areaportal          : 23
+    trigger_relay_use       : 24
+
+# the string fields G_Find can match on
+enum EField
+    targetname : 0
+    target     : 1
+    team       : 2
+    classname  : 3
+
+func v3 [ x: f32, y: f32, z: f32 ] -> vec3f
+    return vec3f [ x, y, z ]
+
+func v_add [ a: vec3f, b: vec3f ] -> vec3f
+    return vec3f [ a.x + b.x, a.y + b.y, a.z + b.z ]
+
+func v_sub [ a: vec3f, b: vec3f ] -> vec3f
+    return vec3f [ a.x - b.x, a.y - b.y, a.z - b.z ]
+
+func v_scale [ a: vec3f, s: f32 ] -> vec3f
+    return vec3f [ a.x * s, a.y * s, a.z * s ]
+
+# a + s * b, VectorMA
+func v_ma [ a: vec3f, s: f32, b: vec3f ] -> vec3f
+    return vec3f [ a.x + s * b.x, a.y + s * b.y, a.z + s * b.z ]
+
+func v_dot [ a: vec3f, b: vec3f ] -> f32
+    return a.x * b.x + a.y * b.y + a.z * b.z
+
+func v_len [ a: vec3f ] -> f32
+    return sqrt[ a.x * a.x + a.y * a.y + a.z * a.z ]
+
+func v_norm [ a: vec3f ] -> vec3f
+    l : f32 [ v_len[ a ] ]
+    if [ l == 0.0 ] return vec3f [ 0.0, 0.0, 0.0 ]
+    return vec3f [ a.x / l, a.y / l, a.z / l ]
+
+func v_neg [ a: vec3f ] -> vec3f
+    return vec3f [ 0.0 - a.x, 0.0 - a.y, 0.0 - a.z ]
+
+func v_eq [ a: vec3f, b: vec3f ] -> bool
+    return a.x == b.x && a.y == b.y && a.z == b.z
+
+func v_zero [ a: vec3f ] -> bool
+    return a.x == 0.0 && a.y == 0.0 && a.z == 0.0
+
+func v_cross [ a: vec3f, b: vec3f ] -> vec3f
+    return vec3f [ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
+                   a.x * b.y - a.y * b.x ]
+
+# AngleVectors: forward, right and up from pitch yaw roll degrees
+class Axes
+    public forward : vec3f
+    public right   : vec3f
+    public up      : vec3f
+
+func angle_vectors [ angles: vec3f ] -> Axes
+    yaw   : f32 [ angles.y * 0.017453292 ]
+    pitch : f32 [ angles.x * 0.017453292 ]
+    roll  : f32 [ angles.z * 0.017453292 ]
+    sy : f32 [ sin[ yaw ] ]
+    cy : f32 [ cos[ yaw ] ]
+    sp : f32 [ sin[ pitch ] ]
+    cp : f32 [ cos[ pitch ] ]
+    sr : f32 [ sin[ roll ] ]
+    cr : f32 [ cos[ roll ] ]
+    ax : Axes [ ]
+    ax.forward = vec3f [ cp * cy, cp * sy, 0.0 - sp ]
+    ax.right   = vec3f [ 0.0 - sr * sp * cy + cr * sy,
+                         0.0 - sr * sp * sy - cr * cy,
+                         0.0 - sr * cp ]
+    ax.up      = vec3f [ cr * sp * cy + sr * sy,
+                         cr * sp * sy - sr * cy, cr * cp ]
+    return ax
+
+# moveinfo_t
+class MoveInfo
+    public start_origin : vec3f
+    public start_angles : vec3f
+    public end_origin   : vec3f
+    public end_angles   : vec3f
+    public sound_start  : i32
+    public sound_middle : i32
+    public sound_end    : i32
+    public accel        : f32
+    public speed        : f32
+    public decel        : f32
+    public distance     : f32
+    public wait         : f32
+    public state        : i32
+    public dir          : vec3f
+    public current_speed : f32
+    public move_speed   : f32
+    public next_speed   : f32
+    public remaining_distance : f32
+    public decel_distance : f32
+    public endfunc      : Fn
+
+# edict_t: entity_state_t folded in, the fields the port uses
+class Edict
+    public number     : i32
+    public origin     : vec3f
+    public angles     : vec3f
+    public old_origin : vec3f
+    public modelindex : i32
+    public frame      : i32
+    public effects    : i32
+    public solid_bits : i32
+    public sound      : i32
+    public client     : bool
+    public inuse      : bool
+    public linkcount  : i32
+    public linked     : bool
+    public svflags    : i32
+    public mins       : vec3f
+    public maxs       : vec3f
+    public absmin     : vec3f
+    public absmax     : vec3f
+    public size       : vec3f
+    public solid      : i32
+    public clipmask   : i32
+    public owner      : Edict
+    public movetype   : i32
+    public flags      : i32
+    public model      : string
+    public freetime   : f32
+    public message    : string
+    public classname  : string
+    public spawnflags : i32
+    public timestamp  : f32
+    public angle      : f32
+    public target     : string
+    public targetname : string
+    public killtarget : string
+    public team       : string
+    public pathtarget : string
+    public deathtarget : string
+    public combattarget : string
+    public target_ent : Edict
+    public speed      : f32
+    public accel      : f32
+    public decel      : f32
+    public movedir    : vec3f
+    public pos1       : vec3f
+    public pos2       : vec3f
+    public velocity   : vec3f
+    public avelocity  : vec3f
+    public mass       : i32
+    public gravity    : f32
+    public nextthink  : f32
+    public prethink   : Fn
+    public think      : Fn
+    public blocked    : Fn
+    public touch      : Fn
+    public use        : Fn
+    public touch_debounce_time : f32
+    public health     : i32
+    public max_health : i32
+    public deadflag   : i32
+    public map        : string
+    public viewheight : i32
+    public takedamage : i32
+    public dmg        : i32
+    public sounds     : i32
+    public count      : i32
+    public chain      : Edict
+    public enemy      : Edict
+    public activator  : Edict
+    public groundentity : Edict
+    public groundentity_linkcount : i32
+    public teamchain  : Edict
+    public teammaster : Edict
+    public noise_index : i32
+    public volume     : f32
+    public attenuation : f32
+    public wait       : f32
+    public delay      : f32
+    public random     : f32
+    public watertype  : i32
+    public waterlevel : i32
+    public move_origin : vec3f
+    public move_angles : vec3f
+    public style      : i32
+    public moveinfo   : MoveInfo
+
+# spawn_temp_t: keys that are not edict fields
+class SpawnTemp
+    public sky       : string
+    public skyrotate : f32
+    public skyaxis   : vec3f
+    public nextmap   : string
+    public lip       : i32
+    public distance  : i32
+    public height    : i32
+    public noise     : string
+    public pausetime : f32
+    public item      : string
+    public gravity   : string
+    public minyaw    : f32
+    public maxyaw    : f32
+    public minpitch  : f32
+    public maxpitch  : f32
+
+# level_locals_t
+class Level
+    public framenum   : i32
+    public time       : f32
+    public level_name : string
+    public mapname    : string
+    public nextmap    : string
+    public current_entity : Edict
+
+# a pushed entity's place, for backing a blocked move out
+class Pushed
+    public ent    : Edict
+    public origin : vec3f
+    public angles : vec3f
+
+class Game
+    public bsp       : BspMap
+    public world     : World
+    public edicts    : vec Edict
+    public num_edicts : i32
+    public maxclients : i32 [ 1 ]
+    public level     : Level
+    public st        : SpawnTemp
+    public skill     : i32 [ 1 ]
+    public deathmatch : bool
+    public pushed    : vec Pushed
+    public obstacle  : Edict
+    # the edict each inline model belongs to, by model index
+    public model_ent : vec Edict
+    public unknown   : vec string
+    public portal_open : vec bool
+
+    public func setup [ map: BspMap ]
+        bsp = map
+        world = World [ ]
+        world.setup[ map ]
+        level = Level [ ]
+        st = SpawnTemp [ ]
+        pushed = vec Pushed []
+        unknown = vec string []
+        model_ent = vec Edict [ map.model_head.count ]
+        portal_open = vec bool [ 64 ]
+        edicts = vec Edict []
+        world.edicts = edicts
+        # the world and one client
+        for [ i: i32 0, i <= maxclients, i += 1 ]
+            e : Edict [ number: i ]
+            e.moveinfo = MoveInfo [ ]
+            edicts.push[ e ]
+        num_edicts = maxclients + 1
+        pl : edicts[ 1 ]
+        pl.client = true
+        pl.inuse  = true
+        pl.classname = 'player'
+        pl.health = 100
+        pl.solid  = SOLID_BBOX
+        pl.movetype = MOVETYPE_WALK
+        pl.clipmask = MASK_PLAYERSOLID
+        pl.mins = vec3f [ -16.0, -16.0, -24.0 ]
+        pl.maxs = vec3f [ 16.0, 16.0, 32.0 ]
+        pl.viewheight = 22
+        spawn_entities[ map.name, map.entities ]
+
+    public func player [] -> Edict
+        return edicts[ 1 ]
+
+    public func dprintf [ s: string ]
+        log 'game: {s}'
+
+    # G_InitEdict
+    func init_edict [ e: Edict ]
+        e.inuse = true
+        e.classname = 'noclass'
+        e.gravity = 1.0
+
+    # G_Spawn: the first free slot past the clients, else a new one
+    public func spawn [] -> Edict
+        for [ i: i32 maxclients + 1, i < num_edicts, i += 1 ]
+            e : edicts[ i ]
+            if [ !e.inuse && (e.freetime < 2.0 ||
+                              level.time - e.freetime > 0.5) ]
+                init_edict[ e ]
+                return e
+        e : Edict [ number: num_edicts ]
+        e.moveinfo = MoveInfo [ ]
+        edicts.push[ e ]
+        num_edicts += 1
+        init_edict[ e ]
+        return e
+
+    # G_FreeEdict: unlinked and cleared, the slot kept
+    public func free_edict [ ed: Edict ]
+        world.unlink[ ed ]
+        if [ ed.number <= maxclients ] return
+        n : i32 [ ed.number ]
+        ft : f32 [ level.time ]
+        fresh : Edict [ number: n ]
+        fresh.moveinfo = MoveInfo [ ]
+        fresh.classname = 'freed'
+        fresh.freetime = ft
+        fresh.inuse = false
+        edicts[ n ] = fresh
+
+    func ent_str [ e: Edict, f: EField ] -> string
+        if [ f == EField.targetname ] return e.targetname
+        if [ f == EField.target ] return e.target
+        if [ f == EField.team ] return e.team
+        return e.classname
+
+    # G_Find: the next edict after from whose field matches
+    public func find [ from: Edict, f: EField, match: string ] -> Edict
+        i : i32 [ (from) ? from.number + 1 : 0 ]
+        while [ i < num_edicts ]
+            e : edicts[ i ]
+            i += 1
+            if [ !e.inuse ] continue
+            s : ent_str[ e, f ]
+            if [ !s ] continue
+            if [ strcasecmp[ s.chars, match.chars ] == 0 ] return e
+        return null
+
+    # G_PickTarget: one of the edicts with this targetname
+    public func pick_target [ targetname: string ] -> Edict
+        if [ !targetname ]
+            dprintf[ 'G_PickTarget called with NULL targetname' ]
+            return null
+        choices : vec Edict []
+        e : Edict [ null ]
+        while [ true ]
+            e = find[ e, EField.targetname, targetname ]
+            if [ !e ] break
+            choices.push[ e ]
+            if [ choices.count == 8 ] break
+        if [ choices.count == 0 ]
+            dprintf[ 'G_PickTarget: target {targetname} not found' ]
+            return null
+        return choices[ i32[ rand[] ] % choices.count ]
+
+    # G_UseTargets: delayed, the message, killtargets, targets
+    public func use_targets [ ent: Edict, activator: Edict ]
+        if [ ent.delay != 0.0 ]
+            t : spawn[]
+            t.classname = 'DelayedUse'
+            t.nextthink = level.time + ent.delay
+            t.think = Fn.think_delay
+            t.activator = activator
+            if [ !activator ] dprintf[ 'Think_Delay with no activator' ]
+            t.message = ent.message
+            t.target = ent.target
+            t.killtarget = ent.killtarget
+            return
+        if [ ent.message && activator &&
+             (activator.svflags & SVF_MONSTER) == 0 ]
+            dprintf[ 'centerprint: {ent.message}' ]
+        if [ ent.killtarget ]
+            t : Edict [ null ]
+            while [ true ]
+                t = find[ t, EField.targetname, ent.killtarget ]
+                if [ !t ] break
+                free_edict[ t ]
+                if [ !ent.inuse ]
+                    dprintf[ 'entity was removed while using killtargets' ]
+                    return
+        if [ ent.target ]
+            t : Edict [ null ]
+            while [ true ]
+                t = find[ t, EField.targetname, ent.target ]
+                if [ !t ] break
+                # doors fire area portals in a specific way
+                if [ t.classname == 'func_areaportal' &&
+                     (ent.classname == 'func_door' ||
+                      ent.classname == 'func_door_rotating') ]
+                    continue
+                if [ t == ent ]
+                    dprintf[ 'WARNING: Entity used itself.' ]
+                el
+                    if [ t.use != Fn.none ] call_use[ t.use, t, ent, activator ]
+                if [ !ent.inuse ]
+                    dprintf[ 'entity was removed while using targets' ]
+                    return
+
+    # G_SetMovedir: the angles become a direction, then clear
+    public func set_movedir [ e: Edict ]
+        if [ v_eq[ e.angles, vec3f [ 0.0, -1.0, 0.0 ] ] ]
+            e.movedir = vec3f [ 0.0, 0.0, 1.0 ]
+        el
+            if [ v_eq[ e.angles, vec3f [ 0.0, -2.0, 0.0 ] ] ]
+                e.movedir = vec3f [ 0.0, 0.0, -1.0 ]
+            el
+                ax : angle_vectors[ e.angles ]
+                e.movedir = ax.forward
+        e.angles = vec3f [ 0.0, 0.0, 0.0 ]
+
+    # gi.setmodel: an inline model's size and index, then link
+    public func setmodel [ e: Edict, name: string ]
+        if [ !name ] return
+        e.model = name
+        if [ name[ 0 ] == 42 ]
+            mi : i32 [ i32[ atoi[ @name.chars[ 1 ] ] ] ]
+            e.modelindex = mi
+            if [ mi > 0 && mi < bsp.model_head.count ]
+                b : i32 [ mi * 6 ]
+                # cmodels spread the box by a pixel
+                e.mins = vec3f [ bsp.model_box[ b ] - 1.0,
+                                 bsp.model_box[ b + 1 ] - 1.0,
+                                 bsp.model_box[ b + 2 ] - 1.0 ]
+                e.maxs = vec3f [ bsp.model_box[ b + 3 ] + 1.0,
+                                 bsp.model_box[ b + 4 ] + 1.0,
+                                 bsp.model_box[ b + 5 ] + 1.0 ]
+                model_ent[ mi ] = e
+                world.link[ e ]
+
+    # G_TouchTriggers: every trigger the box overlaps gets a touch
+    public func touch_triggers [ ent: Edict ]
+        if [ (ent.client || (ent.svflags & SVF_MONSTER) != 0) &&
+             ent.health <= 0 ]
+            return
+        touch : world.area_edicts[ ent.absmin, ent.absmax, AREA_TRIGGERS ]
+        for [ hit: Edict ] in touch
+            if [ !hit.inuse ] continue
+            if [ hit.touch == Fn.none ] continue
+            call_touch[ hit.touch, hit, ent ]
+
+    # ---- the entity string: COM_Parse over the lump text
+    func parse_token [ s: cstr, pos: vec i32 ] -> string
+        i : i32 [ pos[ 0 ] ]
+        if [ i < 0 ] return null
+        while [ true ]
+            while [ s[ i ] != 0 && i32[ s[ i ] ] <= 32 ] i += 1
+            if [ s[ i ] == 0 ]
+                pos[ 0 ] = -1
+                return null
+            if [ s[ i ] == 47 && s[ i + 1 ] == 47 ]
+                while [ s[ i ] != 0 && s[ i ] != 10 ] i += 1
+                continue
+            break
+        buf : local i8 [ 1024 ]
+        n : i32 [ 0 ]
+        if [ s[ i ] == 34 ]
+            i += 1
+            while [ s[ i ] != 0 && s[ i ] != 34 ]
+                if [ n < 1023 ]
+                    buf[ n ] = s[ i ]
+                    n += 1
+                i += 1
+            if [ s[ i ] == 34 ] i += 1
+        el
+            while [ i32[ s[ i ] ] > 32 ]
+                if [ n < 1023 ]
+                    buf[ n ] = s[ i ]
+                    n += 1
+                i += 1
+        buf[ n ] = 0
+        pos[ 0 ] = i
+        return string [ cast cstr [ buf ] ]
+
+    func parse_vec [ v: string ] -> vec3f
+        x : f32 [ 0.0 ]
+        y : f32 [ 0.0 ]
+        z : f32 [ 0.0 ]
+        sscanf[ v.chars, "%f %f %f", @x, @y, @z ]
+        return vec3f [ x, y, z ]
+
+    # ED_ParseField: the fields table of g_save.c
+    func parse_field [ key: string, v: string, e: Edict ]
+        k : string [ key ]
+        if [ k == 'classname' ]    e.classname = v
+        el [ k == 'model' ]        e.model = v
+        el [ k == 'spawnflags' ]   e.spawnflags = atoi[ v.chars ]
+        el [ k == 'speed' ]        e.speed = atof[ v.chars ]
+        el [ k == 'accel' ]        e.accel = atof[ v.chars ]
+        el [ k == 'decel' ]        e.decel = atof[ v.chars ]
+        el [ k == 'target' ]       e.target = v
+        el [ k == 'targetname' ]   e.targetname = v
+        el [ k == 'pathtarget' ]   e.pathtarget = v
+        el [ k == 'deathtarget' ]  e.deathtarget = v
+        el [ k == 'killtarget' ]   e.killtarget = v
+        el [ k == 'combattarget' ] e.combattarget = v
+        el [ k == 'message' ]      e.message = v
+        el [ k == 'team' ]         e.team = v
+        el [ k == 'wait' ]         e.wait = atof[ v.chars ]
+        el [ k == 'delay' ]        e.delay = atof[ v.chars ]
+        el [ k == 'random' ]       e.random = atof[ v.chars ]
+        el [ k == 'move_origin' ]  e.move_origin = parse_vec[ v ]
+        el [ k == 'move_angles' ]  e.move_angles = parse_vec[ v ]
+        el [ k == 'style' ]        e.style = atoi[ v.chars ]
+        el [ k == 'count' ]        e.count = atoi[ v.chars ]
+        el [ k == 'health' ]       e.health = atoi[ v.chars ]
+        el [ k == 'sounds' ]       e.sounds = atoi[ v.chars ]
+        el [ k == 'dmg' ]          e.dmg = atoi[ v.chars ]
+        el [ k == 'mass' ]         e.mass = atoi[ v.chars ]
+        el [ k == 'volume' ]       e.volume = atof[ v.chars ]
+        el [ k == 'attenuation' ]  e.attenuation = atof[ v.chars ]
+        el [ k == 'map' ]          e.map = v
+        el [ k == 'origin' ]       e.origin = parse_vec[ v ]
+        el [ k == 'angles' ]       e.angles = parse_vec[ v ]
+        el [ k == 'angle' ]        e.angles = vec3f [ 0.0, atof[ v.chars ], 0.0 ]
+        el [ k == 'lip' ]          st.lip = atoi[ v.chars ]
+        el [ k == 'distance' ]     st.distance = atoi[ v.chars ]
+        el [ k == 'height' ]       st.height = atoi[ v.chars ]
+        el [ k == 'noise' ]        st.noise = v
+        el [ k == 'pausetime' ]    st.pausetime = atof[ v.chars ]
+        el [ k == 'item' ]         st.item = v
+        el [ k == 'gravity' ]      st.gravity = v
+        el [ k == 'sky' ]          st.sky = v
+        el [ k == 'skyrotate' ]    st.skyrotate = atof[ v.chars ]
+        el [ k == 'skyaxis' ]      st.skyaxis = parse_vec[ v ]
+        el [ k == 'minyaw' ]       st.minyaw = atof[ v.chars ]
+        el [ k == 'maxyaw' ]       st.maxyaw = atof[ v.chars ]
+        el [ k == 'minpitch' ]     st.minpitch = atof[ v.chars ]
+        el [ k == 'maxpitch' ]     st.maxpitch = atof[ v.chars ]
+        el [ k == 'nextmap' ]      st.nextmap = v
+        el
+            dprintf[ '{k} is not a field' ]
+
+    # ED_ParseEdict: the key pairs up to the closing brace
+    func parse_edict [ s: cstr, pos: vec i32, e: Edict ]
+        st = SpawnTemp [ ]
+        while [ true ]
+            key : parse_token[ s, pos ]
+            if [ !key ] return
+            if [ key.count == 1 && key[ 0 ] == 125 ] return
+            v : parse_token[ s, pos ]
+            if [ !v ] return
+            if [ v.count == 1 && v[ 0 ] == 125 ]
+                dprintf[ 'ED_ParseEntity: closing brace without data' ]
+                return
+            if [ key[ 0 ] == 95 ] continue
+            parse_field[ key, v, e ]
+
+    # SpawnEntities
+    func spawn_entities [ mapname: string, entities: string ]
+        level.mapname = mapname
+        s : cstr [ entities.chars ]
+        pos : vec i32 [] [ 0 ]
+        inhibit : i32 [ 0 ]
+        first : bool [ true ]
+        while [ true ]
+            tok : parse_token[ s, pos ]
+            if [ !tok ] break
+            if [ tok.count != 1 || tok[ 0 ] != 123 ]
+                dprintf[ 'ED_LoadFromFile: found {tok} when expecting a brace' ]
+                break
+            e : Edict [ null ]
+            if [ first ]
+                e = edicts[ 0 ]
+                first = false
+            el
+                e = spawn[]
+            parse_edict[ s, pos, e ]
+            if [ e.number != 0 ]
+                nope : bool [ false ]
+                if [ deathmatch ]
+                    nope = (e.spawnflags & SPAWNFLAG_NOT_DEATHMATCH) != 0
+                el
+                    if [ skill == 0 ]
+                        nope = (e.spawnflags & SPAWNFLAG_NOT_EASY) != 0
+                    if [ skill == 1 ]
+                        nope = (e.spawnflags & SPAWNFLAG_NOT_MEDIUM) != 0
+                    if [ skill >= 2 ]
+                        nope = (e.spawnflags & SPAWNFLAG_NOT_HARD) != 0
+                if [ nope ]
+                    free_edict[ e ]
+                    inhibit += 1
+                    continue
+                e.spawnflags = e.spawnflags & ~(SPAWNFLAG_NOT_EASY |
+                    SPAWNFLAG_NOT_MEDIUM | SPAWNFLAG_NOT_HARD |
+                    SPAWNFLAG_NOT_COOP | SPAWNFLAG_NOT_DEATHMATCH)
+            call_spawn[ e ]
+        dprintf[ '{inhibit} entities inhibited' ]
+        find_teams[]
+        dprintf[ '{num_edicts} edicts' ]
+
+    # G_FindTeams: teammaster and teamchain by the team key
+    func find_teams []
+        c : i32 [ 0 ]
+        c2 : i32 [ 0 ]
+        for [ i: i32 1, i < num_edicts, i += 1 ]
+            e : edicts[ i ]
+            if [ !e.inuse ] continue
+            if [ !e.team ] continue
+            if [ e.flags & FL_TEAMSLAVE ] continue
+            chain : Edict [ e ]
+            e.teammaster = e
+            c += 1
+            c2 += 1
+            for [ j: i32 i + 1, j < num_edicts, j += 1 ]
+                e2 : edicts[ j ]
+                if [ !e2.inuse ] continue
+                if [ !e2.team ] continue
+                if [ e2.flags & FL_TEAMSLAVE ] continue
+                if [ e.team == e2.team ]
+                    c2 += 1
+                    chain.teamchain = e2
+                    e2.teammaster = e
+                    chain = e2
+                    e2.flags = e2.flags | FL_TEAMSLAVE
+        dprintf[ '{c} teams with {c2} entities' ]
+
+    # ED_CallSpawn: the spawn table
+    func call_spawn [ e: Edict ]
+        c : string [ e.classname ]
+        if [ !c ]
+            dprintf[ 'ED_CallSpawn: NULL classname' ]
+            return
+        if [ c == 'worldspawn' ]       sp_worldspawn[ e ]
+        el [ c == 'info_player_start' ] sp_info_player_start[ e ]
+        el [ c == 'func_door' ]        sp_func_door[ a, e ]
+        el [ c == 'func_door_rotating' ] sp_func_door_rotating[ a, e ]
+        el [ c == 'func_areaportal' ]  sp_func_areaportal[ e ]
+        el [ c == 'trigger_once' ]     sp_trigger_once[ e ]
+        el [ c == 'trigger_multiple' ] sp_trigger_multiple[ e ]
+        el [ c == 'trigger_relay' ]    sp_trigger_relay[ e ]
+        el [ c == 'light' ]            sp_light[ e ]
+        el [ c == 'info_null' || c == 'func_group' ] free_edict[ e ]
+        el [ c == 'info_notnull' || c == 'path_corner' ||
+             c == 'point_combat' ]
+            e.solid = SOLID_NOT
+        el
+            # brush entities not yet ported stay solid where they are
+            if [ e.model && e.model[ 0 ] == 42 ]
+                sp_static_bmodel[ e ]
+            el
+                e.solid = SOLID_NOT
+            unknown_class[ c ]
+
+    func unknown_class [ c: string ]
+        for [ u: string ] in unknown
+            if [ u == c ] return
+        unknown.push[ c ]
+        dprintf[ '{c} not ported yet' ]
+
+    # SP_worldspawn, the parts without the server's configstrings
+    func sp_worldspawn [ e: Edict ]
+        e.movetype = MOVETYPE_PUSH
+        e.solid = SOLID_BSP
+        e.inuse = true
+        e.modelindex = 1
+        if [ st.nextmap ] level.nextmap = st.nextmap
+        level.level_name = (e.message) ? e.message : level.mapname
+
+    func sp_info_player_start [ e: Edict ]
+        e.solid = SOLID_NOT
+
+    # SP_light: a light with no targetname is free at load
+    func sp_light [ e: Edict ]
+        if [ !e.targetname ] free_edict[ e ]
+
+    # a brush entity whose class is not ported: a wall for now
+    func sp_static_bmodel [ e: Edict ]
+        e.movetype = MOVETYPE_PUSH
+        e.solid = SOLID_BSP
+        # a mover's angle key is its direction, never a turn
+        e.angles = vec3f [ 0.0, 0.0, 0.0 ]
+        setmodel[ e, e.model ]
+
+    # ---- triggers (g_trigger.c)
+    func init_trigger [ e: Edict ]
+        if [ !v_zero[ e.angles ] ] set_movedir[ e ]
+        e.solid = SOLID_TRIGGER
+        e.movetype = MOVETYPE_NONE
+        setmodel[ e, e.model ]
+        e.svflags = SVF_NOCLIENT
+
+    func multi_wait [ e: Edict ]
+        e.nextthink = 0.0
+
+    func multi_trigger [ e: Edict ]
+        if [ e.nextthink != 0.0 ] return
+        use_targets[ e, e.activator ]
+        if [ e.wait > 0.0 ]
+            e.think = Fn.multi_wait
+            e.nextthink = level.time + e.wait
+        el
+            e.touch = Fn.none
+            e.nextthink = level.time + FRAMETIME
+            e.think = Fn.free_edict
+
+    func use_multi [ e: Edict, other: Edict, activator: Edict ]
+        e.activator = activator
+        multi_trigger[ e ]
+
+    func touch_multi [ e: Edict, other: Edict ]
+        if [ other.client ]
+            if [ e.spawnflags & 2 ] return
+        el
+            if [ other.svflags & SVF_MONSTER ]
+                if [ (e.spawnflags & 1) == 0 ] return
+            el
+                return
+        if [ !v_zero[ e.movedir ] ]
+            ax : angle_vectors[ other.angles ]
+            if [ v_dot[ ax.forward, e.movedir ] < 0.0 ] return
+        e.activator = other
+        multi_trigger[ e ]
+
+    func trigger_enable [ e: Edict ]
+        e.solid = SOLID_TRIGGER
+        e.use = Fn.use_multi
+        world.link[ e ]
+
+    func sp_trigger_multiple [ e: Edict ]
+        if [ e.wait == 0.0 ] e.wait = 0.2
+        e.touch = Fn.touch_multi
+        e.movetype = MOVETYPE_NONE
+        e.svflags = e.svflags | SVF_NOCLIENT
+        if [ e.spawnflags & 4 ]
+            e.solid = SOLID_NOT
+            e.use = Fn.trigger_enable
+        el
+            e.solid = SOLID_TRIGGER
+            e.use = Fn.use_multi
+        if [ !v_zero[ e.angles ] ] set_movedir[ e ]
+        setmodel[ e, e.model ]
+        world.link[ e ]
+
+    func sp_trigger_once [ e: Edict ]
+        # old maps: triggered was bit 1, it belongs on bit 4
+        if [ e.spawnflags & 1 ]
+            e.spawnflags = (e.spawnflags & ~1) | 4
+        e.wait = -1.0
+        sp_trigger_multiple[ e ]
+
+    func sp_trigger_relay [ e: Edict ]
+        e.use = Fn.trigger_relay_use
+
+    # func_areaportal: count toggles, the portal follows
+    func sp_func_areaportal [ e: Edict ]
+        e.use = Fn.use_areaportal
+        e.count = 0
+
+    func use_areaportal [ e: Edict ]
+        e.count = e.count ^ 1
+        set_areaportal[ e.style, e.count != 0 ]
+
+    public func set_areaportal [ portal: i32, open: bool ]
+        if [ portal >= 0 && portal < portal_open.count ]
+            portal_open[ portal ] = open
+
+    # ---- the dispatch of an edict's function slots
+    public func call_think [ fn: Fn, e: Edict ]
+        switch [ fn ]
+        case move_begin
+            move_begin[ a, e ]
+        case move_final
+            move_final[ a, e ]
+        case move_done
+            move_done[ a, e ]
+        case angle_move_begin
+            angle_move_begin[ a, e ]
+        case angle_move_final
+            angle_move_final[ a, e ]
+        case angle_move_done
+            angle_move_done[ a, e ]
+        case think_accel_move
+            think_accel_move[ a, e ]
+        case door_go_down
+            door_go_down[ a, e ]
+        case door_hit_top
+            door_hit_top[ a, e ]
+        case door_hit_bottom
+            door_hit_bottom[ a, e ]
+        case think_calc_move_speed
+            think_calc_move_speed[ a, e ]
+        case think_spawn_door_trigger
+            think_spawn_door_trigger[ a, e ]
+        case think_delay
+            use_targets[ e, e.activator ]
+            free_edict[ e ]
+        case multi_wait
+            multi_wait[ e ]
+        case free_edict
+            free_edict[ e ]
+        default
+            dprintf[ 'think {i32[ fn ]} not a think' ]
+
+    public func call_use [ fn: Fn, e: Edict, other: Edict,
+                           activator: Edict ]
+        switch [ fn ]
+        case door_use
+            door_use[ a, e, other, activator ]
+        case use_multi
+            use_multi[ e, other, activator ]
+        case trigger_enable
+            trigger_enable[ e ]
+        case use_areaportal
+            use_areaportal[ e ]
+        case trigger_relay_use
+            use_targets[ e, activator ]
+        default
+            dprintf[ 'use {i32[ fn ]} not a use' ]
+
+    public func call_touch [ fn: Fn, e: Edict, other: Edict ]
+        switch [ fn ]
+        case touch_door_trigger
+            touch_door_trigger[ a, e, other ]
+        case touch_multi
+            touch_multi[ e, other ]
+        case door_touch
+            door_touch[ a, e, other ]
+        default
+            dprintf[ 'touch {i32[ fn ]} not a touch' ]
+
+    public func call_blocked [ fn: Fn, e: Edict, other: Edict ]
+        switch [ fn ]
+        case door_blocked
+            door_blocked[ a, e, other ]
+        default
+            dprintf[ 'blocked {i32[ fn ]} not a blocked' ]
+
+    # ---- g_phys.c: the pushers and thinking
+    # SV_RunThink: false when the entity thought this frame
+    func run_think [ e: Edict ] -> bool
+        t : f32 [ e.nextthink ]
+        if [ t <= 0.0 ] return true
+        if [ t > level.time + 0.001 ] return true
+        e.nextthink = 0.0
+        if [ e.think == Fn.none ]
+            dprintf[ 'NULL ent->think on {e.classname}' ]
+            return false
+        call_think[ e.think, e ]
+        return false
+
+    # SV_TestEntityPosition: the world when the box sits in solid
+    func test_entity_position [ e: Edict ] -> Edict
+        mask : i32 [ (e.clipmask != 0) ? e.clipmask : MASK_SOLID ]
+        t : world.trace[ e.origin, e.mins, e.maxs, e.origin, e, mask ]
+        if [ t.startsolid ] return edicts[ 0 ]
+        return null
+
+    # SV_Push: move the pusher, carry or push what it meets
+    func push [ pusher: Edict, move_in: vec3f, amove: vec3f ] -> bool
+        # the move to 1/8 units, as the client predicts
+        mv : vec3f [ move_in ]
+        mx : f32 [ mv.x * 8.0 ]
+        my : f32 [ mv.y * 8.0 ]
+        mz : f32 [ mv.z * 8.0 ]
+        mx = (mx > 0.0) ? mx + 0.5 : mx - 0.5
+        my = (my > 0.0) ? my + 0.5 : my - 0.5
+        mz = (mz > 0.0) ? mz + 0.5 : mz - 0.5
+        move : vec3f [ 0.125 * f32[ i32[ mx ] ], 0.125 * f32[ i32[ my ] ],
+                       0.125 * f32[ i32[ mz ] ] ]
+        mins : v_add[ pusher.absmin, move ]
+        maxs : v_add[ pusher.absmax, move ]
+        ax : angle_vectors[ v_neg[ amove ] ]
+        pushed.push[ Pushed [ ent: pusher, origin: pusher.origin,
+                              angles: pusher.angles ] ]
+        pusher.origin = v_add[ pusher.origin, move ]
+        pusher.angles = v_add[ pusher.angles, amove ]
+        world.link[ pusher ]
+        for [ ei: i32 1, ei < num_edicts, ei += 1 ]
+            check : edicts[ ei ]
+            if [ !check.inuse ] continue
+            if [ check.movetype == MOVETYPE_PUSH ||
+                 check.movetype == MOVETYPE_STOP ||
+                 check.movetype == MOVETYPE_NONE ||
+                 check.movetype == MOVETYPE_NOCLIP ]
+                continue
+            if [ !check.linked ] continue
+            if [ check.groundentity != pusher ]
+                if [ check.absmin.x >= maxs.x || check.absmin.y >= maxs.y ||
+                     check.absmin.z >= maxs.z || check.absmax.x <= mins.x ||
+                     check.absmax.y <= mins.y || check.absmax.z <= mins.z ]
+                    continue
+                if [ !test_entity_position[ check ] ] continue
+            if [ pusher.movetype == MOVETYPE_PUSH ||
+                 check.groundentity == pusher ]
+                pushed.push[ Pushed [ ent: check, origin: check.origin,
+                                      angles: check.angles ] ]
+                check.origin = v_add[ check.origin, move ]
+                # the turn of the pusher moves a rider round it
+                org : v_sub[ check.origin, pusher.origin ]
+                org2 : vec3f [ v_dot[ org, ax.forward ],
+                               0.0 - v_dot[ org, ax.right ],
+                               v_dot[ org, ax.up ] ]
+                check.origin = v_add[ check.origin, v_sub[ org2, org ] ]
+                if [ check.groundentity != pusher ]
+                    check.groundentity = null
+                block : test_entity_position[ check ]
+                if [ !block ]
+                    world.link[ check ]
+                    continue
+                # a rider may stay where it was
+                check.origin = v_sub[ check.origin, move ]
+                block = test_entity_position[ check ]
+                if [ !block ]
+                    pushed.pop[]
+                    continue
+            obstacle = check
+            # back every moved entity out, last first
+            for [ k: i32 pushed.count - 1, k >= 0, k = k - 1 ]
+                p : pushed[ k ]
+                p.ent.origin = p.origin
+                p.ent.angles = p.angles
+                world.link[ p.ent ]
+            return false
+        for [ k: i32 pushed.count - 1, k >= 0, k = k - 1 ]
+            p : pushed[ k ]
+            touch_triggers[ p.ent ]
+        return true
+
+    # SV_Physics_Pusher: the whole team moves, or none of it
+    func physics_pusher [ ent: Edict ]
+        if [ ent.flags & FL_TEAMSLAVE ] return
+        pushed = vec Pushed []
+        part : Edict [ ent ]
+        while [ part ]
+            if [ !v_zero[ part.velocity ] || !v_zero[ part.avelocity ] ]
+                move  : v_scale[ part.velocity, FRAMETIME ]
+                amove : v_scale[ part.avelocity, FRAMETIME ]
+                if [ !push[ part, move, amove ] ] break
+            part = part.teamchain
+        if [ part ]
+            mv : Edict [ ent ]
+            while [ mv ]
+                if [ mv.nextthink > 0.0 ] mv.nextthink += FRAMETIME
+                mv = mv.teamchain
+            if [ part.blocked != Fn.none ]
+                call_blocked[ part.blocked, part, obstacle ]
+        el
+            part = ent
+            while [ part ]
+                run_think[ part ]
+                part = part.teamchain
+
+    func physics_noclip [ e: Edict ]
+        if [ !run_think[ e ] ] return
+        e.angles = v_ma[ e.angles, FRAMETIME, e.avelocity ]
+        e.origin = v_ma[ e.origin, FRAMETIME, e.velocity ]
+        world.link[ e ]
+
+    # G_RunEntity
+    func run_entity [ e: Edict ]
+        if [ e.prethink != Fn.none ] call_think[ e.prethink, e ]
+        m : i32 [ e.movetype ]
+        if [ m == MOVETYPE_PUSH || m == MOVETYPE_STOP ]
+            physics_pusher[ e ]
+        el [ m == MOVETYPE_NONE ]
+            run_think[ e ]
+        el [ m == MOVETYPE_NOCLIP ]
+            physics_noclip[ e ]
+        el
+            # step, toss, fly: monsters and missiles, later
+            run_think[ e ]
+
+    # G_RunFrame: one tenth of a second of the world
+    public func run_frame []
+        level.framenum += 1
+        level.time = f32[ level.framenum ] * FRAMETIME
+        for [ i: i32 0, i < num_edicts, i += 1 ]
+            e : edicts[ i ]
+            if [ !e.inuse ] continue
+            level.current_entity = e
+            e.old_origin = e.origin
+            if [ e.groundentity &&
+                 e.groundentity.linkcount != e.groundentity_linkcount ]
+                e.groundentity = null
+            if [ i > 0 && i <= maxclients ] continue
+            run_entity[ e ]

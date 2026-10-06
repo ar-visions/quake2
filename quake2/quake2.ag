@@ -14,6 +14,9 @@ import <math.h>
 
 import Pak
 import Bsp
+import Game
+import Func
+import World
 
 # the shader's samplers, by name
 enum BspSurface
@@ -109,7 +112,7 @@ ModelViewProject BspSky
     }
 
 element MapView
-    expect  game     : string
+    expect  game_dir : string
     expect  map_name : string
     public  spawn    : string
     mutable pak      : Pak
@@ -137,10 +140,19 @@ element MapView
     mutable vx       : f32
     mutable vy       : f32
     mutable vz       : f32
-    mutable mins     : vec f32
-    mutable maxs     : vec f32
+    mutable mins     : vec3f
+    mutable maxs     : vec3f
     mutable on_ground : bool
     mutable ground_nz : f32
+    mutable ground_ent : Edict
+    mutable game     : Game
+    mutable pl       : Edict
+    mutable game_acc : f32
+    mutable last_dt  : f32
+    mutable inline_gltf : GltfModel
+    # one shader and model per inline model: its matrix moves it
+    mutable inline_sh : vec BspLit
+    mutable inline_models : vec Model
     mutable jump_held : bool
     mutable land_time : f32
     mutable collide_mask : i32
@@ -186,22 +198,27 @@ element MapView
 
     func load []
         pak = Pak [ ]
-        pak.open[ path [ game ] ]
+        pak.open[ path [ game_dir ] ]
         bsp = BspMap [ ]
         if [ !bsp.load[ pak, map_name ] ]
             failed = true
             return
         world = bsp.build[]
         world.compute_worlds[]
+        inline_gltf = bsp.build_models[]
+        if [ inline_gltf ] inline_gltf.compute_worlds[]
         sky_gltf = bsp.build_sky[]
         if [ sky_gltf ] sky_gltf.compute_worlds[]
         live : new u32 [ bsp.idx_n ]
         idx_live = live
+        # the game: entities spawned from the map
+        game = Game [ ]
+        game.setup[ bsp ]
+        pl = game.player[]
         # the player box and the start; the eye is viewheight 22 up
-        mins = vec f32 [] [ -16.0, -16.0, -24.0 ]
-        maxs = vec f32 [] [ 16.0, 16.0, 32.0 ]
-        # solid, playerclip, window, monster
-        collide_mask = 1 | 65536 | 2 | 33554432
+        mins = vec3f [ -16.0, -16.0, -24.0 ]
+        maxs = vec3f [ 16.0, 16.0, 32.0 ]
+        collide_mask = MASK_PLAYERSOLID
         ox = bsp.start_x
         oy = bsp.start_y
         oz = bsp.start_z
@@ -221,6 +238,8 @@ element MapView
                 oz = sz - 22.0
                 yaw = radians[ syaw ]
                 pitch = radians[ spit ]
+        pl.origin = vec3f [ ox, oy, oz ]
+        game.world.link[ pl ]
 
     func step []
         now : i64 [ epoch_micros[] ]
@@ -228,10 +247,28 @@ element MapView
         dt : f32 [ f32[ now - last_us ] / 1000000.0 ]
         last_us = now
         if [ dt > 0.1 ] dt = 0.1
+        last_dt = dt
+        # a door may have pushed the player since the last frame
+        ox = pl.origin.x
+        oy = pl.origin.y
+        oz = pl.origin.z
         if [ dt > 0.0 ] pmove[ dt ]
+        pl.origin = vec3f [ ox, oy, oz ]
+        pl.velocity = vec3f [ vx, vy, vz ]
+        pl.groundentity = (on_ground) ? ground_ent : null
+        if [ pl.groundentity ]
+            pl.groundentity_linkcount = pl.groundentity.linkcount
+        game.world.link[ pl ]
+        game.touch_triggers[ pl ]
         ex = ox
         ey = oz + 22.0
         ez = 0.0 - oy
+
+    # PM_trace: the world and every solid entity, the player passed
+    func trace_pl [ sx: f32, sy: f32, sz: f32,
+                    tx: f32, ty: f32, tz: f32 ] -> Trace
+        return game.world.trace[ vec3f [ sx, sy, sz ], mins, maxs,
+                                 vec3f [ tx, ty, tz ], pl, collide_mask ]
 
     # Pmove, the walking path: ground, jump, friction, air move
     func pmove [ dt: f32 ]
@@ -249,13 +286,14 @@ element MapView
         if [ vz > 180.0 ]
             on_ground = false
             return
-        t : bsp.box_trace[ ox, oy, oz, ox, oy, oz - 0.25, mins, maxs,
-                           collide_mask ]
+        t : trace_pl[ ox, oy, oz, ox, oy, oz - 0.25 ]
         hit : bool [ t.fraction < 1.0 || t.startsolid ]
         ground_nz = t.nz
         if [ !hit || (t.nz < 0.7 && !t.startsolid) ]
             on_ground = false
+            ground_ent = null
             return
+        ground_ent = t.ent
         if [ !on_ground ]
             on_ground = true
             # a hard landing holds the next jump off a moment
@@ -351,8 +389,7 @@ element MapView
         dvy : f32 [ vy ]
         dvz : f32 [ vz ]
         upz : f32 [ sz + 18.0 ]
-        t : bsp.box_trace[ sx, sy, upz, sx, sy, upz, mins, maxs,
-                           collide_mask ]
+        t : trace_pl[ sx, sy, upz, sx, sy, upz ]
         if [ t.allsolid ] return
         ox = sx
         oy = sy
@@ -361,8 +398,7 @@ element MapView
         vy = svy
         vz = svz
         slide_move[ dt ]
-        t = bsp.box_trace[ ox, oy, oz, ox, oy, oz - 18.0, mins, maxs,
-                           collide_mask ]
+        t = trace_pl[ ox, oy, oz, ox, oy, oz - 18.0 ]
         if [ !t.allsolid ]
             ox = t.ex
             oy = t.ey
@@ -378,6 +414,42 @@ element MapView
             vz = dvz
             return
         vz = dvz
+
+    # each inline model's matrix follows its entity's origin and angles
+    func place_models []
+        if [ !inline_sh ] return
+        n : i32 [ inline_sh.count ]
+        for [ i: i32 0, i < n, i += 1 ]
+            e : game.model_ent[ bsp.node_model[ i ] ]
+            s2 : inline_sh[ i ]
+            s2.view = sh.view
+            s2.proj = sh.proj
+            if [ !e ]
+                s2.model = mat4f.identity[]
+                continue
+            s2.model = entity_matrix[ e.origin, e.angles ]
+
+    # quake origin and angles as a trinity matrix (x, z, -y axes)
+    func entity_matrix [ origin: vec3f, angles: vec3f ] -> mat4f
+        m : mat4f [ mat4f.identity[] ]
+        if [ !v_zero[ angles ] ]
+            ax : angle_vectors[ angles ]
+            f : vec3f [ ax.forward ]
+            r : vec3f [ ax.right ]
+            u : vec3f [ ax.up ]
+            m.m[0]  = f.x
+            m.m[1]  = f.z
+            m.m[2]  = 0.0 - f.y
+            m.m[4]  = u.x
+            m.m[5]  = u.z
+            m.m[6]  = 0.0 - u.y
+            m.m[8]  = r.x
+            m.m[9]  = r.z
+            m.m[10] = 0.0 - r.y
+        m.m[12] = origin.x
+        m.m[13] = origin.z
+        m.m[14] = 0.0 - origin.y
+        return m
 
     # PM_ClipVelocity: take the part of v into the plane out of it
     func clip_velocity [ nx: f32, ny: f32, nz: f32 ]
@@ -401,8 +473,7 @@ element MapView
             tx : f32 [ ox + left * vx ]
             ty : f32 [ oy + left * vy ]
             tz : f32 [ oz + left * vz ]
-            t : bsp.box_trace[ ox, oy, oz, tx, ty, tz, mins, maxs,
-                               collide_mask ]
+            t : trace_pl[ ox, oy, oz, tx, ty, tz ]
             if [ t.allsolid ]
                 vz = 0.0
                 return
@@ -476,11 +547,26 @@ element MapView
             model.id = world
             ms : array Model [ model ]
             strip : bsp.load_sky[ pak ]
-            if [ sky_gltf && strip ]
-                sky_sh = BspSky [ vk: cv.vk, name: 'bspsky' ]
+            sky_samplers : map Au [string] [ ]
+            if [ strip ]
                 tx_s : Texture [ vk: cv.vk, w: w, sampler: strip,
                                  mip_levels: 1, linear: true ]
-                sky_samplers : map Au [string] [ 'sky': tx_s ]
+                sky_samplers[ 'sky' ] = tx_s
+            inline_sh = vec BspLit []
+            inline_models = vec Model []
+            if [ inline_gltf ]
+                for [ i: i32 0, i < bsp.node_model.count, i += 1 ]
+                    nd : inline_gltf.nodes[ i ]
+                    s2 : BspLit [ vk: cv.vk, name: 'bsp' ]
+                    s2.groups = vec string [] [ nd.name ]
+                    mdl : Model [ vk: cv.vk, w: w, s: s2,
+                                  samplers: samplers, cull_none: true ]
+                    mdl.id = inline_gltf
+                    ms.push[ mdl ]
+                    inline_sh.push[ s2 ]
+                    inline_models.push[ mdl ]
+            if [ sky_gltf && strip ]
+                sky_sh = BspSky [ vk: cv.vk, name: 'bspsky' ]
                 sky_model = Model [ vk: cv.vk, w: w, s: sky_sh,
                                     samplers: sky_samplers,
                                     cull_none: true ]
@@ -497,6 +583,11 @@ element MapView
             target.wscale = 0.0
             log 'quake2: {bsp.name} drawn, {bsp.tri_count} triangles'
         step[]
+        # the game runs ten frames a second behind the player's move
+        game_acc = game_acc + last_dt
+        while [ game_acc >= 0.1 ]
+            game.run_frame[]
+            game_acc = game_acc - 0.1
         cp : f32 [ cos[ pitch ] ]
         eye : vec3f [ ex, ey, ez ]
         tgt : vec3f [ ex + cp * cos[ yaw ], ey + sin[ pitch ],
@@ -509,6 +600,7 @@ element MapView
         sh.model = mat4f.identity[]
         sh.view  = mat4f.look_at[ eye, tgt, up ]
         sh.proj  = prj
+        place_models[]
         if [ sky_sh ]
             sky_sh.model = sh.model
             sky_sh.view  = sh.view
@@ -516,6 +608,7 @@ element MapView
             sky_sh.eye   = vec4f [ ex, ey, ez, 1.0 ]
         # the pvs: only faces seen from the eye's cluster are drawn
         c : i32 [ bsp.cluster_at[ ex, 0.0 - ez, ey ] ]
+        if [ !model.pipelines || model.pipelines.count == 0 ] return
         wp : model.pipelines[ 0 ]
         if [ c != cluster || wp.vbo.index_count != vis_n ]
             cluster  = c
@@ -551,6 +644,6 @@ element quake2 : trinity
 
     public func render [] -> Elements
         e : Elements [ ]
-        e['view'] = MapView [ game: game, map_name: map, spawn: spawn,
+        e['view'] = MapView [ game_dir: game, map_name: map, spawn: spawn,
                               animated: true ]
         return e

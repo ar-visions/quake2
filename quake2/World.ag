@@ -1,0 +1,131 @@
+# sv_world.c: entities linked into the world, traced against
+extend quake2
+
+class World
+    public bsp    : BspMap
+    public edicts : vec Edict
+
+    public func setup [ map: BspMap ]
+        bsp = map
+
+    public func unlink [ e: Edict ]
+        e.linked = false
+
+    # SV_LinkEdict: size, the solid bits, the absolute box
+    public func link [ e: Edict ]
+        if [ e.number == 0 ] return
+        if [ !e.inuse ] return
+        e.size = v_sub[ e.maxs, e.mins ]
+        if [ e.solid == SOLID_BBOX ]
+            i : i32 [ i32[ e.maxs.x / 8.0 ] ]
+            if [ i < 1 ] i = 1
+            if [ i > 31 ] i = 31
+            j : i32 [ i32[ (0.0 - e.mins.z) / 8.0 ] ]
+            if [ j < 1 ] j = 1
+            if [ j > 31 ] j = 31
+            k : i32 [ i32[ (e.maxs.z + 32.0) / 8.0 ] ]
+            if [ k < 1 ] k = 1
+            if [ k > 63 ] k = 63
+            e.solid_bits = (k << 10) | (j << 5) | i
+        el [ e.solid == SOLID_BSP ]
+            e.solid_bits = 31
+        el
+            e.solid_bits = 0
+        if [ e.solid == SOLID_BSP && !v_zero[ e.angles ] ]
+            # a turned bsp model: a box round its largest reach
+            max : f32 [ 0.0 ]
+            if [ fabs[ e.mins.x ] > max ] max = fabs[ e.mins.x ]
+            if [ fabs[ e.mins.y ] > max ] max = fabs[ e.mins.y ]
+            if [ fabs[ e.mins.z ] > max ] max = fabs[ e.mins.z ]
+            if [ fabs[ e.maxs.x ] > max ] max = fabs[ e.maxs.x ]
+            if [ fabs[ e.maxs.y ] > max ] max = fabs[ e.maxs.y ]
+            if [ fabs[ e.maxs.z ] > max ] max = fabs[ e.maxs.z ]
+            e.absmin = vec3f [ e.origin.x - max, e.origin.y - max,
+                               e.origin.z - max ]
+            e.absmax = vec3f [ e.origin.x + max, e.origin.y + max,
+                               e.origin.z + max ]
+        el
+            e.absmin = v_add[ e.origin, e.mins ]
+            e.absmax = v_add[ e.origin, e.maxs ]
+        # moves clip an epsilon off an edge: the box reaches a unit out
+        e.absmin = vec3f [ e.absmin.x - 1.0, e.absmin.y - 1.0,
+                           e.absmin.z - 1.0 ]
+        e.absmax = vec3f [ e.absmax.x + 1.0, e.absmax.y + 1.0,
+                           e.absmax.z + 1.0 ]
+        if [ e.linkcount == 0 ] e.old_origin = e.origin
+        e.linkcount += 1
+        e.linked = e.solid != SOLID_NOT
+
+    # SV_AreaEdicts: the linked edicts of a kind touching a box
+    public func area_edicts [ mins: vec3f, maxs: vec3f,
+                              kind: i32 ] -> vec Edict
+        out : vec Edict []
+        for [ i: i32 1, i < edicts.count, i += 1 ]
+            e : edicts[ i ]
+            if [ !e.inuse || !e.linked ] continue
+            if [ e.solid == SOLID_NOT ] continue
+            if [ kind == AREA_TRIGGERS ]
+                if [ e.solid != SOLID_TRIGGER ] continue
+            el
+                if [ e.solid == SOLID_TRIGGER ] continue
+            if [ e.absmin.x > maxs.x || e.absmin.y > maxs.y ||
+                 e.absmin.z > maxs.z || e.absmax.x < mins.x ||
+                 e.absmax.y < mins.y || e.absmax.z < mins.z ]
+                continue
+            out.push[ e ]
+        return out
+
+    # SV_HullForEntity: the bsp model's tree, or a box hull
+    func hull_for [ e: Edict ] -> i32
+        if [ e.solid == SOLID_BSP ]
+            return bsp.model_head[ e.modelindex ]
+        return bsp.headnode_for_box[ e.mins, e.maxs ]
+
+    # SV_Trace: the world, then every solid entity the sweep reaches
+    public func trace [ start: vec3f, mins: vec3f, maxs: vec3f,
+                        end: vec3f, passedict: Edict,
+                        mask: i32 ] -> Trace
+        tr : bsp.trace_hull[ bsp.headnode, start, end, mins, maxs, mask ]
+        tr.ent = edicts[ 0 ]
+        if [ tr.fraction == 0.0 ] return tr
+        bmin : vec3f [ ((end.x > start.x) ? start.x : end.x) + mins.x - 1.0,
+                       ((end.y > start.y) ? start.y : end.y) + mins.y - 1.0,
+                       ((end.z > start.z) ? start.z : end.z) + mins.z - 1.0 ]
+        bmax : vec3f [ ((end.x > start.x) ? end.x : start.x) + maxs.x + 1.0,
+                       ((end.y > start.y) ? end.y : start.y) + maxs.y + 1.0,
+                       ((end.z > start.z) ? end.z : start.z) + maxs.z + 1.0 ]
+        touch : area_edicts[ bmin, bmax, AREA_SOLID ]
+        for [ t: Edict ] in touch
+            if [ t.solid == SOLID_NOT ] continue
+            if [ t == passedict ] continue
+            if [ tr.allsolid ] return tr
+            if [ passedict ]
+                if [ t.owner == passedict ] continue
+                if [ passedict.owner == t ] continue
+            head : i32 [ hull_for[ t ] ]
+            angles : vec3f [ (t.solid == SOLID_BSP) ? t.angles
+                             : vec3f [ 0.0, 0.0, 0.0 ] ]
+            et : bsp.transformed_trace[ start, end, mins, maxs, head, mask,
+                                        t.origin, angles ]
+            if [ et.allsolid || et.startsolid || et.fraction < tr.fraction ]
+                et.ent = t
+                if [ tr.startsolid ]
+                    tr = et
+                    tr.startsolid = true
+                el
+                    tr = et
+            el [ et.startsolid ]
+                tr.startsolid = true
+        return tr
+
+    # SV_PointContents: the world's and every solid entity's
+    public func point_contents [ p: vec3f ] -> i32
+        c : i32 [ bsp.point_contents[ p, bsp.headnode ] ]
+        touch : area_edicts[ p, p, AREA_SOLID ]
+        for [ t: Edict ] in touch
+            head : i32 [ hull_for[ t ] ]
+            angles : vec3f [ (t.solid == SOLID_BSP) ? t.angles
+                             : vec3f [ 0.0, 0.0, 0.0 ] ]
+            c = c | bsp.transformed_point_contents[ p, head, t.origin,
+                                                     angles ]
+        return c
