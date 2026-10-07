@@ -1044,7 +1044,7 @@ class BspMap
             faces.push[ f ]
 
     # the 256 colours: the last 768 bytes of pics/colormap.pcx
-    func load_palette [ pak: Pak ]
+    public func load_palette [ pak: Pak ]
         palette = vec u8 [ 768 ]
         d : pak.read[ 'pics/colormap.pcx' ]
         if [ !d || d.size < 769 ]

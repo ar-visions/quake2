@@ -4,7 +4,6 @@ extend quake2
 FL_FLY          : i32 [ 1 ]
 FL_SWIM         : i32 [ 2 ]
 FL_IMMUNE_LASER : i32 [ 4 ]
-SVF_DEADMONSTER : i32 [ 2 ]
 PUSH_ONCE       : i32 [ 1 ]
 
 

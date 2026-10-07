@@ -169,6 +169,8 @@ func t_damage [ targ: Edict, inflictor: Edict, attacker: Edict,
     if [ targ.takedamage == DAMAGE_NO ] return
     damage : i32 [ damage_in ]
     knockback : i32 [ knockback_in ]
+    # the power amplifier
+    if [ g.ctf ] damage = ctf_apply_strength[ attacker, damage ]
     mod : i32 [ means ]
     # friendly fire avoidance: coop and team deathmatch
     if [ targ != attacker && g.coop ]
@@ -224,6 +226,11 @@ func t_damage [ targ: Edict, inflictor: Edict, attacker: Edict,
     take -= asave
     # treat cheat/powerup savings the same as armor
     asave += save
+    if [ g.ctf ]
+        # the disruptor shield; a hurt carrier; no team damage
+        take = ctf_apply_resistance[ targ, take ]
+        ctf_check_hurt_carrier[ targ, attacker ]
+        if [ ctf_same_team[ targ, attacker ] ] return
     # do the damage
     if [ take != 0 ]
         if [ (targ.svflags & SVF_MONSTER) != 0 || client ]

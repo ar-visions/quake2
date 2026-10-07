@@ -1,6 +1,41 @@
 # cl_scrn.c's status bar: the layout program, drawn with pics
 extend quake2
 
+# COM_Parse over a layout: words, and quoted strings whole
+func layout_words [ program: string ] -> vec string
+    words : vec string []
+    buf : local i8 [ 1024 ]
+    n : i32 [ 0 ]
+    quoted : bool [ false ]
+    for [ i: i32 0, i <= program.count, i += 1 ]
+        c : i32 [ (i < program.count) ? i32[ program[ i ] ] : 0 ]
+        ends : bool [ c == 0 || (!quoted && (c == 32 || c == 9 ||
+                                             c == 10)) ||
+                      (quoted && c == 34) ]
+        if [ c == 34 && !quoted ]
+            quoted = true
+            continue
+        if [ !ends ]
+            if [ n < 1023 ]
+                buf[ n ] = c
+                n += 1
+            continue
+        if [ n > 0 || quoted ]
+            buf[ n ] = 0
+            word : string [ cast cstr [ buf ] ]
+            words.push[ word ]
+        n = 0
+        quoted = false
+    return words
+
+# a client's name for the scoreboard, by its number
+func player_name [ who: i32 ] -> string
+    if [ g.player_names && who >= 0 && who < g.player_names.count &&
+         g.player_names[ who ].count > 0 ] return g.player_names[ who ]
+    if [ who >= 0 && who + 1 < g.edicts.count ]
+        return client_name[ g.edicts[ who + 1 ] ]
+    return 'player'
+
 # the single player status bar of g_spawn.c
 func hud_statusbar [] -> string
     return 'yb -24 xv 0 hnum xv 50 pic 0 if 2 xv 100 anum xv 150 pic 2 endif if 4 xv 200 rnum xv 250 pic 4 endif if 6 xv 296 pic 6 endif yb -50 if 7 xv 0 pic 7 xv 26 yb -42 stat_string 8 yb -50 endif if 9 xv 262 num 2 10 xv 296 pic 9 endif if 11 xv 148 pic 11 endif'
@@ -196,7 +231,7 @@ class Hud
     # SCR_ExecuteLayoutString
     public func layout [ cv: Canvas, w: Window, program: string,
                          st: vec i32, flash: bool ]
-        words : program.split[ ' ' ]
+        words : layout_words[ program ]
         n : i32 [ words.count ]
         x = 0.0
         y = 0.0
@@ -271,6 +306,43 @@ class Hud
                 if [ st[ arg ] == 0 ]
                     # skip to endif
                     while [ i < n && words[ i ] != 'endif' ] i += 1
+            el [ t == 'string' || t == 'string2' ]
+                chars[ cv, w, words[ i ], x, y, t == 'string2' ]
+                i += 1
+            el [ t == 'cstring' || t == 'cstring2' ]
+                said : words[ i ]
+                i += 1
+                chars[ cv, w, said,
+                       x + (320.0 - 8.0 * f32[ said.count ]) / 2.0, y,
+                       t == 'cstring2' ]
+            el [ t == 'client' && i + 5 < n ]
+                # x y client score ping time
+                px : f32 [ wide / 2.0 - 160.0 + f32[ arg ] ]
+                py : f32 [ high / 2.0 - 120.0
+                           + f32[ atoi[ words[ i + 1 ].chars ] ] ]
+                who : i32 [ atoi[ words[ i + 2 ].chars ] ]
+                score : words[ i + 3 ]
+                ping : words[ i + 4 ]
+                minutes : words[ i + 5 ]
+                i += 6
+                chars[ cv, w, player_name[ who ], px + 32.0, py, true ]
+                chars[ cv, w, 'Score: ', px + 32.0, py + 8.0, false ]
+                chars[ cv, w, score, px + 88.0, py + 8.0, true ]
+                chars[ cv, w, 'Ping:  {ping}', px + 32.0, py + 16.0,
+                       false ]
+                chars[ cv, w, 'Time:  {minutes}', px + 32.0, py + 24.0,
+                       false ]
+            el [ t == 'ctf' && i + 4 < n ]
+                # x y client score ping: one row of a team's column
+                px : f32 [ wide / 2.0 - 160.0 + f32[ arg ] ]
+                py : f32 [ high / 2.0 - 120.0
+                           + f32[ atoi[ words[ i + 1 ].chars ] ] ]
+                who : i32 [ atoi[ words[ i + 2 ].chars ] ]
+                score : padded[ atoi[ words[ i + 3 ].chars ], 3 ]
+                ping : padded[ atoi[ words[ i + 4 ].chars ], 3 ]
+                i += 5
+                row : '{score} {ping} {player_name[ who ]}'
+                chars[ cv, w, row, px, py, false ]
 
     # the status bar over the view; the screen in layout pixels
     public func draw [ cv: Canvas, w: Window, width: f32, height: f32,
@@ -279,4 +351,5 @@ class Hud
         if [ scale < 1.0 ] scale = 1.0
         wide = width / scale
         high = height / scale
-        layout[ cv, w, hud_statusbar[], st, flash ]
+        layout[ cv, w, (g.ctf) ? ctf_statusbar[] : hud_statusbar[], st,
+                flash ]

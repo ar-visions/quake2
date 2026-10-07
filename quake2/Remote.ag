@@ -1,0 +1,705 @@
+# client/: cl_main, cl_parse, cl_ents: a game played from afar,
+# and demos; what arrives is laid over a local game's edicts
+extend quake2
+
+class Remote
+    public sock   : i32 [ -1 ]
+    public ip     : u32
+    public port   : i32
+    public qport  : i32
+    public name   : string [ 'player' ]
+    # 0 off, 1 asking, 2 connecting, 3 connected, 4 loading, 5 live
+    public state  : i32
+    public demo   : bool
+    public chan   : Netchan
+    public inbox  : Msg
+    public retry  : f32
+    public challenge : i32
+    public cs     : vec string
+    public baselines : vec EntState
+    public frames : vec NetFrame
+    public cur    : NetFrame
+    # a frame has arrived that the game has not been given
+    public fresh  : bool
+    public serverframe : i32
+    # 34, or 26 for the old demos in the paks
+    public protocol : i32
+    public servercount : i32
+    public playernum : i32
+    public precache : i32
+    # the map the server named: the parent loads it, then begin
+    public map_name : string
+    public want_map : bool
+    public pending  : vec GameEvent
+    public prints   : vec string
+    public layout   : string
+    public center   : string
+    public inventory : vec i32
+    public blank    : EntState
+    public blank_ps : PlayState
+    public teleported : bool
+    # a demo being played: its bytes, the place, time to the next
+    public film     : PakData
+    public film_at  : i32
+    public wait     : f32
+    # cl_timedemo: a frame every draw, the rate printed at the end
+    public timedemo : bool
+    public demo_frames : i32
+    public demo_clock  : f32
+    # a demo being written
+    public record   : handle
+    public recording : bool
+    # CL_Record_f: nothing is written until a whole frame comes
+    public demowaiting : bool
+    public sent_time : f32
+    public clock    : f32
+
+    func init []
+        inbox = Msg [ max: 65536 ]
+        blank = EntState [ ]
+        blank_ps = PlayState [ ]
+        reset[]
+
+    # CL_ClearState
+    func reset []
+        cs = vec string []
+        empty : ''
+        for [ i: i32 0, i < MAX_CONFIGSTRINGS, i += 1 ]
+            cs.push[ empty.mid[ 0, 0 ] ]
+        baselines = vec EntState []
+        for [ i: i32 0, i < 1024, i += 1 ]
+            baselines.push[ EntState [ ] ]
+        frames = vec NetFrame []
+        for [ i: i32 0, i < UPDATE_BACKUP, i += 1 ]
+            frames.push[ NetFrame [ ] ]
+        cur = null
+        fresh = false
+        pending = vec GameEvent []
+        prints = vec string []
+        inventory = vec i32 [ 256 ]
+        want_map = false
+
+    public func live [] -> bool
+        return state >= 4
+
+    # CL_Connect_f: ask the server for a challenge
+    public func connect [ host: string, to_port: i32 ] -> bool
+        close[]
+        ip = q2net_resolve[ host.chars ]
+        if [ ip == 0 ] return false
+        sock = q2net_open[ 0 ]
+        if [ sock < 0 ] return false
+        port = to_port
+        qport = rand[] & 65535
+        demo = false
+        reset[]
+        state = 1
+        retry = 0.0
+        return true
+
+    # CL_PlayDemo: demos/<name>.dm2 out of the paks
+    public func play [ pak: Pak, demo_name: string ] -> bool
+        close[]
+        # the name with or without its .dm2
+        stem : string [ demo_name ]
+        if [ stem.count > 4 && stem.mid[ stem.count - 4, 4 ] == '.dm2' ]
+            stem = stem.mid[ 0, stem.count - 4 ]
+        film = pak.read[ 'demos/{stem}.dm2' ]
+        if [ !film ]
+            # one we recorded ourselves, in the cache folder
+            app : 'quake2'
+            dir : '{path.path_cache[ app.chars ]}'
+            film = pak.read_file[ path [ '{dir}/{stem}.dm2' ] ]
+        if [ !film ] return false
+        film_at = 0
+        demo = true
+        demo_frames = 0
+        demo_clock = clock
+        reset[]
+        state = 3
+        wait = 0.0
+        return true
+
+    public func close []
+        if [ recording ] stop_record[]
+        if [ state >= 3 && !demo && chan ]
+            # CL_Disconnect: said three times, unreliably
+            bye : Msg [ max: 32 ]
+            bye.w_byte[ CLC_STRINGCMD ]
+            bye.w_string[ 'disconnect' ]
+            chan.transmit[ bye ]
+            chan.transmit[ bye ]
+            chan.transmit[ bye ]
+        if [ sock >= 0 ] q2net_close[ sock ]
+        sock = -1
+        state = 0
+        film = null
+        demo = false
+
+    # a reliable string command to the server
+    public func send_cmd [ text: string ]
+        if [ demo || state < 3 || !chan ] return
+        chan.message.w_byte[ CLC_STRINGCMD ]
+        chan.message.w_string[ text ]
+
+    # the map is loaded: tell the server we are in
+    public func begin []
+        if [ !demo ] send_cmd[ 'begin {precache}' ]
+        state = 5
+
+    # CLC_STATE: where the player stands and what it holds
+    public func send_state [ e: Edict, buttons: i32, upmove: i32,
+                             angles: vec3f, touched: vec Edict ]
+        if [ demo || state < 3 || !chan ] return
+        # thirty a second at most
+        if [ clock - sent_time < 0.033 ] return
+        sent_time = clock
+        m : Msg [ max: 512 ]
+        if [ state == 5 ]
+            m.w_byte[ CLC_STATE ]
+            m.w_long[ (cur && !demowaiting) ? cur.number : 0 - 1 ]
+            m.w_float[ e.origin.x ]
+            m.w_float[ e.origin.y ]
+            m.w_float[ e.origin.z ]
+            m.w_float[ e.velocity.x ]
+            m.w_float[ e.velocity.y ]
+            m.w_float[ e.velocity.z ]
+            m.w_float[ angles.x ]
+            m.w_float[ angles.y ]
+            m.w_byte[ buttons ]
+            m.w_byte[ upmove ]
+            m.w_byte[ e.client.ps.pm_flags ]
+            m.w_byte[ e.viewheight ]
+            m.w_byte[ e.waterlevel ]
+            m.w_long[ e.watertype ]
+            m.w_short[ (e.groundentity)
+                       ? away[ e.groundentity.number ] : 0 - 1 ]
+            n : i32 [ (touched.count > 16) ? 16 : touched.count ]
+            m.w_byte[ n ]
+            for [ i: i32 0, i < n, i += 1 ]
+                m.w_short[ away[ touched[ i ].number ] ]
+        chan.transmit[ m ]
+
+    # our edict 1 is the player; the server's is its own first
+    func here [ n: i32 ] -> i32
+        if [ n == playernum + 1 ] return 1
+        if [ n == 1 ] return playernum + 1
+        return n
+
+    func away [ n: i32 ] -> i32
+        return here[ n ]
+
+    # CL_ConnectionlessPacket
+    func connectionless []
+        inbox.at = 4
+        text : inbox.r_string[]
+        words : text.split[ ' ' ]
+        if [ words.count == 0 ] return
+        verb : words[ 0 ]
+        if [ verb == 'challenge' && words.count > 1 && state == 1 ]
+            challenge = atoi[ words[ 1 ].chars ]
+            state = 2
+            retry = 0.0
+        el [ strncmp[ verb.chars, "client_connect", 14 ] == 0 &&
+             state == 2 ]
+            chan = Netchan [ sock: sock, ip: ip, port: port,
+                             qport: qport, client: true ]
+            state = 3
+            send_cmd[ 'new' ]
+        el [ strncmp[ verb.chars, "print", 5 ] == 0 ]
+            prints.push[ text ]
+
+    # CL_ParseStuffText's part: the handshake's commands
+    func stuff [ text: string ]
+        lines : text.split[ '\n' ]
+        for [ i: i32 0, i < lines.count, i += 1 ]
+            l : lines[ i ]
+            if [ l.count > 4 && strncmp[ l.chars, "cmd ", 4 ] == 0 ]
+                send_cmd[ l.mid[ 4, l.count - 4 ] ]
+            el [ l.count >= 8 && strncmp[ l.chars, "precache", 8 ] == 0 ]
+                precache = (l.count > 9) ? atoi[ @l.chars[ 9 ] ] : 0
+                # the map's name is model 1: maps/<name>.bsp
+                world : cs[ CS_MODELS + 1 ]
+                if [ world.count > 9 ]
+                    map_name = world.mid[ 5, world.count - 9 ]
+                    want_map = true
+                    state = 4
+            el [ l.count >= 9 && strncmp[ l.chars, "reconnect", 9 ] == 0 ]
+                reset[]
+                state = 3
+                send_cmd[ 'new' ]
+
+    # CL_ParseStartSoundPacket
+    func parse_sound [ m: Msg ]
+        flags : i32 [ m.r_byte[] ]
+        index : i32 [ m.r_byte[] ]
+        volume : f32 [ 1.0 ]
+        attenuation : f32 [ 1.0 ]
+        if [ flags & SND_VOLUME ] volume = f32[ m.r_byte[] ] / 255.0
+        if [ flags & SND_ATTENUATION ]
+            attenuation = f32[ m.r_byte[] ] / 64.0
+        if [ flags & SND_OFFSET ] m.r_byte[]
+        ent : i32 [ 0 ]
+        channel : i32 [ 0 ]
+        if [ flags & SND_ENT ]
+            packed : i32 [ m.r_short[] & 65535 ]
+            ent = packed >> 3
+            channel = packed & 7
+        ev : GameEvent [ kind: EVENT_SOUND, index: index,
+            channel: channel, volume: volume, attenuation: attenuation,
+            count: here[ ent ] ]
+        # color 1 marks a sound with its own place
+        if [ flags & SND_POS ]
+            ev.origin = m.r_pos[]
+            ev.color = 1
+        pending.push[ ev ]
+
+    # CL_ParseTEnt: false when the kind is not known
+    func parse_temp [ m: Msg ] -> bool
+        k : i32 [ m.r_byte[] ]
+        ev : GameEvent [ kind: EVENT_TEMP, index: k ]
+        if [ k == TE_SPLASH || k == TE_LASER_SPARKS || k == 25 ||
+             k == 29 ]
+            ev.count = m.r_byte[]
+            ev.origin = m.r_pos[]
+            ev.dir = m.r_dir[]
+            ev.color = m.r_byte[]
+        el [ k == TE_RAILTRAIL || k == TE_BUBBLETRAIL ||
+             k == TE_BFG_LASER || k == 27 ]
+            ev.origin = m.r_pos[]
+            ev.dir = m.r_pos[]
+        el [ k == TE_PARASITE_ATTACK || k == TE_MEDIC_CABLE_ATTACK ]
+            ev.count = here[ m.r_short[] ]
+            ev.color = 2
+            ev.origin = m.r_pos[]
+            ev.dir = m.r_pos[]
+        el [ k == 24 ]
+            # the grapple's cable: entity, two ends, an offset
+            ev.count = here[ m.r_short[] ]
+            ev.color = 2
+            ev.origin = m.r_pos[]
+            ev.dir = m.r_pos[]
+            m.r_pos[]
+        el [ net_te_point[ k ] || k == 28 ]
+            ev.origin = m.r_pos[]
+        el [ k <= TE_BFG_LASER || k == 26 ]
+            ev.origin = m.r_pos[]
+            ev.dir = m.r_dir[]
+        el
+            return false
+        # the port draws the first 24 kinds
+        if [ k <= TE_BFG_LASER ] pending.push[ ev ]
+        return true
+
+    # CL_ParseFrame with CL_ParsePacketEntities
+    func parse_frame [ m: Msg ]
+        number : i32 [ m.r_long[] ]
+        delta : i32 [ m.r_long[] ]
+        # the suppress count: not in the old demo protocol
+        if [ protocol != 26 ] m.r_byte[]
+        old : NetFrame [ null ]
+        valid : bool [ true ]
+        if [ delta > 0 ]
+            old = frames[ delta & (UPDATE_BACKUP - 1) ]
+            if [ old.number != delta || !old.ents ]
+                # the frame we were told to build on is gone
+                valid = false
+                old = null
+        skip : i32 [ m.r_byte[] ]
+        m.at = m.at + skip
+        made : NetFrame [ number: number ]
+        made.ents = vec EntState []
+        cmd : i32 [ m.r_byte[] ]
+        if [ cmd != SVC_PLAYERINFO ]
+            m.at = m.size
+            return
+        made.ps = m.r_player[ (old) ? old.ps : blank_ps ]
+        if [ m.r_byte[] != SVC_PACKETENTITIES ]
+            m.at = m.size
+            return
+        old_n : i32 [ (old) ? old.ents.count : 0 ]
+        oi : i32 [ 0 ]
+        while [ true ]
+            bits : i32 [ m.r_entity_bits[] ]
+            newnum : i32 [ m.last_number ]
+            if [ newnum <= 0 || m.at > m.size ] break
+            # one or more entities from the old packet are unchanged
+            while [ oi < old_n && old.ents[ oi ].number < newnum ]
+                kept : old.ents[ oi ]
+                made.ents.push[ m.r_entity[ kept, kept.number, 0 ] ]
+                oi += 1
+            same : bool [ oi < old_n && old.ents[ oi ].number == newnum ]
+            if [ bits & U_REMOVE ]
+                if [ same ] oi += 1
+                continue
+            if [ same ]
+                # delta from previous state
+                made.ents.push[ m.r_entity[ old.ents[ oi ], newnum,
+                                            bits ] ]
+                oi += 1
+            el
+                # delta from baseline
+                base : (newnum < 1024) ? baselines[ newnum ] : blank
+                made.ents.push[ m.r_entity[ base, newnum, bits ] ]
+        # any remaining entities in the old frame are copied over
+        while [ oi < old_n ]
+            kept : old.ents[ oi ]
+            made.ents.push[ m.r_entity[ kept, kept.number, 0 ] ]
+            oi += 1
+        frames[ number & (UPDATE_BACKUP - 1) ] = made
+        if [ !valid ] return
+        if [ delta <= 0 ] demowaiting = false
+        cur = made
+        serverframe = number
+        fresh = true
+
+    # CL_ParseServerMessage
+    public func digest [ m: Msg ]
+        while [ m.at < m.size ]
+            c : i32 [ m.r_byte[] ]
+            if [ c < 0 ] break
+            if [ c == SVC_NOP ] continue
+            if [ c == SVC_DISCONNECT ]
+                prints.push[ 'Server disconnected' ]
+                state = 0
+                return
+            if [ c == SVC_RECONNECT ]
+                reset[]
+                state = 3
+                send_cmd[ 'new' ]
+            el [ c == SVC_PRINT ]
+                m.r_byte[]
+                prints.push[ m.r_string[] ]
+            el [ c == SVC_CENTERPRINT ]
+                center = m.r_string[]
+            el [ c == SVC_STUFFTEXT ]
+                stuff[ m.r_string[] ]
+            el [ c == SVC_SERVERDATA ]
+                reset[]
+                protocol = m.r_long[]
+                servercount = m.r_long[]
+                m.r_byte[]
+                m.r_string[]
+                playernum = m.r_short[]
+                m.r_string[]
+                if [ state > 3 ] state = 3
+            el [ c == SVC_CONFIGSTRING ]
+                i : i32 [ m.r_short[] ]
+                s : m.r_string[]
+                if [ i >= 0 && i < MAX_CONFIGSTRINGS ]
+                    cs[ i ] = s
+                    if [ state == 5 ] table_entry[ i ]
+            el [ c == SVC_SPAWNBASELINE ]
+                bits : i32 [ m.r_entity_bits[] ]
+                n : i32 [ m.last_number ]
+                base : m.r_entity[ blank, n, bits ]
+                if [ n >= 0 && n < 1024 ] baselines[ n ] = base
+            el [ c == SVC_SOUND ]
+                parse_sound[ m ]
+            el [ c == SVC_MUZZLEFLASH || c == SVC_MUZZLEFLASH2 ]
+                ent : i32 [ here[ m.r_short[] ] ]
+                flash : i32 [ m.r_byte[] ]
+                pending.push[ GameEvent [
+                    kind: (c == SVC_MUZZLEFLASH) ? EVENT_FLASH
+                          : EVENT_FLASH2,
+                    index: flash, count: ent ] ]
+            el [ c == SVC_TEMP_ENTITY ]
+                if [ !parse_temp[ m ] ]
+                    m.at = m.size
+            el [ c == SVC_LAYOUT ]
+                layout = m.r_string[]
+            el [ c == SVC_INVENTORY ]
+                for [ i: i32 0, i < 256, i += 1 ]
+                    inventory[ i ] = m.r_short[]
+            el [ c == SVC_DOWNLOAD ]
+                size : i32 [ m.r_short[] ]
+                m.r_byte[]
+                if [ size > 0 ] m.at = m.at + size
+            el [ c == SVC_FRAME ]
+                parse_frame[ m ]
+            el
+                # an unknown message: the rest cannot be read
+                m.at = m.size
+
+    # a model, sound or image name into the local game's tables
+    func table_entry [ i: i32 ]
+        s : cs[ i ]
+        if [ i > CS_MODELS + 1 && i < CS_SOUNDS ]
+            n : i32 [ i - CS_MODELS - 1 ]
+            while [ g.models.count <= n ] g.models.push[ '' ]
+            g.models[ n ] = s
+        el [ i >= CS_SOUNDS && i < CS_IMAGES ]
+            n : i32 [ i - CS_SOUNDS ]
+            while [ g.sounds.count <= n ] g.sounds.push[ '' ]
+            g.sounds[ n ] = s
+        el [ i >= CS_IMAGES && i < CS_LIGHTS ]
+            n : i32 [ i - CS_IMAGES ]
+            while [ g.images.count <= n ] g.images.push[ '' ]
+            g.images[ n ] = s
+        el [ i >= CS_LIGHTS + 12 && i < CS_LIGHTS + 64 ]
+            # a switched light: one letter
+            g.lightstyles[ i - CS_LIGHTS ] =
+                (s.count == 1) ? i32[ s[ 0 ] ] : 0
+        el [ i == CS_NAME ]
+            g.level.level_name = s
+        el [ i >= CS_PLAYERSKINS && i < CS_PLAYERSKINS + 256 ]
+            # name, a backslash, model/skin: the scoreboard's name
+            if [ !g.player_names ] g.player_names = vec string []
+            n : i32 [ i - CS_PLAYERSKINS ]
+            while [ g.player_names.count <= n ] g.player_names.push[ '' ]
+            cut : i32 [ 0 ]
+            while [ cut < s.count && s[ cut ] != 92 ] cut += 1
+            g.player_names[ n ] = s.mid[ 0, cut ]
+
+    # the local game the map made, emptied for what arrives
+    public func take_game []
+        for [ i: i32 2, i < g.num_edicts, i += 1 ]
+            e : g.edicts[ i ]
+            if [ e.inuse ] g.world.unlink[ e ]
+            e.inuse = false
+        while [ g.edicts.count < 1024 ]
+            e : Edict [ number: g.edicts.count ]
+            e.moveinfo = MoveInfo [ ]
+            e.monsterinfo = MonsterInfo [ ]
+            g.edicts.push[ e ]
+        g.num_edicts = 1024
+        g.models = vec string [] [ '' ]
+        g.sounds = vec string [] [ '' ]
+        g.images = vec string [] [ '' ]
+        g.deathmatch = true
+        for [ i: i32 CS_MODELS + 2, i < CS_PLAYERSKINS + 256, i += 1 ]
+            if [ cs[ i ].count > 0 ] table_entry[ i ]
+        table_entry[ CS_NAME ]
+
+    # a server model number as the local game counts them
+    func model [ n: i32 ] -> i32
+        if [ n == 255 || n == 0 ] return n
+        return n - 1
+
+    # CL_AddPacketEntities' source: the frame onto the edicts
+    public func apply [ pl: Edict ]
+        fresh = false
+        if [ !cur ] return
+        g.level.framenum = cur.number
+        g.level.time = f32[ cur.number ] * 0.1
+        present : vec bool [ g.edicts.count ]
+        for [ k: i32 0, k < cur.ents.count, k += 1 ]
+            s : cur.ents[ k ]
+            n : i32 [ here[ s.number ] ]
+            if [ n <= 1 || n >= g.edicts.count ] continue
+            e : g.edicts[ n ]
+            present[ n ] = true
+            e.inuse = true
+            e.origin = s.origin
+            e.angles = s.angles
+            e.old_origin = s.old_origin
+            e.modelindex2 = model[ s.modelindex2 ]
+            e.modelindex3 = model[ s.modelindex3 ]
+            e.frame = s.frame
+            e.skinnum = s.skinnum
+            e.effects = s.effects
+            e.renderfx = s.renderfx
+            e.sound = s.sound
+            e.event = s.event
+            if [ s.solid == 31 ]
+                # a brush model: its box comes with its name
+                brush : (s.modelindex - 1 < g.models.count)
+                    ? g.models[ s.modelindex - 1 ] : ''
+                if [ !e.model || e.model != brush ]
+                    g.setmodel[ e, brush ]
+                e.solid = SOLID_BSP
+            el
+                e.model = null
+                e.modelindex = model[ s.modelindex ]
+                if [ s.solid != 0 ]
+                    # the box packed in sixteen bits
+                    wide : f32 [ 8.0 * f32[ s.solid & 31 ] ]
+                    down : f32 [ 8.0 * f32[ (s.solid >> 5) & 31 ] ]
+                    up : f32 [ 8.0 * f32[ (s.solid >> 10) & 63 ] - 32.0 ]
+                    e.mins = vec3f [ 0.0 - wide, 0.0 - wide, 0.0 - down ]
+                    e.maxs = vec3f [ wide, wide, up ]
+                    e.solid = SOLID_BBOX
+                el
+                    e.solid = SOLID_NOT
+            g.world.link[ e ]
+        for [ n: i32 2, n < g.edicts.count, n += 1 ]
+            e : g.edicts[ n ]
+            if [ e.inuse && !present[ n ] ]
+                g.world.unlink[ e ]
+                e.inuse = false
+        # the player's state: what the server says, his own place
+        ps : cur.ps
+        mine : pl.client.ps
+        ducked : i32 [ mine.pm_flags & PMF_DUCKED ]
+        gap : f32 [ v_len[ v_sub[ ps.origin, pl.origin ] ] ]
+        teleported = demo || (ps.pm_flags & PMF_TIME_TELEPORT) != 0
+            || gap > 128.0
+        if [ teleported ]
+            pl.origin = ps.origin
+            pl.velocity = ps.velocity
+        mine.pm_type = ps.pm_type
+        mine.pm_flags = (ps.pm_flags & ~PMF_DUCKED) | ducked
+        if [ demo ] mine.pm_flags = ps.pm_flags & ~PMF_TIME_TELEPORT
+        mine.viewangles = ps.viewangles
+        mine.viewoffset = ps.viewoffset
+        if [ demo ] pl.viewheight = i32[ ps.viewoffset.z ]
+        mine.kick_angles = ps.kick_angles
+        mine.gunangles = ps.gunangles
+        mine.gunoffset = ps.gunoffset
+        mine.gunindex = model[ ps.gunindex ]
+        mine.gunframe = ps.gunframe
+        mine.blend = ps.blend
+        mine.fov = ps.fov
+        mine.rdflags = ps.rdflags
+        for [ i: i32 0, i < 32, i += 1 ]
+            mine.stats[ i ] = ps.stats[ i ]
+        pl.deadflag = (ps.pm_type == PM_DEAD || ps.pm_type == PM_GIB)
+            ? 2 : 0
+        pl.health = ps.stats[ STAT_HEALTH ]
+        for [ i: i32 0, i < 256 && i < pl.client.pers.inventory.count,
+              i += 1 ]
+            pl.client.pers.inventory[ i ] = inventory[ i ]
+        if [ layout ] pl.client.layout = layout
+        if [ center ]
+            pl.client.centerprint = center
+            pl.client.centerprint_time = g.level.time + 5.0
+            center = null
+        # the events, each with its edict found
+        for [ ev: GameEvent ] in pending
+            if [ ev.kind != EVENT_TEMP || ev.color == 2 ]
+                n : i32 [ ev.count ]
+                if [ n > 0 && n < g.edicts.count ] ev.ent = g.edicts[ n ]
+                if [ ev.kind == EVENT_TEMP ] ev.color = 0
+                el [ ev.color != 1 && ev.ent ] ev.origin = ev.ent.origin
+                if [ ev.kind != EVENT_TEMP ]
+                    ev.count = 0
+                    ev.color = 0
+            made : GameEvent [ kind: ev.kind, ent: ev.ent,
+                origin: ev.origin, dir: ev.dir, index: ev.index,
+                channel: ev.channel, volume: ev.volume,
+                attenuation: ev.attenuation, count: ev.count,
+                color: ev.color ]
+            g.events.push[ made ]
+        pending = vec GameEvent []
+
+    # CL_ReadPackets, or the demo's next block
+    public func frame [ dt: f32 ]
+        clock = clock + dt
+        if [ demo ]
+            if [ state < 3 || want_map ] return
+            # a block a server frame; the first ones without waiting
+            wait = wait - dt
+            while [ state == 3 || (state == 5 && wait <= 0.0 && !fresh) ]
+                if [ !demo_block[] ]
+                    prints.push[ 'demo ended' ]
+                    if [ timedemo && demo_frames > 0 ]
+                        took : f32 [ clock - demo_clock ]
+                        rate : f32 [ f32[ demo_frames ] / took ]
+                        said : '{demo_frames} frames, {took} seconds: {rate} fps'
+                        prints.push[ said ]
+                        log 'demo: {said}'
+                    state = 0
+                    return
+                if [ state == 5 && fresh ]
+                    demo_frames += 1
+                    wait = (timedemo) ? 0.0 : wait + 0.1
+                if [ want_map ] return
+            return
+        if [ sock < 0 || state == 0 ] return
+        if [ state == 1 || state == 2 ]
+            # CL_CheckForResend: every three seconds
+            retry = retry - dt
+            if [ retry <= 0.0 ]
+                retry = 3.0
+                if [ state == 1 ]
+                    net_oob[ sock, ip, port, 'getchallenge\n' ]
+                el
+                    info : '\\name\\{name}\\rate\\25000\\msg\\1\\hand\\2\\skin\\male/grunt'
+                    net_oob[ sock, ip, port,
+                        'connect {PROTOCOL_VERSION} {qport} {challenge} "{info}"\n' ]
+        from : u32 [ 0 ]
+        from_port : i32 [ 0 ]
+        while [ true ]
+            got : i32 [ q2net_recv[ sock, inbox.data, inbox.max, @from,
+                                    @from_port ] ]
+            if [ got <= 0 ] break
+            inbox.size = got
+            inbox.at = 0
+            if [ got >= 4 && inbox.r_long[] == 0 - 1 ]
+                connectionless[]
+                continue
+            if [ state < 3 || !chan || from != ip ] continue
+            if [ !chan.process[ inbox ] ] continue
+            digest[ inbox ]
+            if [ recording && !demowaiting ] write_block[ inbox, 8 ]
+            if [ state == 0 ] return
+        # keep the reliable stream moving while not yet in the game
+        if [ state == 3 || state == 4 ]
+            if [ clock - sent_time > 0.1 ]
+                sent_time = clock
+                chan.transmit[ null ]
+
+    # one length and message out of the demo's bytes
+    func demo_block [] -> bool
+        b : @u8 [ film.data ]
+        if [ film_at + 4 > film.size ] return false
+        n : i32 [ bsp_i32[ b, film_at ] ]
+        film_at += 4
+        if [ n <= 0 || n > inbox.max || film_at + n > film.size ]
+            return false
+        memcpy[ inbox.data, @b[ film_at ], n ]
+        film_at += n
+        inbox.size = n
+        inbox.at = 0
+        digest[ inbox ]
+        return true
+
+    # CL_Record_f: the state so far, then every message as it comes
+    public func start_record [ file: string ] -> bool
+        if [ recording || state != 5 || demo ] return false
+        record = fopen[ file.chars, "wb" ]
+        if [ !record ] return false
+        recording = true
+        demowaiting = true
+        m : Msg [ max: 60000 ]
+        m.w_byte[ SVC_SERVERDATA ]
+        m.w_long[ PROTOCOL_VERSION ]
+        m.w_long[ 0x10000 + servercount ]
+        m.w_byte[ 1 ]
+        m.w_string[ '' ]
+        m.w_short[ playernum ]
+        m.w_string[ cs[ CS_NAME ] ]
+        for [ i: i32 0, i < MAX_CONFIGSTRINGS, i += 1 ]
+            if [ cs[ i ].count == 0 ] continue
+            if [ m.size + cs[ i ].count + 32 > m.max ]
+                write_block[ m, 0 ]
+                m.clear[]
+            m.w_byte[ SVC_CONFIGSTRING ]
+            m.w_short[ i ]
+            m.w_string[ cs[ i ] ]
+        for [ i: i32 0, i < 1024, i += 1 ]
+            base : baselines[ i ]
+            if [ base.modelindex == 0 && base.sound == 0 &&
+                 base.effects == 0 ] continue
+            if [ m.size + 64 > m.max ]
+                write_block[ m, 0 ]
+                m.clear[]
+            m.w_byte[ SVC_SPAWNBASELINE ]
+            m.w_entity[ blank, base, true, true ]
+        m.w_byte[ SVC_STUFFTEXT ]
+        m.w_string[ 'precache\n' ]
+        write_block[ m, 0 ]
+        return true
+
+    # a block: its length, then the message from an offset on
+    func write_block [ m: Msg, skip: i32 ]
+        n : i32 [ m.size - skip ]
+        fwrite[ @n, 4, 1, record ]
+        fwrite[ @m.data[ skip ], 1, n, record ]
+
+    public func stop_record []
+        if [ !recording ] return
+        last : i32 [ -1 ]
+        fwrite[ @last, 4, 1, record ]
+        fclose[ record ]
+        recording = false

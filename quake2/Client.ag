@@ -83,6 +83,9 @@ func player_pain [ e: Edict, other: Edict, kick: f32, damage: i32 ]
 
 func client_obituary [ e: Edict, inflictor: Edict,
                        attacker: Edict ]
+    if [ g.deathmatch ]
+        dm_obituary[ e, inflictor, attacker ]
+        return
     name : string [ e.client.pers.netname ]
     g.bprintf[ '{name} died.' ]
     if [ g.deathmatch ] e.client.resp.score -= 1
@@ -147,6 +150,11 @@ func player_die [ e: Edict, inflictor: Edict, attacker: Edict,
         look_at_killer[ e, inflictor, attacker ]
         cl.ps.pm_type = PM_DEAD
         client_obituary[ e, inflictor, attacker ]
+        if [ g.ctf ]
+            ctf_frag_bonuses[ e, inflictor, attacker ]
+            ctf_dead_drop_flag[ e ]
+            ctf_dead_drop_tech[ e ]
+            ctf_player_reset_grapple[ e ]
         toss_client_weapon[ e ]
         if [ g.deathmatch ] cmd_help[ e ]
         # clear inventory; this is kind of ugly, but it's how we want to
@@ -212,7 +220,11 @@ func init_client_persistant [ client: Client ]
     pers.max_cells = 200
     pers.max_slugs = 50
     pers.connected = true
-    pers.netname = 'player'
+    # the name stays through a respawn, as userinfo does in C
+    pers.netname = (client.pers && client.pers.netname)
+        ? client.pers.netname : 'player'
+    if [ g.ctf ]
+        pers.inventory[ save_item_no[ find_item[ 'Grapple' ] ] ] = 1
 
 # a copy of the persistant data: the inventory is its own vec
 func clone_pers [ p: ClientPersistant ] -> ClientPersistant
@@ -232,10 +244,13 @@ func clone_pers [ p: ClientPersistant ] -> ClientPersistant
     return c
 
 func init_client_resp [ client: Client ]
+    team : i32 [ (client.resp) ? client.resp.ctf_team : 0 ]
     resp : ClientRespawn [ ]
     resp.enterframe = g.level.framenum
     resp.coop_respawn = client.pers
+    resp.ctf_team = team
     client.resp = resp
+    if [ g.ctf && team < CTF_TEAM1 ] ctf_assign_team[ client ]
 
 # SaveClientData: health and the like live on the edict; mirror them
 # before the edicts are wiped
@@ -258,6 +273,9 @@ func fetch_client_ent_data [ ent: Edict ]
 # SelectSpawnPoint: the start whose targetname is the spawnpoint
 func select_spawn_point [ ent: Edict ] -> Edict
     spot : Edict [ null ]
+    if [ g.deathmatch ]
+        spot = (g.ctf) ? ctf_select_spawn[ ent ] : select_dm_spawn[]
+        if [ spot ] return spot
     while [ true ]
         spot = g.find[ spot, EField.classname, 'info_player_start' ]
         if [ !spot ] break
@@ -359,10 +377,11 @@ func put_client_in_server [ ent: Edict ]
     fresh.ps.stats = vec i32 [ 32 ]
     fresh.pers = saved
     fresh.centerprint = client.centerprint
+    # held by the new client before the old one lets it go
+    fresh.resp = resp
     ent.client = fresh
     client = fresh
     if [ client.pers.health <= 0 ] init_client_persistant[ client ]
-    client.resp = resp
     # copy some data from the client to the entity
     fetch_client_ent_data[ ent ]
     # clear entity values
@@ -465,6 +484,9 @@ func client_think [ ent: Edict, buttons: i32, upmove: i32,
     client.buttons = buttons
     client.latched_buttons = client.latched_buttons
         | (client.buttons & ~client.oldbuttons)
+    if [ g.ctf ]
+        ctf_apply_regeneration[ ent ]
+        if [ client.ctf_grapple ] ctf_grapple_pull[ client.ctf_grapple ]
     # save light level the player is standing on for monster sighting
     ent.light_level = 128
     # fire weapon from final position if needed
@@ -1048,6 +1070,10 @@ func client_end_server_frame [ ent: Edict ]
     g_set_stats[ ent ]
     g_set_client_event[ ent ]
     g_set_client_effects[ ent ]
+    if [ g.ctf ] ctf_effects[ ent ]
+    # the scoreboard is made again every 32 frames while shown
+    if [ g.deathmatch && ent.client.showscores &&
+         (g.level.framenum & 31) == 0 ] dm_scoreboard[ ent ]
     g_set_client_sound[ ent ]
     g_set_client_frame[ ent ]
     cl.oldvelocity = ent.velocity
@@ -1156,6 +1182,7 @@ func cmd_score [ ent: Edict ]
         ent.client.showscores = false
         return
     ent.client.showscores = true
+    dm_scoreboard[ ent ]
 
 func cmd_help [ ent: Edict ]
     # this is for backwards compatability
@@ -1237,6 +1264,7 @@ func g_set_stats [ ent: Edict ]
         st[ STAT_SELECTED_ICON ] =
             g.imageindex[ g.items[ cl.pers.selected_item ].icon ]
     st[ STAT_SELECTED_ITEM ] = cl.pers.selected_item
+    if [ g.ctf ] ctf_set_stats[ ent ]
     # layouts
     st[ STAT_LAYOUTS ] = 0
     if [ g.deathmatch ]
@@ -1525,6 +1553,7 @@ func client_command [ ent: Edict, cmd: string, arg: string ]
     el [ cmd == 'god' ]            cmd_god[ ent ]
     el [ cmd == 'notarget' ]       cmd_notarget[ ent ]
     el [ cmd == 'noclip' ]         cmd_noclip[ ent ]
+    el [ cmd == 'team' && g.ctf ]  ctf_team_cmd[ ent, arg ]
     el [ cmd == 'inven' ]          cmd_inven[ ent ]
     el [ cmd == 'invnext' ]        select_next_item[ ent, -1 ]
     el [ cmd == 'invprev' ]        select_prev_item[ ent, -1 ]

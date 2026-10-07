@@ -39,6 +39,12 @@ class Pak
             load_pak[ p ]
         log 'pak: {paks.count} archives, {entries.count} files'
 
+    # another folder's paks after the first (ctf beside baseq2)
+    public func add [ d: path ]
+        for [ i: i32 0, i < 10, i += 1 ]
+            p : path '{d}/pak{i}.pak'
+            if [ p.exists[] ] load_pak[ p ]
+
     func load_pak [ p: path ]
         f : handle [ fopen[ p, "rb" ] ]
         if [ !f ] return
@@ -70,7 +76,7 @@ class Pak
             if [ strcasecmp[ e.name.chars, name.chars ] == 0 ] return e
         return null
 
-    func read_file [ p: path ] -> PakData
+    public func read_file [ p: path ] -> PakData
         f : handle [ fopen[ p, "rb" ] ]
         if [ !f ] return null
         fseek[ f, 0, SEEK_END ]

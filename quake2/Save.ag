@@ -253,7 +253,7 @@ func save_read [ file: string, most: i32 ] -> SaveIn
     return SaveIn [ words: words ]
 
 
-# 386 functions of one shape, by name
+# 394 functions of one shape, by name
 func lam_name_0 [ f: lambda none [ Edict ] ] -> string
     if [ !f ] return null
     if [ f == lambda actor_attack[] ] return 'actor_attack'
@@ -332,6 +332,14 @@ func lam_name_0 [ f: lambda none [ Edict ] ] -> string
     if [ f == lambda chick_walk[] ] return 'chick_walk'
     if [ f == lambda commander_body_drop[] ] return 'commander_body_drop'
     if [ f == lambda commander_body_think[] ] return 'commander_body_think'
+    if [ f == lambda ctf_banner_think[] ] return 'ctf_banner_think'
+    if [ f == lambda ctf_drop_flag_think[] ] return 'ctf_drop_flag_think'
+    if [ f == lambda ctf_flag_setup[] ] return 'ctf_flag_setup'
+    if [ f == lambda ctf_flag_think[] ] return 'ctf_flag_think'
+    if [ f == lambda ctf_grapple_fire[] ] return 'ctf_grapple_fire'
+    if [ f == lambda ctf_spawn_techs[] ] return 'ctf_spawn_techs'
+    if [ f == lambda ctf_tech_think[] ] return 'ctf_tech_think'
+    if [ f == lambda ctf_weapon_grapple[] ] return 'ctf_weapon_grapple'
     if [ f == lambda do_respawn[] ] return 'do_respawn'
     if [ f == lambda door_go_down[] ] return 'door_go_down'
     if [ f == lambda door_hit_bottom[] ] return 'door_hit_bottom'
@@ -722,6 +730,14 @@ func lam_find_0 [ n: string ] -> lambda none [ Edict ]
     if [ n == 'chick_walk' ] return lambda chick_walk[]
     if [ n == 'commander_body_drop' ] return lambda commander_body_drop[]
     if [ n == 'commander_body_think' ] return lambda commander_body_think[]
+    if [ n == 'ctf_banner_think' ] return lambda ctf_banner_think[]
+    if [ n == 'ctf_drop_flag_think' ] return lambda ctf_drop_flag_think[]
+    if [ n == 'ctf_flag_setup' ] return lambda ctf_flag_setup[]
+    if [ n == 'ctf_flag_think' ] return lambda ctf_flag_think[]
+    if [ n == 'ctf_grapple_fire' ] return lambda ctf_grapple_fire[]
+    if [ n == 'ctf_spawn_techs' ] return lambda ctf_spawn_techs[]
+    if [ n == 'ctf_tech_think' ] return lambda ctf_tech_think[]
+    if [ n == 'ctf_weapon_grapple' ] return lambda ctf_weapon_grapple[]
     if [ n == 'do_respawn' ] return lambda do_respawn[]
     if [ n == 'door_go_down' ] return lambda door_go_down[]
     if [ n == 'door_hit_bottom' ] return lambda door_hit_bottom[]
@@ -1055,7 +1071,7 @@ func lam_find_1 [ n: string ] -> lambda none [ Edict, Edict, f32 ]
     if [ n == 'soldier_dodge' ] return lambda soldier_dodge[]
     return null
 
-# 50 functions of one shape, by name
+# 53 functions of one shape, by name
 func lam_name_2 [ f: lambda none [ Edict, Edict ] ] -> string
     if [ !f ] return null
     if [ f == lambda barrel_touch[] ] return 'barrel_touch'
@@ -1066,6 +1082,9 @@ func lam_name_2 [ f: lambda none [ Edict, Edict ] ] -> string
     if [ f == lambda button_killed[] ] return 'button_killed'
     if [ f == lambda button_touch[] ] return 'button_touch'
     if [ f == lambda chick_sight[] ] return 'chick_sight'
+    if [ f == lambda ctf_drop_flag_touch[] ] return 'ctf_drop_flag_touch'
+    if [ f == lambda ctf_grapple_touch[] ] return 'ctf_grapple_touch'
+    if [ f == lambda ctf_teleporter_touch[] ] return 'ctf_teleporter_touch'
     if [ f == lambda door_blocked[] ] return 'door_blocked'
     if [ f == lambda door_killed[] ] return 'door_killed'
     if [ f == lambda door_secret_blocked[] ] return 'door_secret_blocked'
@@ -1120,6 +1139,9 @@ func lam_find_2 [ n: string ] -> lambda none [ Edict, Edict ]
     if [ n == 'button_killed' ] return lambda button_killed[]
     if [ n == 'button_touch' ] return lambda button_touch[]
     if [ n == 'chick_sight' ] return lambda chick_sight[]
+    if [ n == 'ctf_drop_flag_touch' ] return lambda ctf_drop_flag_touch[]
+    if [ n == 'ctf_grapple_touch' ] return lambda ctf_grapple_touch[]
+    if [ n == 'ctf_teleporter_touch' ] return lambda ctf_teleporter_touch[]
     if [ n == 'door_blocked' ] return lambda door_blocked[]
     if [ n == 'door_killed' ] return lambda door_killed[]
     if [ n == 'door_secret_blocked' ] return lambda door_secret_blocked[]
@@ -2115,6 +2137,12 @@ func save_ClientRespawn [ s: SaveOut, o: ClientRespawn ]
     s.put_i[ o.score ]
     s.put_v[ o.cmd_angles ]
     s.put_i[ (o.spectator) ? 1 : 0 ]
+    s.put_i[ o.ctf_team ]
+    s.put_i[ o.ctf_state ]
+    s.put_f[ o.ctf_lasthurtcarrier ]
+    s.put_f[ o.ctf_lastreturnedflag ]
+    s.put_f[ o.ctf_flagsince ]
+    s.put_f[ o.ctf_lastfraggedcarrier ]
 
 func load_ClientRespawn [ s: SaveIn, o: ClientRespawn ]
     if [ s.get_i[] != 0 ]
@@ -2126,6 +2154,12 @@ func load_ClientRespawn [ s: SaveIn, o: ClientRespawn ]
     o.score = s.get_i[]
     o.cmd_angles = s.get_v[]
     o.spectator = s.get_i[] != 0
+    o.ctf_team = s.get_i[]
+    o.ctf_state = s.get_i[]
+    o.ctf_lasthurtcarrier = s.get_f[]
+    o.ctf_lastreturnedflag = s.get_f[]
+    o.ctf_flagsince = s.get_f[]
+    o.ctf_lastfraggedcarrier = s.get_f[]
 
 func save_Client [ s: SaveOut, o: Client ]
     s.put_i[ (o.ps) ? 1 : 0 ]
@@ -2181,6 +2215,13 @@ func save_Client [ s: SaveOut, o: Client ]
     s.put_i[ (o.grenade_blew_up) ? 1 : 0 ]
     s.put_f[ o.grenade_time ]
     s.put_i[ o.silencer_shots ]
+    s.put_s[ o.layout ]
+    s.put_i[ (o.ctf_grapple) ? o.ctf_grapple.number : 0 - 1 ]
+    s.put_i[ o.ctf_grapplestate ]
+    s.put_f[ o.ctf_grapplereleasetime ]
+    s.put_f[ o.ctf_regentime ]
+    s.put_f[ o.ctf_techsndtime ]
+    s.put_f[ o.ctf_lasttechmsg ]
     s.put_i[ o.weapon_sound ]
     s.put_f[ o.pickup_msg_time ]
     s.put_f[ o.respawn_time ]
@@ -2252,6 +2293,13 @@ func load_Client [ s: SaveIn, o: Client ]
     o.grenade_blew_up = s.get_i[] != 0
     o.grenade_time = s.get_f[]
     o.silencer_shots = s.get_i[]
+    o.layout = s.get_s[]
+    o.ctf_grapple = save_edict[ s.get_i[] ]
+    o.ctf_grapplestate = s.get_i[]
+    o.ctf_grapplereleasetime = s.get_f[]
+    o.ctf_regentime = s.get_f[]
+    o.ctf_techsndtime = s.get_f[]
+    o.ctf_lasttechmsg = s.get_f[]
     o.weapon_sound = s.get_i[]
     o.pickup_msg_time = s.get_f[]
     o.respawn_time = s.get_f[]

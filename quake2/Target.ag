@@ -3,7 +3,6 @@ extend quake2
 
 RF_TRANSLUCENT : i32 [ 32 ]
 RF_BEAM        : i32 [ 128 ]
-CONTENTS_DEADMONSTER : i32 [ 67108864 ]
 SFL_CROSS_TRIGGER_MASK : i32 [ 255 ]
 LASER_SPARKS : i32 [ 1 << 31 ]
 

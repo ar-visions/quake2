@@ -792,6 +792,10 @@ func spawn_item [ e: Edict, item: GItem ]
     e.item = item
     e.nextthink = g.level.time + 2.0 * FRAMETIME
     e.think = lambda droptofloor[]
+    # CTFFlagSetup places a flag; outside ctf there are none
+    if [ e.classname == 'item_flag_team1' ||
+         e.classname == 'item_flag_team2' ]
+        e.think = lambda ctf_flag_setup[]
     e.effects = item.world_model_flags
     e.renderfx = RF_GLOW
     if [ e.model ] g.modelindex[ e.model ]

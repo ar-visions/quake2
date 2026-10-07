@@ -1,0 +1,633 @@
+# server/: sv_main, sv_user, sv_ents, sv_send for remote clients
+extend quake2
+
+# client_frame_t: what one client was sent in one frame
+class NetFrame
+    public number : i32 [ -1 ]
+    public ents   : vec EntState
+    public ps     : PlayState
+
+# client_t: one remote player
+class NetPeer
+    # 0 free, 1 connected, 2 spawned
+    public state  : i32
+    public chan   : Netchan
+    public edict  : Edict
+    public name   : string
+    public lastframe : i32 [ -1 ]
+    public last_time : f32
+    # this frame's sounds and effects, sent unreliably
+    public datagram : Msg
+    public frames : vec NetFrame
+    public said_time : f32
+    # the frame a teleport went out in: older moves are stale
+    public hold : i32
+    public layout_sent : string
+
+    func init []
+        datagram = Msg [ max: 1400 ]
+        frames = vec NetFrame []
+        for [ i: i32 0, i < UPDATE_BACKUP, i += 1 ]
+            frames.push[ NetFrame [ ] ]
+
+class NetServer
+    public sock   : i32 [ -1 ]
+    public peers  : vec NetPeer
+    public baselines : vec EntState
+    public spawncount : i32
+    # getchallenge answers: address, port, number
+    public challenges : vec i32
+    public inbox  : Msg
+    public events_sent : i32
+    public blank  : EntState
+    public blank_ps : PlayState
+    # the map's sky name, for CS_SKY
+    public sky    : string
+
+    func init []
+        inbox = Msg [ max: 2048 ]
+        peers = vec NetPeer []
+        challenges = vec i32 []
+        blank = EntState [ ]
+        blank_ps = PlayState [ ]
+
+    # SV_InitGame: the socket, a slot for each remote client
+    public func start [ port: i32 ] -> bool
+        if [ sock < 0 ] sock = q2net_open[ port ]
+        if [ sock < 0 ] return false
+        return true
+
+    # SV_SpawnServer: a new level, every client starts over
+    public func level [ ]
+        spawncount = rand[] & 0x7fffffff
+        events_sent = 0
+        while [ peers.count < g.maxclients - 1 ]
+            peers.push[ NetPeer [ ] ]
+        # SV_CreateBaseline
+        baselines = vec EntState []
+        for [ i: i32 0, i < g.edicts.count, i += 1 ]
+            e : g.edicts[ i ]
+            base : EntState [ ]
+            if [ i > 0 && i < g.num_edicts && e.inuse &&
+                 (e.modelindex != 0 || e.sound != 0 || e.effects != 0) ]
+                base = state_of[ e ]
+                base.old_origin = base.origin
+            baselines.push[ base ]
+        g.printed = vec string []
+        g.printed_to = vec i32 []
+        g.player[].client.pers.netname = 'host'
+        for [ i: i32 0, i < peers.count, i += 1 ]
+            p : peers[ i ]
+            if [ p.state == 0 ] continue
+            # the level changed under a client: it reconnects
+            p.state = 1
+            p.lastframe = -1
+            make_client[ i ]
+            p.chan.message.w_byte[ SVC_STUFFTEXT ]
+            p.chan.message.w_string[ 'changing\nreconnect\n' ]
+
+    # entity_state_t from an edict
+    func state_of [ e: Edict ] -> EntState
+        return EntState [ number: e.number, origin: e.origin,
+            angles: e.angles, old_origin: e.old_origin,
+            modelindex: e.modelindex, modelindex2: e.modelindex2,
+            modelindex3: e.modelindex3, frame: e.frame,
+            skinnum: e.skinnum, effects: e.effects,
+            renderfx: e.renderfx, solid: e.solid_bits,
+            sound: e.sound, event: e.event ]
+
+    # player_state_t from a client's edict
+    func player_of [ e: Edict ] -> PlayState
+        ps : e.client.ps
+        out : PlayState [ pm_type: ps.pm_type, origin: e.origin,
+            velocity: e.velocity, pm_time: ps.pm_time,
+            pm_flags: ps.pm_flags, gravity: ps.gravity,
+            delta_angles: ps.delta_angles, viewoffset: ps.viewoffset,
+            viewangles: ps.viewangles, kick_angles: ps.kick_angles,
+            blend: ps.blend, fov: ps.fov, gunindex: ps.gunindex,
+            gunframe: ps.gunframe, gunoffset: ps.gunoffset,
+            gunangles: ps.gunangles, rdflags: ps.rdflags ]
+        for [ i: i32 0, i < 32, i += 1 ]
+            out.stats[ i ] = ps.stats[ i ]
+        return out
+
+    # a configstring by its number: '' when it is not set
+    public func config [ i: i32 ] -> string
+        if [ i == CS_NAME ] return g.level.level_name
+        if [ i == CS_SKY ] return sky
+        if [ i == CS_STATUSBAR ]
+            return (g.ctf) ? ctf_statusbar[] : hud_statusbar[]
+        if [ i == CS_MAXCLIENTS ] return '{g.maxclients}'
+        if [ i == CS_MODELS + 1 ] return 'maps/{g.level.mapname}.bsp'
+        if [ i > CS_MODELS + 1 && i < CS_SOUNDS ]
+            n : i32 [ i - CS_MODELS - 1 ]
+            return (n < g.models.count) ? g.models[ n ] : ''
+        if [ i >= CS_SOUNDS && i < CS_IMAGES ]
+            n : i32 [ i - CS_SOUNDS ]
+            return (n < g.sounds.count) ? g.sounds[ n ] : ''
+        if [ i >= CS_IMAGES && i < CS_LIGHTS ]
+            n : i32 [ i - CS_IMAGES ]
+            return (n < g.images.count) ? g.images[ n ] : ''
+        if [ i >= CS_LIGHTS && i < CS_LIGHTS + 64 ]
+            c : i32 [ g.lightstyles[ i - CS_LIGHTS ] ]
+            if [ c == 0 ] return ''
+            buf : local i8 [ 2 ]
+            buf[ 0 ] = c
+            buf[ 1 ] = 0
+            return string [ cast cstr [ buf ] ]
+        if [ i >= CS_ITEMS && i < CS_ITEMS + g.num_items ]
+            name : g.items[ i - CS_ITEMS ].pickup_name
+            return (name) ? name : ''
+        if [ i >= CS_PLAYERSKINS && i < CS_PLAYERSKINS + g.maxclients ]
+            n : i32 [ i - CS_PLAYERSKINS ]
+            if [ n == 0 ] return 'host\\male/grunt'
+            if [ n - 1 < peers.count && peers[ n - 1 ].state != 0 ]
+                who : peers[ n - 1 ].name
+                return '{who}\\male/grunt'
+        return ''
+
+    # ClientConnect: the client's edict gets its client
+    func make_client [ slot: i32 ]
+        e : g.edicts[ slot + 2 ]
+        e.client = Client [ ]
+        e.client.ps = PlayerState [ ]
+        e.client.ps.stats = vec i32 [ 32 ]
+        e.client.pers = ClientPersistant [ ]
+        e.client.pers.inventory = vec i32 [ MAX_ITEMS ]
+        e.client.resp = ClientRespawn [ ]
+        e.client.resp.coop_respawn = ClientPersistant [ ]
+        e.client.resp.coop_respawn.inventory = vec i32 [ MAX_ITEMS ]
+        e.classname = 'player'
+        init_client_persistant[ e.client ]
+        e.client.pers.netname = peers[ slot ].name
+        init_client_resp[ e.client ]
+        peers[ slot ].edict = e
+
+    # SV_DropClient
+    func kick [ p: NetPeer ]
+        if [ p.state == 0 ] return
+        if [ p.edict && p.edict.inuse ]
+            g.bprintf[ '{p.name} disconnected' ]
+            g.world.unlink[ p.edict ]
+            p.edict.inuse = false
+            p.edict.modelindex = 0
+            p.edict.solid = SOLID_NOT
+            p.edict.classname = 'disconnected'
+        bye : Msg [ max: 16 ]
+        bye.w_byte[ SVC_DISCONNECT ]
+        p.chan.transmit[ bye ]
+        p.state = 0
+
+    # SV_ConnectionlessPacket
+    func connectionless [ ip: u32, port: i32 ]
+        inbox.at = 4
+        text : inbox.r_string[]
+        words : text.split[ ' ' ]
+        if [ words.count == 0 ] return
+        verb : words[ 0 ]
+        if [ strncmp[ verb.chars, "getchallenge", 12 ] == 0 ]
+            number : i32 [ rand[] & 0x7fffffff ]
+            from : i32 [ ip ]
+            challenges.push[ from ]
+            challenges.push[ port ]
+            challenges.push[ number ]
+            if [ challenges.count > 192 ]
+                for [ i: i32 0, i < 3, i += 1 ] challenges.remove[ 0 ]
+            net_oob[ sock, ip, port, 'challenge {number}' ]
+            return
+        if [ verb == 'connect' && words.count >= 4 ]
+            if [ atoi[ words[ 1 ].chars ] != PROTOCOL_VERSION ]
+                net_oob[ sock, ip, port, 'print\nServer is version 3.21.\n' ]
+                return
+            qport : i32 [ atoi[ words[ 2 ].chars ] ]
+            number : i32 [ atoi[ words[ 3 ].chars ] ]
+            known : bool [ false ]
+            from : i32 [ ip ]
+            for [ i: i32 0, i + 2 < challenges.count, i += 3 ]
+                if [ challenges[ i ] == from &&
+                     challenges[ i + 2 ] == number ] known = true
+            if [ !known ]
+                net_oob[ sock, ip, port, 'print\nBad challenge.\n' ]
+                return
+            # a reconnect takes its old slot, else the first free
+            slot : i32 [ -1 ]
+            for [ i: i32 0, i < peers.count, i += 1 ]
+                p : peers[ i ]
+                if [ p.state != 0 && p.chan.ip == ip &&
+                     (p.chan.qport == qport || p.chan.port == port) ]
+                    slot = i
+            for [ i: i32 0, i < peers.count && slot < 0, i += 1 ]
+                if [ peers[ i ].state == 0 ] slot = i
+            if [ slot < 0 ]
+                net_oob[ sock, ip, port, 'print\nServer is full.\n' ]
+                return
+            fresh : NetPeer [ ]
+            fresh.chan = Netchan [ sock: sock, ip: ip, port: port,
+                                   qport: qport ]
+            fresh.state = 1
+            fresh.last_time = g.level.time
+            fresh.name = 'player{slot + 2}'
+            # the name out of the userinfo: \name\value
+            at : cstr [ strstr[ text.chars, "\\name\\" ] ]
+            if [ at ]
+                buf : local i8 [ 32 ]
+                n : i32 [ 0 ]
+                while [ n < 31 && at[ n + 6 ] != 0 && at[ n + 6 ] != 92
+                        && at[ n + 6 ] != 34 ]
+                    buf[ n ] = at[ n + 6 ]
+                    n += 1
+                buf[ n ] = 0
+                fresh.name = string [ cast cstr [ buf ] ]
+            peers[ slot ] = fresh
+            make_client[ slot ]
+            net_oob[ sock, ip, port, 'client_connect' ]
+
+    # SV_New_f: the serverdata, then the client asks for the rest
+    func send_new [ p: NetPeer, slot: i32 ]
+        m : p.chan.message
+        m.w_byte[ SVC_SERVERDATA ]
+        m.w_long[ PROTOCOL_VERSION ]
+        m.w_long[ spawncount ]
+        m.w_byte[ 0 ]
+        m.w_string[ '' ]
+        m.w_short[ slot + 1 ]
+        m.w_string[ g.level.level_name ]
+        m.w_byte[ SVC_STUFFTEXT ]
+        m.w_string[ 'cmd configstrings {spawncount} 0\n' ]
+
+    # SV_Configstrings_f: half a packet at a time
+    func send_configs [ p: NetPeer, first: i32 ]
+        m : p.chan.message
+        i : i32 [ first ]
+        while [ m.size < MAX_MSGLEN / 2 && i < MAX_CONFIGSTRINGS ]
+            s : config[ i ]
+            if [ s && s.count > 0 ]
+                m.w_byte[ SVC_CONFIGSTRING ]
+                m.w_short[ i ]
+                m.w_string[ s ]
+            i += 1
+        m.w_byte[ SVC_STUFFTEXT ]
+        if [ i == MAX_CONFIGSTRINGS ]
+            m.w_string[ 'cmd baselines {spawncount} 0\n' ]
+        el
+            m.w_string[ 'cmd configstrings {spawncount} {i}\n' ]
+
+    # SV_Baselines_f
+    func send_baselines [ p: NetPeer, first: i32 ]
+        m : p.chan.message
+        i : i32 [ first ]
+        while [ m.size < MAX_MSGLEN / 2 && i < baselines.count ]
+            base : baselines[ i ]
+            if [ base.modelindex != 0 || base.sound != 0 ||
+                 base.effects != 0 ]
+                m.w_byte[ SVC_SPAWNBASELINE ]
+                m.w_entity[ blank, base, true, true ]
+            i += 1
+        m.w_byte[ SVC_STUFFTEXT ]
+        if [ i >= baselines.count ]
+            m.w_string[ 'precache {spawncount}\n' ]
+        el
+            m.w_string[ 'cmd baselines {spawncount} {i}\n' ]
+
+    # SV_ExecuteUserCommand
+    func command [ p: NetPeer, slot: i32, text: string ]
+        words : text.split[ ' ' ]
+        if [ words.count == 0 ] return
+        verb : words[ 0 ]
+        second : i32 [ (words.count > 2) ? atoi[ words[ 2 ].chars ] : 0 ]
+        rest : ''
+        for [ i: i32 1, i < words.count, i += 1 ]
+            word : words[ i ]
+            rest = (i == 1) ? word : '{rest} {word}'
+        if [ verb == 'new' ]               send_new[ p, slot ]
+        el [ verb == 'configstrings' ]     send_configs[ p, second ]
+        el [ verb == 'baselines' ]         send_baselines[ p, second ]
+        el [ verb == 'begin' ]
+            # ClientBegin
+            e : p.edict
+            g.init_edict[ e ]
+            e.classname = 'player'
+            init_client_resp[ e.client ]
+            put_client_in_server[ e ]
+            g.muzzleflash[ e, MZ_LOGIN ]
+            g.bprintf[ '{p.name} entered the game' ]
+            client_end_server_frame[ e ]
+            p.state = 2
+            p.hold = g.level.framenum + 1
+        el [ verb == 'disconnect' ]        kick[ p ]
+        el [ p.state == 2 ]
+            client_command[ p.edict, verb, rest ]
+
+    # MSG_ReadDeltaUsercmd, read and left: CLC_STATE moves us
+    func skip_usercmd []
+        bits : i32 [ inbox.r_byte[] ]
+        if [ bits & 1 ] inbox.r_short[]
+        if [ bits & 2 ] inbox.r_short[]
+        if [ bits & 4 ] inbox.r_short[]
+        if [ bits & 8 ] inbox.r_short[]
+        if [ bits & 16 ] inbox.r_short[]
+        if [ bits & 32 ] inbox.r_short[]
+        if [ bits & 64 ] inbox.r_byte[]
+        if [ bits & 128 ] inbox.r_byte[]
+        inbox.r_byte[]
+        inbox.r_byte[]
+
+    # SV_ExecuteClientMessage
+    func execute [ p: NetPeer, slot: i32 ]
+        while [ inbox.at < inbox.size ]
+            c : i32 [ inbox.r_byte[] ]
+            if [ c < 0 || p.state == 0 ] break
+            if [ c == CLC_NOP ] continue
+            if [ c == CLC_USERINFO ]
+                info : inbox.r_string[]
+            el [ c == CLC_STRINGCMD ]
+                text : inbox.r_string[]
+                command[ p, slot, text ]
+            el [ c == CLC_MOVE ]
+                inbox.r_byte[]
+                p.lastframe = inbox.r_long[]
+                skip_usercmd[]
+                skip_usercmd[]
+                skip_usercmd[]
+            el [ c == CLC_STATE ]
+                p.lastframe = inbox.r_long[]
+                ox : f32 [ inbox.r_float[] ]
+                oy : f32 [ inbox.r_float[] ]
+                oz : f32 [ inbox.r_float[] ]
+                vx : f32 [ inbox.r_float[] ]
+                vy : f32 [ inbox.r_float[] ]
+                vz : f32 [ inbox.r_float[] ]
+                pitch : f32 [ inbox.r_float[] ]
+                yaw : f32 [ inbox.r_float[] ]
+                buttons : i32 [ inbox.r_byte[] ]
+                upmove : i32 [ inbox.r_char[] ]
+                pm_flags : i32 [ inbox.r_byte[] ]
+                viewheight : i32 [ inbox.r_char[] ]
+                waterlevel : i32 [ inbox.r_byte[] ]
+                watertype : i32 [ inbox.r_long[] ]
+                ground : i32 [ inbox.r_short[] ]
+                count : i32 [ inbox.r_byte[] ]
+                touched : vec Edict []
+                for [ i: i32 0, i < count, i += 1 ]
+                    n : i32 [ inbox.r_short[] ]
+                    if [ n >= 0 && n < g.num_edicts ]
+                        other : g.edicts[ n ]
+                        touched.push[ other ]
+                if [ p.state != 2 ] continue
+                e : p.edict
+                if [ e.deadflag == 0 && p.lastframe >= p.hold &&
+                     g.level.intermissiontime == 0.0 ]
+                    e.origin = vec3f [ ox, oy, oz ]
+                    e.velocity = vec3f [ vx, vy, vz ]
+                    e.viewheight = viewheight
+                    e.maxs = vec3f [ 16.0, 16.0,
+                        (pm_flags & PMF_DUCKED) ? 4.0 : 32.0 ]
+                    e.waterlevel = waterlevel
+                    e.watertype = watertype
+                    e.groundentity = (ground >= 0 &&
+                        ground < g.num_edicts) ? g.edicts[ ground ]
+                        : null
+                    if [ e.groundentity ]
+                        e.groundentity_linkcount =
+                            e.groundentity.linkcount
+                    e.client.ps.pm_flags = pm_flags
+                angles : vec3f [ pitch, yaw, 0.0 ]
+                client_think[ e, buttons, upmove, angles, touched ]
+            el
+                # an unknown command byte: the client is broken
+                kick[ p ]
+
+    # SV_ReadPackets
+    public func read []
+        if [ sock < 0 ] return
+        ip : u32 [ 0 ]
+        port : i32 [ 0 ]
+        while [ true ]
+            got : i32 [ q2net_recv[ sock, inbox.data, inbox.max, @ip,
+                                    @port ] ]
+            if [ got <= 0 ] break
+            inbox.size = got
+            inbox.at = 0
+            if [ got >= 4 && inbox.r_long[] == 0 - 1 ]
+                connectionless[ ip, port ]
+                continue
+            if [ got < 10 ] continue
+            qport : i32 [ i32[ inbox.data[ 8 ] ]
+                          | (i32[ inbox.data[ 9 ] ] << 8) ]
+            for [ i: i32 0, i < peers.count, i += 1 ]
+                p : peers[ i ]
+                if [ p.state == 0 || p.chan.ip != ip ] continue
+                if [ p.chan.qport != qport ] continue
+                p.chan.port = port
+                if [ p.chan.process[ inbox ] ]
+                    p.last_time = g.level.time
+                    execute[ p, i ]
+                break
+
+    # SV_EmitPacketEntities: the new list against the old one
+    func emit [ m: Msg, from: NetFrame, to: NetFrame ]
+        m.w_byte[ SVC_PACKETENTITIES ]
+        old_n : i32 [ (from) ? from.ents.count : 0 ]
+        oi : i32 [ 0 ]
+        ni : i32 [ 0 ]
+        while [ ni < to.ents.count || oi < old_n ]
+            newnum : i32 [ (ni < to.ents.count) ? to.ents[ ni ].number
+                           : 9999 ]
+            oldnum : i32 [ (oi < old_n) ? from.ents[ oi ].number : 9999 ]
+            if [ newnum == oldnum ]
+                # delta update from old position
+                m.w_entity[ from.ents[ oi ], to.ents[ ni ], false,
+                            newnum <= g.maxclients ]
+                oi += 1
+                ni += 1
+            el [ newnum < oldnum ]
+                # this is a new entity, send it from the baseline
+                m.w_entity[ baselines[ newnum ], to.ents[ ni ], true,
+                            true ]
+                ni += 1
+            el
+                # the old entity isn't present in the new message
+                bits : i32 [ U_REMOVE ]
+                if [ oldnum >= 256 ]
+                    bits = bits | U_NUMBER16 | U_MOREBITS1
+                m.w_byte[ bits ]
+                if [ bits & (255 << 8) ] m.w_byte[ bits >> 8 ]
+                if [ bits & U_NUMBER16 ] m.w_short[ oldnum ]
+                el                       m.w_byte[ oldnum ]
+                oi += 1
+        # end of packetentities
+        m.w_short[ 0 ]
+
+    # SV_BuildClientFrame and SV_WriteFrameToClient
+    func send_frame [ p: NetPeer ]
+        e : p.edict
+        number : i32 [ g.level.framenum ]
+        to : p.frames[ number & (UPDATE_BACKUP - 1) ]
+        to.number = number
+        to.ps = player_of[ e ]
+        to.ents = vec EntState []
+        if [ e.client.ps.pm_flags & PMF_TIME_TELEPORT ]
+            # sent once; the client's own place waits for this frame
+            p.hold = number
+            e.client.ps.pm_flags =
+                e.client.ps.pm_flags & ~PMF_TIME_TELEPORT
+        eye : vec3f [ v_add[ e.origin, to.ps.viewoffset ] ]
+        cluster : i32 [ g.bsp.cluster_at[ eye.x, eye.y, eye.z ] ]
+        area : i32 [ g.bsp.area_at[ eye.x, eye.y, eye.z ] ]
+        if [ cluster >= 0 ] g.bsp.cluster_row[ cluster ]
+        for [ i: i32 1, i < g.num_edicts, i += 1 ]
+            ent : g.edicts[ i ]
+            if [ !ent.inuse || (ent.svflags & SVF_NOCLIENT) != 0 ]
+                continue
+            # entities can be flagged to explicitly not be sent
+            if [ ent.modelindex == 0 && ent.effects == 0 &&
+                 ent.sound == 0 && ent.event == 0 ] continue
+            if [ ent != e && cluster >= 0 && !seen[ ent, area ] ]
+                continue
+            to.ents.push[ state_of[ ent ] ]
+        m : Msg [ max: 1400 ]
+        m.w_byte[ SVC_FRAME ]
+        m.w_long[ number ]
+        # the frame the client has, when we still hold it
+        from : NetFrame [ null ]
+        if [ p.lastframe > 0 && number - p.lastframe < UPDATE_BACKUP - 3 ]
+            held : p.frames[ p.lastframe & (UPDATE_BACKUP - 1) ]
+            if [ held.number == p.lastframe && held.ents ] from = held
+        m.w_long[ (from) ? from.number : 0 - 1 ]
+        m.w_byte[ 0 ]
+        m.w_byte[ 0 ]
+        m.w_player[ (from) ? from.ps : blank_ps, to.ps ]
+        emit[ m, from, to ]
+        if [ m.max - m.size >= p.datagram.size ] m.w_msg[ p.datagram ]
+        p.datagram.clear[]
+        p.chan.transmit[ m ]
+
+    # the area and the eye's pvs, by the entity's box corners
+    func seen [ ent: Edict, area: i32 ] -> bool
+        mid : vec3f [ v_scale[ v_add[ ent.absmin, ent.absmax ], 0.5 ] ]
+        its : i32 [ g.bsp.area_at[ mid.x, mid.y, mid.z ] ]
+        if [ its > 0 && area > 0 && !g.bsp.areas_connected[ area, its ] ]
+            return false
+        for [ i: i32 0, i < 8, i += 1 ]
+            x : f32 [ (i & 1) ? ent.absmax.x : ent.absmin.x ]
+            y : f32 [ (i & 2) ? ent.absmax.y : ent.absmin.y ]
+            z : f32 [ (i & 4) ? ent.absmax.z : ent.absmin.z ]
+            c : i32 [ g.bsp.cluster_at[ x, y, z ] ]
+            if [ c < 0 ] continue
+            if [ i32[ g.bsp.vis_row[ c >> 3 ] ] & (1 << (c & 7)) ]
+                return true
+        return false
+
+    # one game event in the wire's form
+    func write_event [ m: Msg, ev: GameEvent ]
+        if [ ev.kind == EVENT_FLASH || ev.kind == EVENT_FLASH2 ]
+            m.w_byte[ (ev.kind == EVENT_FLASH) ? SVC_MUZZLEFLASH
+                      : SVC_MUZZLEFLASH2 ]
+            m.w_short[ (ev.ent) ? ev.ent.number : 0 ]
+            m.w_byte[ ev.index ]
+        el [ ev.kind == EVENT_SOUND ]
+            # SV_StartSound
+            flags : i32 [ SND_POS ]
+            if [ ev.volume != 1.0 ] flags = flags | SND_VOLUME
+            if [ ev.attenuation != 1.0 ] flags = flags | SND_ATTENUATION
+            if [ ev.ent ] flags = flags | SND_ENT
+            m.w_byte[ SVC_SOUND ]
+            m.w_byte[ flags ]
+            m.w_byte[ ev.index ]
+            if [ flags & SND_VOLUME ] m.w_byte[ i32[ ev.volume * 255.0 ] ]
+            if [ flags & SND_ATTENUATION ]
+                m.w_byte[ i32[ ev.attenuation * 64.0 ] ]
+            if [ flags & SND_ENT ]
+                m.w_short[ (ev.ent.number << 3) | (ev.channel & 7) ]
+            m.w_pos[ ev.origin ]
+        el [ ev.kind == EVENT_TEMP ]
+            k : i32 [ ev.index ]
+            m.w_byte[ SVC_TEMP_ENTITY ]
+            m.w_byte[ k ]
+            if [ k == TE_SPLASH || k == TE_LASER_SPARKS ]
+                m.w_byte[ ev.count ]
+                m.w_pos[ ev.origin ]
+                m.w_dir[ ev.dir ]
+                m.w_byte[ ev.color ]
+            el [ k == TE_RAILTRAIL || k == TE_BUBBLETRAIL ||
+                 k == TE_BFG_LASER ]
+                m.w_pos[ ev.origin ]
+                m.w_pos[ ev.dir ]
+            el [ k == TE_PARASITE_ATTACK || k == TE_MEDIC_CABLE_ATTACK ]
+                m.w_short[ (ev.ent) ? ev.ent.number : 0 ]
+                m.w_pos[ ev.origin ]
+                m.w_pos[ ev.dir ]
+            el [ net_te_point[ k ] ]
+                m.w_pos[ ev.origin ]
+            el
+                m.w_pos[ ev.origin ]
+                m.w_dir[ ev.dir ]
+
+    # SV_SendClientMessages, after each game frame
+    public func frame []
+        if [ sock < 0 ] return
+        # the game's new events go to every spawned client
+        if [ events_sent > g.events.count ] events_sent = 0
+        for [ k: i32 events_sent, k < g.events.count, k += 1 ]
+            ev : g.events[ k ]
+            for [ p: NetPeer ] in peers
+                if [ p.state == 2 && p.datagram.size < 1000 ]
+                    write_event[ p.datagram, ev ]
+        events_sent = g.events.count
+        # prints: one client's, or everyone's
+        if [ g.printed ]
+            for [ k: i32 0, k < g.printed.count, k += 1 ]
+                who : i32 [ g.printed_to[ k ] ]
+                said : g.printed[ k ]
+                for [ i: i32 0, i < peers.count, i += 1 ]
+                    p : peers[ i ]
+                    if [ p.state != 2 ] continue
+                    if [ who != 0 && who != i + 2 ] continue
+                    p.chan.message.w_byte[ SVC_PRINT ]
+                    p.chan.message.w_byte[ 2 ]
+                    p.chan.message.w_string[ '{said}\n' ]
+            if [ g.printed.count > 0 ]
+                g.printed = vec string []
+                g.printed_to = vec i32 []
+        for [ i: i32 0, i < peers.count, i += 1 ]
+            p : peers[ i ]
+            if [ p.state == 0 ] continue
+            # SV_CheckTimeouts: thirty silent seconds
+            if [ g.level.time - p.last_time > 30.0 ||
+                 p.chan.message.overflowed ]
+                kick[ p ]
+                continue
+            if [ p.state == 2 ]
+                cl : p.edict.client
+                # a new centre print goes reliably, once
+                if [ cl.centerprint && cl.centerprint_time != p.said_time ]
+                    p.said_time = cl.centerprint_time
+                    p.chan.message.w_byte[ SVC_CENTERPRINT ]
+                    p.chan.message.w_string[ cl.centerprint ]
+                if [ cl.layout && (!p.layout_sent ||
+                                   cl.layout != p.layout_sent) ]
+                    p.layout_sent = cl.layout
+                    p.chan.message.w_byte[ SVC_LAYOUT ]
+                    p.chan.message.w_string[ cl.layout ]
+                if [ cl.showinventory && (g.level.framenum & 7) == 0 ]
+                    p.datagram.w_byte[ SVC_INVENTORY ]
+                    for [ k: i32 0, k < 256, k += 1 ]
+                        p.datagram.w_short[ cl.pers.inventory[ k ] ]
+                send_frame[ p ]
+            el
+                # just update reliable if needed
+                p.chan.transmit[ null ]
+
+    public func stop []
+        for [ p: NetPeer ] in peers
+            kick[ p ]
+        q2net_close[ sock ]
+        sock = -1
+
+# the temp entities that carry a position and nothing else
+func net_te_point [ k: i32 ] -> bool
+    return k == TE_EXPLOSION1 || k == TE_EXPLOSION2 ||
+        k == TE_ROCKET_EXPLOSION || k == TE_GRENADE_EXPLOSION ||
+        k == TE_ROCKET_EXPLOSION_WATER ||
+        k == TE_GRENADE_EXPLOSION_WATER || k == TE_BFG_EXPLOSION ||
+        k == TE_BFG_BIGEXPLOSION || k == TE_BOSSTPORT

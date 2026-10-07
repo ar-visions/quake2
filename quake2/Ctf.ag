@@ -1,0 +1,851 @@
+# ctf/g_ctf.c: teams, flags, bonuses, techs, the grapple
+extend quake2
+
+CTF_TEAM1 : i32 [ 1 ]
+CTF_TEAM2 : i32 [ 2 ]
+EF_FLAG1 : i32 [ 65536 ]
+EF_FLAG2 : i32 [ 131072 ]
+IT_TECH : i32 [ 64 ]
+WEAP_GRAPPLE : i32 [ 12 ]
+CTF_CAPTURE_BONUS : i32 [ 15 ]
+CTF_TEAM_BONUS : i32 [ 10 ]
+CTF_RECOVERY_BONUS : i32 [ 1 ]
+CTF_FRAG_CARRIER_BONUS : i32 [ 2 ]
+CTF_CARRIER_DANGER_PROTECT_BONUS : i32 [ 2 ]
+CTF_CARRIER_PROTECT_BONUS : i32 [ 1 ]
+CTF_FLAG_DEFENSE_BONUS : i32 [ 1 ]
+CTF_RETURN_FLAG_ASSIST_BONUS : i32 [ 1 ]
+CTF_FRAG_CARRIER_ASSIST_BONUS : i32 [ 2 ]
+CTF_PROTECT_RADIUS : f32 [ 400.0 ]
+CTF_CARRIER_DANGER_PROTECT_TIMEOUT : f32 [ 8.0 ]
+CTF_ASSIST_TIMEOUT : f32 [ 10.0 ]
+CTF_AUTO_FLAG_RETURN_TIMEOUT : f32 [ 30.0 ]
+CTF_TECH_TIMEOUT : f32 [ 60.0 ]
+CTF_GRAPPLE_SPEED : f32 [ 650.0 ]
+CTF_GRAPPLE_PULL_SPEED : f32 [ 650.0 ]
+STAT_CTF_TEAM1_PIC : i32 [ 17 ]
+STAT_CTF_TEAM1_CAPS : i32 [ 18 ]
+STAT_CTF_TEAM2_PIC : i32 [ 19 ]
+STAT_CTF_TEAM2_CAPS : i32 [ 20 ]
+STAT_CTF_FLAG_PIC : i32 [ 21 ]
+STAT_CTF_JOINED_TEAM1_PIC : i32 [ 22 ]
+STAT_CTF_JOINED_TEAM2_PIC : i32 [ 23 ]
+STAT_CTF_TEAM1_HEADER : i32 [ 24 ]
+STAT_CTF_TEAM2_HEADER : i32 [ 25 ]
+STAT_CTF_TECH : i32 [ 26 ]
+
+func ctf_statusbar [] -> string
+    return 'yb -24 xv 0 hnum xv 50 pic 0 if 2 xv 100 anum xv 150 pic 2 endif if 4 xv 200 rnum xv 250 pic 4 endif if 6 xv 296 pic 6 endif yb -50 if 7 xv 0 pic 7 xv 26 yb -42 stat_string 8 yb -50 endif if 9 xv 246 num 2 10 xv 296 pic 9 endif if 11 xv 148 pic 11 endif xr -50 yt 2 num 3 14 yb -129 if 26 xr -26 pic 26 endif yb -102 if 17 xr -26 pic 17 endif xr -62 num 2 18 if 22 yb -104 xr -28 pic 22 endif yb -75 if 19 xr -26 pic 19 endif xr -62 num 2 20 if 23 yb -77 xr -28 pic 23 endif if 21 yt 26 xr -24 pic 21 endif'
+
+# the flags, the four techs and the grapple join the item list
+func ctf_items []
+    item_add[ 'item_flag_team1', lambda ctf_pickup_flag[], null,
+        lambda ctf_drop_flag[], null, 'ctf/flagtk.wav',
+        'players/male/flag1.md2', EF_FLAG1, null, 'i_ctf1', 'Red Flag',
+        2, 0, null, 0, 0, 0, 'ctf/flagcap.wav' ]
+    item_add[ 'item_flag_team2', lambda ctf_pickup_flag[], null,
+        lambda ctf_drop_flag[], null, 'ctf/flagtk.wav',
+        'players/male/flag2.md2', EF_FLAG2, null, 'i_ctf2', 'Blue Flag',
+        2, 0, null, 0, 0, 0, 'ctf/flagcap.wav' ]
+    item_add[ 'item_tech1', lambda ctf_pickup_tech[], null,
+        lambda ctf_drop_tech[], null, 'items/pkup.wav',
+        'models/ctf/resistance/tris.md2', EF_ROTATE, null, 'tech1',
+        'Disruptor Shield', 2, 0, null, IT_TECH, 0, 0, 'ctf/tech1.wav' ]
+    item_add[ 'item_tech2', lambda ctf_pickup_tech[], null,
+        lambda ctf_drop_tech[], null, 'items/pkup.wav',
+        'models/ctf/strength/tris.md2', EF_ROTATE, null, 'tech2',
+        'Power Amplifier', 2, 0, null, IT_TECH, 0, 0,
+        'ctf/tech2.wav ctf/tech2x.wav' ]
+    item_add[ 'item_tech3', lambda ctf_pickup_tech[], null,
+        lambda ctf_drop_tech[], null, 'items/pkup.wav',
+        'models/ctf/haste/tris.md2', EF_ROTATE, null, 'tech3',
+        'Time Accel', 2, 0, null, IT_TECH, 0, 0, 'ctf/tech3.wav' ]
+    item_add[ 'item_tech4', lambda ctf_pickup_tech[], null,
+        lambda ctf_drop_tech[], null, 'items/pkup.wav',
+        'models/ctf/regeneration/tris.md2', EF_ROTATE, null, 'tech4',
+        'AutoDoc', 2, 0, null, IT_TECH, 0, 0, 'ctf/tech4.wav' ]
+    item_add[ 'weapon_grapple', null, lambda use_weapon[], null,
+        lambda ctf_weapon_grapple[], 'misc/w_pkup.wav', null, 0,
+        'models/weapons/grapple/tris.md2', 'w_grapple', 'Grapple', 0, 0,
+        null, IT_WEAPON, WEAP_GRAPPLE, 0,
+        'weapons/grapple/grfire.wav weapons/grapple/grpull.wav weapons/grapple/grhang.wav weapons/grapple/grreset.wav weapons/grapple/grhit.wav' ]
+    g.num_items = g.items.count
+
+func ctf_team_name [ team: i32 ] -> string
+    if [ team == CTF_TEAM1 ] return 'RED'
+    if [ team == CTF_TEAM2 ] return 'BLUE'
+    return 'UKNOWN'
+
+func ctf_other [ team: i32 ] -> i32
+    if [ team == CTF_TEAM1 ] return CTF_TEAM2
+    if [ team == CTF_TEAM2 ] return CTF_TEAM1
+    return 0 - 1
+
+func ctf_flag_item [ team: i32 ] -> i32
+    return save_item_no[ find_item_by_classname[
+        (team == CTF_TEAM1) ? 'item_flag_team1' : 'item_flag_team2' ] ]
+
+func ctf_has [ e: Edict, index: i32 ] -> bool
+    return e.client && index >= 0 && e.client.pers.inventory[ index ] != 0
+
+# CTFAssignTeam: the smaller team, or a coin when they are level
+func ctf_assign_team [ who: Client ]
+    who.resp.ctf_state = 0
+    red : i32 [ 0 ]
+    blue : i32 [ 0 ]
+    for [ i: i32 1, i <= g.maxclients, i += 1 ]
+        player : g.edicts[ i ]
+        if [ !player.inuse || !player.client || player.client == who ]
+            continue
+        if [ player.client.resp.ctf_team == CTF_TEAM1 ] red += 1
+        el [ player.client.resp.ctf_team == CTF_TEAM2 ] blue += 1
+    if [ red < blue ]        who.resp.ctf_team = CTF_TEAM1
+    el [ blue < red ]        who.resp.ctf_team = CTF_TEAM2
+    el [ rand[] & 1 ]        who.resp.ctf_team = CTF_TEAM1
+    el                       who.resp.ctf_team = CTF_TEAM2
+
+# SelectCTFSpawnPoint: the team's base once, then anywhere
+func ctf_select_spawn [ ent: Edict ] -> Edict
+    if [ ent.client.resp.ctf_state != 0 ] return select_dm_spawn[]
+    ent.client.resp.ctf_state += 1
+    cname : string [ (ent.client.resp.ctf_team == CTF_TEAM1)
+        ? 'info_player_team1' : 'info_player_team2' ]
+    spot : select_random_spawn[ cname ]
+    if [ spot ] return spot
+    return select_dm_spawn[]
+
+# CheckTeamDamage: team mates do not hurt each other
+func ctf_same_team [ targ: Edict, attacker: Edict ] -> bool
+    if [ !g.ctf || !targ.client || !attacker || !attacker.client ]
+        return false
+    return targ != attacker &&
+        targ.client.resp.ctf_team == attacker.client.resp.ctf_team
+
+# CTFFragBonuses: the points beyond the frag itself
+func ctf_frag_bonuses [ targ: Edict, inflictor: Edict, attacker: Edict ]
+    if [ !targ.client || !attacker || !attacker.client ||
+         targ == attacker ] return
+    team : i32 [ targ.client.resp.ctf_team ]
+    other_team : i32 [ ctf_other[ team ] ]
+    if [ other_team < 0 ] return
+    flag_item : i32 [ ctf_flag_item[ team ] ]
+    enemy_flag : i32 [ ctf_flag_item[ other_team ] ]
+    killer : client_name[ attacker ]
+    theirs : ctf_team_name[ attacker.client.resp.ctf_team ]
+    # did the attacker frag the flag carrier?
+    if [ ctf_has[ targ, enemy_flag ] ]
+        attacker.client.resp.ctf_lastfraggedcarrier = g.level.time
+        attacker.client.resp.score += CTF_FRAG_CARRIER_BONUS
+        g.cprintf[ attacker,
+            'BONUS: {CTF_FRAG_CARRIER_BONUS} points for fragging enemy flag carrier.' ]
+        # the target had the flag: his hunters are forgiven
+        for [ i: i32 1, i <= g.maxclients, i += 1 ]
+            e : g.edicts[ i ]
+            if [ e.inuse && e.client &&
+                 e.client.resp.ctf_team == other_team ]
+                e.client.resp.ctf_lasthurtcarrier = 0.0
+        return
+    hurt : f32 [ targ.client.resp.ctf_lasthurtcarrier ]
+    if [ hurt != 0.0 &&
+         g.level.time - hurt < CTF_CARRIER_DANGER_PROTECT_TIMEOUT &&
+         !ctf_has[ attacker, flag_item ] ]
+        # the attacker fragged one who hurt his team's carrier
+        attacker.client.resp.score += CTF_CARRIER_DANGER_PROTECT_BONUS
+        g.bprintf[ '{killer} defends {theirs}\'s flag carrier against an agressive enemy' ]
+        return
+    # flag and flag carrier area defense bonuses: find the flag
+    cname : string [ (attacker.client.resp.ctf_team == CTF_TEAM1)
+        ? 'item_flag_team1' : 'item_flag_team2' ]
+    flag : Edict [ null ]
+    while [ true ]
+        flag = g.find[ flag, EField.classname, cname ]
+        if [ !flag || (flag.spawnflags & DROPPED_ITEM) == 0 ] break
+    if [ !flag ] return
+    # find the attacker's team's flag carrier
+    carrier : Edict [ null ]
+    for [ i: i32 1, i <= g.maxclients, i += 1 ]
+        e : g.edicts[ i ]
+        if [ e.inuse && ctf_has[ e, flag_item ] ]
+            carrier = e
+            break
+    near : f32 [ v_len[ v_sub[ targ.origin, flag.origin ] ] ]
+    also : f32 [ v_len[ v_sub[ attacker.origin, flag.origin ] ] ]
+    if [ (near < CTF_PROTECT_RADIUS || also < CTF_PROTECT_RADIUS ||
+          visible[ flag, targ ] || visible[ flag, attacker ]) &&
+         attacker.client.resp.ctf_team != team ]
+        # we defended the base flag
+        attacker.client.resp.score += CTF_FLAG_DEFENSE_BONUS
+        what : string [ (flag.solid == SOLID_NOT) ? 'base' : 'flag' ]
+        g.bprintf[ '{killer} defends the {theirs} {what}.' ]
+        return
+    if [ carrier && carrier != attacker ]
+        near = v_len[ v_sub[ targ.origin, carrier.origin ] ]
+        also = v_len[ v_sub[ attacker.origin, carrier.origin ] ]
+        if [ near < CTF_PROTECT_RADIUS || also < CTF_PROTECT_RADIUS ||
+             visible[ carrier, targ ] || visible[ carrier, attacker ] ]
+            attacker.client.resp.score += CTF_CARRIER_PROTECT_BONUS
+            g.bprintf[ '{killer} defends the {theirs}\'s flag carrier.' ]
+
+# CTFCheckHurtCarrier
+func ctf_check_hurt_carrier [ targ: Edict, attacker: Edict ]
+    if [ !targ.client || !attacker || !attacker.client ] return
+    carried : i32 [ ctf_flag_item[ ctf_other[
+        targ.client.resp.ctf_team ] ] ]
+    if [ ctf_has[ targ, carried ] &&
+         targ.client.resp.ctf_team != attacker.client.resp.ctf_team ]
+        attacker.client.resp.ctf_lasthurtcarrier = g.level.time
+
+# CTFResetFlag: a dropped one goes, the base's comes back
+func ctf_reset_flag [ team: i32 ]
+    cname : string [ (team == CTF_TEAM1) ? 'item_flag_team1'
+                     : 'item_flag_team2' ]
+    ent : Edict [ null ]
+    while [ true ]
+        ent = g.find[ ent, EField.classname, cname ]
+        if [ !ent ] break
+        if [ ent.spawnflags & DROPPED_ITEM ]
+            g.free_edict[ ent ]
+        el
+            ent.svflags = ent.svflags & ~SVF_NOCLIENT
+            ent.solid = SOLID_TRIGGER
+            g.world.link[ ent ]
+            ent.event = EV_ITEM_RESPAWN
+
+# CTFPickup_Flag
+func ctf_pickup_flag [ ent: Edict, other: Edict ] -> bool
+    team : i32 [ (ent.classname == 'item_flag_team1') ? CTF_TEAM1
+                 : CTF_TEAM2 ]
+    flag_item : i32 [ ctf_flag_item[ team ] ]
+    enemy_flag : i32 [ ctf_flag_item[ ctf_other[ team ] ] ]
+    name : client_name[ other ]
+    cl : other.client
+    if [ team == cl.resp.ctf_team ]
+        if [ (ent.spawnflags & DROPPED_ITEM) == 0 ]
+            # the flag is at home: with the enemy's, he has won
+            if [ !ctf_has[ other, enemy_flag ] ] return false
+            g.bprintf[ '{name} captured the {ctf_team_name[ ctf_other[ team ] ]} flag!' ]
+            cl.pers.inventory[ enemy_flag ] = 0
+            g.ctf_last_capture = g.level.time
+            g.ctf_capture_team = team
+            if [ team == CTF_TEAM1 ] g.ctf_team1 += 1
+            el                       g.ctf_team2 += 1
+            g.sound[ ent, CHAN_VOICE | CHAN_NO_PHS_ADD,
+                     g.soundindex[ 'ctf/flagcap.wav' ], 1.0, ATTN_NONE ]
+            cl.resp.score += CTF_CAPTURE_BONUS
+            # the player loop: hand out the bonuses
+            for [ i: i32 1, i <= g.maxclients, i += 1 ]
+                player : g.edicts[ i ]
+                if [ !player.inuse || !player.client ] continue
+                pr : player.client.resp
+                if [ pr.ctf_team != cl.resp.ctf_team ]
+                    pr.ctf_lasthurtcarrier = -5.0
+                    continue
+                if [ player != other ] pr.score += CTF_TEAM_BONUS
+                helper : client_name[ player ]
+                if [ pr.ctf_lastreturnedflag + CTF_ASSIST_TIMEOUT
+                     > g.level.time ]
+                    g.bprintf[ '{helper} gets an assist for returning the flag!' ]
+                    pr.score += CTF_RETURN_FLAG_ASSIST_BONUS
+                if [ pr.ctf_lastfraggedcarrier + CTF_ASSIST_TIMEOUT
+                     > g.level.time ]
+                    g.bprintf[ '{helper} gets an assist for fragging the flag carrier!' ]
+                    pr.score += CTF_FRAG_CARRIER_ASSIST_BONUS
+            ctf_reset_flag[ CTF_TEAM1 ]
+            ctf_reset_flag[ CTF_TEAM2 ]
+            return false
+        # it is not home: touching it sends it back
+        g.bprintf[ '{name} returned the {ctf_team_name[ team ]} flag!' ]
+        cl.resp.score += CTF_RECOVERY_BONUS
+        cl.resp.ctf_lastreturnedflag = g.level.time
+        g.sound[ ent, CHAN_VOICE | CHAN_NO_PHS_ADD,
+                 g.soundindex[ 'ctf/flagret.wav' ], 1.0, ATTN_NONE ]
+        # CTFResetFlag removes this entity: nothing is picked up
+        ctf_reset_flag[ team ]
+        return false
+    # it is the enemy's flag: take it
+    g.bprintf[ '{name} got the {ctf_team_name[ team ]} flag!' ]
+    cl.pers.inventory[ flag_item ] = 1
+    cl.resp.ctf_flagsince = g.level.time
+    # the base's flag hides until it is reset; a dropped one goes
+    if [ (ent.spawnflags & DROPPED_ITEM) == 0 ]
+        ent.flags = ent.flags | FL_RESPAWN
+        ent.svflags = ent.svflags | SVF_NOCLIENT
+        ent.solid = SOLID_NOT
+    return true
+
+# CTFDropFlagTouch: its dropper cannot take it back at once
+func ctf_drop_flag_touch [ ent: Edict, other: Edict ]
+    if [ other == ent.owner && ent.nextthink - g.level.time
+         > CTF_AUTO_FLAG_RETURN_TIMEOUT - 2.0 ] return
+    touch_item[ ent, other ]
+
+# CTFDropFlagThink: left lying, the flag goes home by itself
+func ctf_drop_flag_think [ ent: Edict ]
+    team : i32 [ (ent.classname == 'item_flag_team1') ? CTF_TEAM1
+                 : CTF_TEAM2 ]
+    ctf_reset_flag[ team ]
+    g.bprintf[ 'The {ctf_team_name[ team ]} flag has returned!' ]
+
+# CTFDeadDropFlag: a dead carrier's flag falls where he fell
+func ctf_dead_drop_flag [ e: Edict ]
+    dropped : Edict [ null ]
+    for [ team: i32 CTF_TEAM1, team <= CTF_TEAM2, team += 1 ]
+        index : i32 [ ctf_flag_item[ team ] ]
+        if [ !ctf_has[ e, index ] ] continue
+        dropped = drop_item[ e, g.items[ index ] ]
+        e.client.pers.inventory[ index ] = 0
+        g.bprintf[ '{client_name[ e ]} lost the {ctf_team_name[ team ]} flag!' ]
+    if [ dropped ]
+        dropped.think = lambda ctf_drop_flag_think[]
+        dropped.nextthink = g.level.time + CTF_AUTO_FLAG_RETURN_TIMEOUT
+        dropped.touch = lambda ctf_drop_flag_touch[]
+
+func ctf_drop_flag [ ent: Edict, item: GItem ]
+    if [ rand[] & 1 ] g.cprintf[ ent, 'Only lusers drop flags.' ]
+    el                g.cprintf[ ent, 'Winners don\'t drop flags.' ]
+
+# CTFFlagThink: the flag waves through frames 173 to 188
+func ctf_flag_think [ ent: Edict ]
+    if [ ent.solid != SOLID_NOT ]
+        ent.frame = 173 + ((ent.frame - 173 + 1) % 16)
+    ent.nextthink = g.level.time + FRAMETIME
+
+# CTFFlagSetup: the flag settles on the floor under it
+func ctf_flag_setup [ ent: Edict ]
+    ent.mins = vec3f [ -15.0, -15.0, -15.0 ]
+    ent.maxs = vec3f [ 15.0, 15.0, 15.0 ]
+    g.setmodel[ ent, (ent.model) ? ent.model : ent.item.world_model ]
+    ent.solid = SOLID_TRIGGER
+    ent.movetype = MOVETYPE_TOSS
+    ent.touch = lambda touch_item[]
+    below : vec3f [ ent.origin.x, ent.origin.y, ent.origin.z - 128.0 ]
+    tr : g.world.trace[ ent.origin, ent.mins, ent.maxs, below, ent,
+                        MASK_SOLID ]
+    if [ tr.startsolid ]
+        g.dprintf[ 'CTFFlagSetup: {ent.classname} startsolid' ]
+        g.free_edict[ ent ]
+        return
+    ent.origin = vec3f [ tr.ex, tr.ey, tr.ez ]
+    g.world.link[ ent ]
+    ent.nextthink = g.level.time + FRAMETIME
+    ent.think = lambda ctf_flag_think[]
+
+# CTFEffects: a carrier glows and wears the flag
+func ctf_effects [ player: Edict ]
+    player.effects = player.effects & ~(EF_FLAG1 | EF_FLAG2)
+    red : bool [ ctf_has[ player, ctf_flag_item[ CTF_TEAM1 ] ] ]
+    blue : bool [ ctf_has[ player, ctf_flag_item[ CTF_TEAM2 ] ] ]
+    if [ player.health > 0 ]
+        if [ red ]  player.effects = player.effects | EF_FLAG1
+        if [ blue ] player.effects = player.effects | EF_FLAG2
+    if [ red ]
+        player.modelindex3 = g.modelindex[ 'players/male/flag1.md2' ]
+    el [ blue ]
+        player.modelindex3 = g.modelindex[ 'players/male/flag2.md2' ]
+    el
+        player.modelindex3 = 0
+
+# SetCTFStats: the team pics, the captures, the tech, the flag held
+func ctf_set_stats [ ent: Edict ]
+    st : ent.client.ps.stats
+    blink : bool [ (g.level.framenum & 8) != 0 ]
+    st[ STAT_CTF_TEAM1_HEADER ] = g.imageindex[ 'ctfsb1' ]
+    st[ STAT_CTF_TEAM2_HEADER ] = g.imageindex[ 'ctfsb2' ]
+    # at the level's end the winning team's header blinks
+    if [ g.level.intermissiontime != 0.0 && blink ]
+        if [ g.ctf_team1 > g.ctf_team2 ]   st[ STAT_CTF_TEAM1_HEADER ] = 0
+        el [ g.ctf_team2 > g.ctf_team1 ]   st[ STAT_CTF_TEAM2_HEADER ] = 0
+        el
+            st[ STAT_CTF_TEAM1_HEADER ] = 0
+            st[ STAT_CTF_TEAM2_HEADER ] = 0
+    st[ STAT_CTF_TECH ] = 0
+    for [ k: i32 1, k <= 4, k += 1 ]
+        tech : find_item_by_classname[ 'item_tech{k}' ]
+        if [ tech && ctf_has[ ent, save_item_no[ tech ] ] ]
+            st[ STAT_CTF_TECH ] = g.imageindex[ tech.icon ]
+            break
+    # each flag: at base, taken, or dropped
+    for [ team: i32 CTF_TEAM1, team <= CTF_TEAM2, team += 1 ]
+        pic : 'i_ctf{team}'
+        index : i32 [ ctf_flag_item[ team ] ]
+        e : g.find[ null, EField.classname, 'item_flag_team{team}' ]
+        if [ e && e.solid == SOLID_NOT ]
+            # not at base: dropped, unless a player has it
+            pic = 'i_ctf{team}d'
+            for [ i: i32 1, i <= g.maxclients, i += 1 ]
+                if [ g.edicts[ i ].inuse && ctf_has[ g.edicts[ i ], index ] ]
+                    pic = 'i_ctf{team}t'
+        el [ e && (e.spawnflags & DROPPED_ITEM) != 0 ]
+            pic = 'i_ctf{team}d'
+        shown : i32 [ g.imageindex[ pic ] ]
+        # the team that just captured blinks for five seconds
+        if [ g.ctf_last_capture != 0.0 && g.ctf_capture_team == team &&
+             g.level.time - g.ctf_last_capture < 5.0 && !blink ]
+            shown = 0
+        st[ (team == CTF_TEAM1) ? STAT_CTF_TEAM1_PIC
+            : STAT_CTF_TEAM2_PIC ] = shown
+    st[ STAT_CTF_TEAM1_CAPS ] = g.ctf_team1
+    st[ STAT_CTF_TEAM2_CAPS ] = g.ctf_team2
+    mine : i32 [ ent.client.resp.ctf_team ]
+    st[ STAT_CTF_FLAG_PIC ] = 0
+    if [ blink && mine == CTF_TEAM1 &&
+         ctf_has[ ent, ctf_flag_item[ CTF_TEAM2 ] ] ]
+        st[ STAT_CTF_FLAG_PIC ] = g.imageindex[ 'i_ctf2' ]
+    el [ blink && mine == CTF_TEAM2 &&
+         ctf_has[ ent, ctf_flag_item[ CTF_TEAM1 ] ] ]
+        st[ STAT_CTF_FLAG_PIC ] = g.imageindex[ 'i_ctf1' ]
+    st[ STAT_CTF_JOINED_TEAM1_PIC ] =
+        (mine == CTF_TEAM1) ? g.imageindex[ 'i_ctfj' ] : 0
+    st[ STAT_CTF_JOINED_TEAM2_PIC ] =
+        (mine == CTF_TEAM2) ? g.imageindex[ 'i_ctfj' ] : 0
+
+# a client into a team's list, highest score first
+func ctf_sort_in [ team: vec i32, i: i32 ]
+    at : i32 [ 0 ]
+    mine : i32 [ g.edicts[ 1 + i ].client.resp.score ]
+    while [ at < team.count &&
+            g.edicts[ 1 + team[ at ] ].client.resp.score >= mine ]
+        at += 1
+    team.insert[ i, at ]
+
+# CTFScoreboardMessage: two columns, a team each
+func ctf_scoreboard [ ent: Edict ]
+    red : vec i32 []
+    blue : vec i32 []
+    red_score : i32 [ 0 ]
+    blue_score : i32 [ 0 ]
+    for [ i: i32 0, i < g.maxclients, i += 1 ]
+        e : g.edicts[ 1 + i ]
+        if [ !e.inuse || !e.client ] continue
+        if [ e.client.resp.ctf_team == CTF_TEAM1 ]
+            red_score += e.client.resp.score
+            ctf_sort_in[ red, i ]
+        el [ e.client.resp.ctf_team == CTF_TEAM2 ]
+            blue_score += e.client.resp.score
+            ctf_sort_in[ blue, i ]
+    text : 'if 24 xv 8 yv 8 pic 24 endif xv 40 yv 28 string "{red_score}/{red.count}" xv 98 yv 12 num 2 18 if 25 xv 168 yv 8 pic 25 endif xv 200 yv 28 string "{blue_score}/{blue.count}" xv 256 yv 12 num 2 20 '
+    for [ i: i32 0, i < 16, i += 1 ]
+        if [ i >= red.count && i >= blue.count ] break
+        y : i32 [ 42 + i * 8 ]
+        if [ i < red.count ]
+            e : g.edicts[ 1 + red[ i ] ]
+            text = '{text}ctf 0 {y} {red[ i ]} {e.client.resp.score} 0 '
+            if [ ctf_has[ e, ctf_flag_item[ CTF_TEAM2 ] ] ]
+                text = '{text}xv 56 yv {y} picn sbfctf2 '
+        if [ i < blue.count ]
+            e : g.edicts[ 1 + blue[ i ] ]
+            text = '{text}ctf 160 {y} {blue[ i ]} {e.client.resp.score} 0 '
+            if [ ctf_has[ e, ctf_flag_item[ CTF_TEAM1 ] ] ]
+                text = '{text}xv 216 yv {y} picn sbfctf1 '
+    ent.client.layout = text
+
+# CTFTeam_f: 'team red' or 'team blue'
+func ctf_team_cmd [ ent: Edict, arg: string ]
+    mine : i32 [ ent.client.resp.ctf_team ]
+    if [ arg.count == 0 ]
+        g.cprintf[ ent, 'You are on the {ctf_team_name[ mine ]} team.' ]
+        return
+    wanted : i32 [ 0 ]
+    if [ strcasecmp[ arg.chars, "red" ] == 0 ]       wanted = CTF_TEAM1
+    el [ strcasecmp[ arg.chars, "blue" ] == 0 ]      wanted = CTF_TEAM2
+    el
+        g.cprintf[ ent, 'Unknown team {arg}.' ]
+        return
+    if [ mine == wanted ]
+        g.cprintf[ ent, 'You are already on the {ctf_team_name[ mine ]} team.' ]
+        return
+    ent.svflags = 0
+    ent.flags = ent.flags & ~FL_GODMODE
+    ent.client.resp.ctf_team = wanted
+    ent.client.resp.ctf_state = 0
+    ent.health = 0
+    player_die[ ent, ent, ent, 100000, vec3f [ 0.0, 0.0, 0.0 ] ]
+    # don't even bother waiting for death frames
+    ent.deadflag = DEAD_DEAD
+    respawn[ ent ]
+    ent.client.resp.score = 0
+    g.bprintf[ '{client_name[ ent ]} changed to the {ctf_team_name[ wanted ]} team.' ]
+
+# ---- the techs
+func ctf_tech_held [ e: Edict, k: i32 ] -> bool
+    tech : find_item_by_classname[ 'item_tech{k}' ]
+    return tech && ctf_has[ e, save_item_no[ tech ] ]
+
+func ctf_tech_volume [ e: Edict ] -> f32
+    return (e.client.silencer_shots != 0) ? 0.2 : 1.0
+
+# CTFPickup_Tech: one tech a player
+func ctf_pickup_tech [ ent: Edict, other: Edict ] -> bool
+    for [ k: i32 1, k <= 4, k += 1 ]
+        if [ !ctf_tech_held[ other, k ] ] continue
+        if [ g.level.time - other.client.ctf_lasttechmsg > 2.0 ]
+            g.centerprintf[ other, 'You already have a TECH powerup.' ]
+            other.client.ctf_lasttechmsg = g.level.time
+        return false
+    index : i32 [ save_item_no[ ent.item ] ]
+    other.client.pers.inventory[ index ] += 1
+    other.client.ctf_regentime = g.level.time
+    return true
+
+# FindTechSpawn: one of the first sixteen deathmatch starts
+func ctf_tech_spot [] -> Edict
+    spot : Edict [ null ]
+    n : i32 [ rand[] % 16 ]
+    while [ n > 0 ]
+        spot = g.find[ spot, EField.classname, 'info_player_deathmatch' ]
+        n -= 1
+    if [ !spot ]
+        spot = g.find[ null, EField.classname, 'info_player_deathmatch' ]
+    return spot
+
+# TechThink: a tech left lying moves to another start
+func ctf_tech_think [ tech: Edict ]
+    spot : ctf_tech_spot[]
+    if [ spot ]
+        ctf_spawn_tech[ tech.item, spot ]
+        g.free_edict[ tech ]
+    el
+        tech.nextthink = g.level.time + CTF_TECH_TIMEOUT
+        tech.think = lambda ctf_tech_think[]
+
+func ctf_drop_tech [ ent: Edict, item: GItem ]
+    tech : drop_item[ ent, item ]
+    tech.nextthink = g.level.time + CTF_TECH_TIMEOUT
+    tech.think = lambda ctf_tech_think[]
+    ent.client.pers.inventory[ save_item_no[ item ] ] = 0
+
+# CTFDeadDropTech
+func ctf_dead_drop_tech [ ent: Edict ]
+    for [ k: i32 1, k <= 4, k += 1 ]
+        if [ !ctf_tech_held[ ent, k ] ] continue
+        tech : find_item_by_classname[ 'item_tech{k}' ]
+        dropped : drop_item[ ent, tech ]
+        # hack the velocity to make it bounce random
+        dropped.velocity = vec3f [ f32[ (rand[] % 600) - 300 ],
+            f32[ (rand[] % 600) - 300 ], dropped.velocity.z ]
+        dropped.nextthink = g.level.time + CTF_TECH_TIMEOUT
+        dropped.think = lambda ctf_tech_think[]
+        dropped.owner = null
+        ent.client.pers.inventory[ save_item_no[ tech ] ] = 0
+
+# SpawnTech: thrown up and out from a start
+func ctf_spawn_tech [ item: GItem, spot: Edict ]
+    ent : g.spawn[]
+    ent.classname = item.classname
+    ent.item = item
+    ent.spawnflags = DROPPED_ITEM
+    ent.effects = item.world_model_flags
+    ent.renderfx = RF_GLOW
+    ent.mins = vec3f [ -15.0, -15.0, -15.0 ]
+    ent.maxs = vec3f [ 15.0, 15.0, 15.0 ]
+    g.setmodel[ ent, item.world_model ]
+    ent.solid = SOLID_TRIGGER
+    ent.movetype = MOVETYPE_TOSS
+    ent.touch = lambda touch_item[]
+    ent.owner = ent
+    turn : vec3f [ 0.0, f32[ rand[] % 360 ], 0.0 ]
+    ax : angle_vectors[ turn ]
+    ent.origin = vec3f [ spot.origin.x, spot.origin.y,
+                         spot.origin.z + 16.0 ]
+    ent.velocity = vec3f [ ax.forward.x * 100.0, ax.forward.y * 100.0,
+                           300.0 ]
+    ent.nextthink = g.level.time + CTF_TECH_TIMEOUT
+    ent.think = lambda ctf_tech_think[]
+    g.world.link[ ent ]
+
+# SpawnTechs: all four, two seconds into the level
+func ctf_spawn_techs [ ent: Edict ]
+    for [ k: i32 1, k <= 4, k += 1 ]
+        tech : find_item_by_classname[ 'item_tech{k}' ]
+        spot : ctf_tech_spot[]
+        if [ tech && spot ] ctf_spawn_tech[ tech, spot ]
+    if [ ent ] g.free_edict[ ent ]
+
+# CTFSetupTechSpawn
+func ctf_setup_tech_spawn []
+    if [ g.ctf_techspawn ] return
+    ent : g.spawn[]
+    ent.nextthink = g.level.time + 2.0
+    ent.think = lambda ctf_spawn_techs[]
+    g.ctf_techspawn = true
+
+func ctf_tech_sound [ e: Edict, name: string ]
+    if [ e.client.ctf_techsndtime >= g.level.time ] return
+    e.client.ctf_techsndtime = g.level.time + 1.0
+    g.sound[ e, CHAN_VOICE, g.soundindex[ name ], ctf_tech_volume[ e ],
+             ATTN_NORM ]
+
+# CTFApplyResistance: the disruptor shield halves what is taken
+func ctf_apply_resistance [ e: Edict, dmg: i32 ] -> i32
+    if [ dmg == 0 || !e.client || !ctf_tech_held[ e, 1 ] ] return dmg
+    g.sound[ e, CHAN_VOICE, g.soundindex[ 'ctf/tech1.wav' ],
+             ctf_tech_volume[ e ], ATTN_NORM ]
+    return dmg / 2
+
+# CTFApplyStrength: the power amplifier doubles what is dealt
+func ctf_apply_strength [ e: Edict, dmg: i32 ] -> i32
+    if [ dmg != 0 && e && e.client && ctf_tech_held[ e, 2 ] ]
+        return dmg * 2
+    return dmg
+
+# CTFApplyStrengthSound: true when the amplifier spoke
+func ctf_strength_sound [ e: Edict ] -> bool
+    if [ !e.client || !ctf_tech_held[ e, 2 ] ] return false
+    quad : bool [ e.client.quad_framenum > f32[ g.level.framenum ] ]
+    ctf_tech_sound[ e, (quad) ? 'ctf/tech2x.wav' : 'ctf/tech2.wav' ]
+    return true
+
+# CTFApplyRegeneration: the autodoc mends health and armor
+func ctf_apply_regeneration [ e: Edict ]
+    cl : e.client
+    if [ !cl || !ctf_tech_held[ e, 4 ] ] return
+    if [ cl.ctf_regentime >= g.level.time ] return
+    cl.ctf_regentime = g.level.time
+    noise : bool [ false ]
+    if [ e.health < 150 ]
+        e.health += 5
+        if [ e.health > 150 ] e.health = 150
+        cl.ctf_regentime = cl.ctf_regentime + 0.5
+        noise = true
+    index : i32 [ armor_index[ e ] ]
+    if [ index != 0 && cl.pers.inventory[ index ] < 150 ]
+        cl.pers.inventory[ index ] += 5
+        if [ cl.pers.inventory[ index ] > 150 ]
+            cl.pers.inventory[ index ] = 150
+        cl.ctf_regentime = cl.ctf_regentime + 0.5
+        noise = true
+    if [ noise ] ctf_tech_sound[ e, 'ctf/tech4.wav' ]
+
+# ---- the grapple
+func ctf_player_reset_grapple [ ent: Edict ]
+    if [ ent.client && ent.client.ctf_grapple ]
+        ctf_reset_grapple[ ent.client.ctf_grapple ]
+
+# CTFResetGrapple: the hook lets go and is gone
+func ctf_reset_grapple [ hook: Edict ]
+    cl : hook.owner.client
+    if [ !cl.ctf_grapple ] return
+    g.sound[ hook.owner, CHAN_WEAPON,
+             g.soundindex[ 'weapons/grapple/grreset.wav' ],
+             ctf_tech_volume[ hook.owner ], ATTN_NORM ]
+    cl.ctf_grapple = null
+    cl.ctf_grapplereleasetime = g.level.time
+    # we're firing, not on hook
+    cl.ctf_grapplestate = 0
+    g.free_edict[ hook ]
+
+# CTFGrappleTouch: it hurts what bleeds and holds to what does not
+func ctf_grapple_touch [ hook: Edict, other: Edict ]
+    cl : hook.owner.client
+    if [ other == hook.owner || cl.ctf_grapplestate != 0 ] return
+    if [ g.touch_plane_on && (g.touch_plane.surf_flags & 4) != 0 ]
+        # the sky holds nothing
+        ctf_reset_grapple[ hook ]
+        return
+    normal : vec3f [ 0.0, 0.0, 0.0 ]
+    if [ g.touch_plane_on ]
+        normal = vec3f [ g.touch_plane.nx, g.touch_plane.ny,
+                         g.touch_plane.nz ]
+    hook.velocity = vec3f [ 0.0, 0.0, 0.0 ]
+    player_noise[ hook.owner, hook.origin, PNOISE_IMPACT ]
+    if [ other.takedamage != DAMAGE_NO ]
+        t_damage[ other, hook, hook.owner, hook.velocity, hook.origin,
+                  normal, hook.dmg, 1, 0, MOD_GRAPPLE ]
+        ctf_reset_grapple[ hook ]
+        return
+    # we're on hook
+    cl.ctf_grapplestate = 1
+    hook.enemy = other
+    hook.solid = SOLID_NOT
+    volume : f32 [ ctf_tech_volume[ hook.owner ] ]
+    g.sound[ hook.owner, CHAN_WEAPON,
+             g.soundindex[ 'weapons/grapple/grpull.wav' ], volume,
+             ATTN_NORM ]
+    g.sound[ hook, CHAN_WEAPON,
+             g.soundindex[ 'weapons/grapple/grhit.wav' ], volume,
+             ATTN_NORM ]
+    g.temp_entity_dir[ TE_SPARKS, hook.origin, normal ]
+
+# CTFGrapplePull: every frame the hook is out
+func ctf_grapple_pull [ hook: Edict ]
+    owner : hook.owner
+    cl : owner.client
+    if [ cl.pers.weapon && cl.pers.weapon.classname == 'weapon_grapple'
+         && !cl.newweapon && cl.weaponstate != WEAPON_FIRING &&
+         cl.weaponstate != WEAPON_ACTIVATING ]
+        ctf_reset_grapple[ hook ]
+        return
+    held : hook.enemy
+    if [ held ]
+        if [ held.solid == SOLID_NOT ]
+            ctf_reset_grapple[ hook ]
+            return
+        if [ held.solid == SOLID_BBOX ]
+            # ride what was hooked
+            hook.origin = v_add[ v_add[ v_scale[ held.size, 0.5 ],
+                                        held.origin ], held.mins ]
+            g.world.link[ hook ]
+        el
+            hook.velocity = held.velocity
+        if [ held.takedamage != DAMAGE_NO &&
+             !ctf_same_team[ held, owner ] ]
+            t_damage[ held, hook, owner, hook.velocity, hook.origin,
+                      vec3f [ 0.0, 0.0, 0.0 ], 1, 1, 0, MOD_GRAPPLE ]
+            g.sound[ hook, CHAN_WEAPON,
+                     g.soundindex[ 'weapons/grapple/grhurt.wav' ],
+                     ctf_tech_volume[ owner ], ATTN_NORM ]
+        if [ held.deadflag != 0 ]
+            # he died
+            ctf_reset_grapple[ hook ]
+            return
+    if [ cl.ctf_grapplestate == 0 ] return
+    # pull the player toward the hook
+    eye : vec3f [ owner.origin.x, owner.origin.y,
+                  owner.origin.z + f32[ owner.viewheight ] ]
+    line : vec3f [ v_sub[ hook.origin, eye ] ]
+    if [ cl.ctf_grapplestate == 1 && v_len[ line ] < 64.0 ]
+        g.sound[ owner, CHAN_WEAPON,
+                 g.soundindex[ 'weapons/grapple/grhang.wav' ],
+                 ctf_tech_volume[ owner ], ATTN_NORM ]
+        cl.ctf_grapplestate = 2
+    owner.velocity = v_scale[ v_norm[ line ], CTF_GRAPPLE_PULL_SPEED ]
+    g.add_gravity[ owner ]
+
+# CTFFireGrapple: the hook as a missile
+func ctf_fire_grapple [ e: Edict, start: vec3f, dir_in: vec3f,
+                        damage: i32, speed: f32 ]
+    dir : v_norm[ dir_in ]
+    hook : g.spawn[]
+    hook.origin = start
+    hook.old_origin = start
+    hook.angles = vectoangles[ dir ]
+    hook.velocity = v_scale[ dir, speed ]
+    hook.movetype = MOVETYPE_FLYMISSILE
+    hook.clipmask = MASK_SHOT
+    hook.solid = SOLID_BBOX
+    hook.mins = vec3f [ 0.0, 0.0, 0.0 ]
+    hook.maxs = vec3f [ 0.0, 0.0, 0.0 ]
+    hook.modelindex = g.modelindex[ 'models/weapons/grapple/hook/tris.md2' ]
+    hook.owner = e
+    hook.touch = lambda ctf_grapple_touch[]
+    hook.dmg = damage
+    hook.classname = 'grapple'
+    e.client.ctf_grapple = hook
+    # we're firing, not on hook
+    e.client.ctf_grapplestate = 0
+    g.world.link[ hook ]
+    tr : g.world.trace[ e.origin, vec3f [ 0.0, 0.0, 0.0 ],
+        vec3f [ 0.0, 0.0, 0.0 ], hook.origin, hook, MASK_SHOT ]
+    if [ tr.fraction < 1.0 ]
+        hook.origin = v_ma[ hook.origin, -10.0, dir ]
+        g.touch_plane_on = false
+        ctf_grapple_touch[ hook, tr.ent ]
+
+# CTFWeapon_Grapple_Fire
+func ctf_grapple_fire [ ent: Edict ]
+    cl : ent.client
+    cl.ps.gunframe += 1
+    # it's already out
+    if [ cl.ctf_grapplestate > 0 ] return
+    ax : angle_vectors[ cl.v_angle ]
+    offset : vec3f [ 24.0, 8.0, f32[ ent.viewheight ] - 6.0 ]
+    start : p_project_source[ cl, ent.origin, offset, ax.forward,
+                              ax.right ]
+    cl.kick_origin = v_scale[ ax.forward, -2.0 ]
+    cl.kick_angles = vec3f [ -1.0, cl.kick_angles.y, cl.kick_angles.z ]
+    g.sound[ ent, CHAN_WEAPON,
+             g.soundindex[ 'weapons/grapple/grfire.wav' ],
+             ctf_tech_volume[ ent ], ATTN_NORM ]
+    ctf_fire_grapple[ ent, start, ax.forward, 10, CTF_GRAPPLE_SPEED ]
+    player_noise[ ent, start, PNOISE_WEAPON ]
+
+# CTFWeapon_Grapple
+func ctf_weapon_grapple [ ent: Edict ]
+    cl : ent.client
+    pause_frames : vec i32 [] [ 10, 18, 27, 0 ]
+    fire_frames : vec i32 [] [ 6, 0 ]
+    held : bool [ (cl.buttons & BUTTON_ATTACK) != 0 ]
+    # while the button is down, stay in the firing frame
+    if [ held && cl.weaponstate == WEAPON_FIRING && cl.ctf_grapple ]
+        cl.ps.gunframe = 9
+    if [ !held && cl.ctf_grapple ]
+        ctf_reset_grapple[ cl.ctf_grapple ]
+        if [ cl.weaponstate == WEAPON_FIRING ]
+            cl.weaponstate = WEAPON_READY
+    if [ cl.newweapon && cl.ctf_grapplestate > 0 &&
+         cl.weaponstate == WEAPON_FIRING ]
+        # he wants to change weapons while grappled
+        cl.weaponstate = WEAPON_DROPPING
+        cl.ps.gunframe = 32
+    before : i32 [ cl.weaponstate ]
+    weapon_generic[ ent, 5, 9, 31, 36, pause_frames, fire_frames,
+                    lambda ctf_grapple_fire[] ]
+    # just switched back to the grapple: straight to the fire frame
+    if [ before == WEAPON_ACTIVATING && cl.weaponstate == WEAPON_READY
+         && cl.ctf_grapplestate > 0 ]
+        cl.ps.gunframe = (held) ? 5 : 9
+        cl.weaponstate = WEAPON_FIRING
+
+# ---- the map's own pieces
+func ctf_banner_think [ ent: Edict ]
+    ent.frame = (ent.frame + 1) % 16
+    ent.nextthink = g.level.time + FRAMETIME
+
+# SP_misc_ctf_banner and SP_misc_ctf_small_banner
+func sp_misc_ctf_banner [ ent: Edict, small: bool ]
+    ent.movetype = MOVETYPE_NONE
+    ent.solid = SOLID_NOT
+    ent.modelindex = g.modelindex[ (small)
+        ? 'models/ctf/banner/small.md2' : 'models/ctf/banner/tris.md2' ]
+    # team2
+    if [ ent.spawnflags & 1 ] ent.skinnum = 1
+    ent.frame = rand[] % 16
+    g.world.link[ ent ]
+    ent.think = lambda ctf_banner_think[]
+    ent.nextthink = g.level.time + FRAMETIME
+
+# old_teleporter_touch: the trigger kind of teleporter
+func ctf_teleporter_touch [ e: Edict, other: Edict ]
+    if [ !other.client ] return
+    dest : g.find[ null, EField.targetname, e.target ]
+    if [ !dest ] return
+    ctf_player_reset_grapple[ other ]
+    g.world.unlink[ other ]
+    other.origin = dest.origin
+    other.old_origin = dest.origin
+    # hold them in place briefly
+    other.client.ps.pm_time = 160 >> 3
+    other.client.ps.pm_flags = other.client.ps.pm_flags | PMF_TIME_TELEPORT
+    # the splash at the source and on the player
+    if [ e.enemy ] e.enemy.event = EV_PLAYER_TELEPORT
+    other.event = EV_PLAYER_TELEPORT
+    other.client.ps.delta_angles = v_sub[ dest.angles,
+                                          other.client.resp.cmd_angles ]
+    other.angles = vec3f [ 0.0, dest.angles.y, 0.0 ]
+    other.client.ps.viewangles = dest.angles
+    other.client.v_angle = dest.angles
+    # give a little forward velocity
+    ax : angle_vectors[ dest.angles ]
+    other.velocity = v_scale[ ax.forward, 200.0 ]
+    g.kill_box[ other ]
+    g.world.link[ other ]
+
+func sp_trigger_teleport [ ent: Edict ]
+    if [ !ent.target ]
+        g.dprintf[ 'teleporter without a target.' ]
+        g.free_edict[ ent ]
+        return
+    ent.svflags = ent.svflags | SVF_NOCLIENT
+    ent.solid = SOLID_TRIGGER
+    ent.touch = lambda ctf_teleporter_touch[]
+    g.setmodel[ ent, ent.model ]
+    g.world.link[ ent ]
+    # noise maker and splash effect dude
+    s : g.spawn[]
+    ent.enemy = s
+    s.origin = v_ma[ ent.mins, 0.5, v_sub[ ent.maxs, ent.mins ] ]
+    s.sound = g.soundindex[ 'world/hum1.wav' ]
+    g.world.link[ s ]
+
+func sp_info_teleport_destination [ ent: Edict ]
+    ent.origin = vec3f [ ent.origin.x, ent.origin.y, ent.origin.z + 16.0 ]

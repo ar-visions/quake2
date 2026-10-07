@@ -1,0 +1,667 @@
+# qcommon: sizebuf and MSG_*, net_chan.c, the protocol's numbers
+extend quake2
+
+PROTOCOL_VERSION : i32 [ 34 ]
+PORT_SERVER      : i32 [ 27910 ]
+MAX_MSGLEN       : i32 [ 1400 ]
+UPDATE_BACKUP    : i32 [ 16 ]
+
+SVC_MUZZLEFLASH  : i32 [ 1 ]
+SVC_MUZZLEFLASH2 : i32 [ 2 ]
+SVC_TEMP_ENTITY  : i32 [ 3 ]
+SVC_LAYOUT       : i32 [ 4 ]
+SVC_INVENTORY    : i32 [ 5 ]
+SVC_NOP          : i32 [ 6 ]
+SVC_DISCONNECT   : i32 [ 7 ]
+SVC_RECONNECT    : i32 [ 8 ]
+SVC_SOUND        : i32 [ 9 ]
+SVC_PRINT        : i32 [ 10 ]
+SVC_STUFFTEXT    : i32 [ 11 ]
+SVC_SERVERDATA   : i32 [ 12 ]
+SVC_CONFIGSTRING : i32 [ 13 ]
+SVC_SPAWNBASELINE : i32 [ 14 ]
+SVC_CENTERPRINT  : i32 [ 15 ]
+SVC_DOWNLOAD     : i32 [ 16 ]
+SVC_PLAYERINFO   : i32 [ 17 ]
+SVC_PACKETENTITIES : i32 [ 18 ]
+SVC_DELTAPACKETENTITIES : i32 [ 19 ]
+SVC_FRAME        : i32 [ 20 ]
+
+CLC_NOP       : i32 [ 1 ]
+CLC_MOVE      : i32 [ 2 ]
+CLC_USERINFO  : i32 [ 3 ]
+CLC_STRINGCMD : i32 [ 4 ]
+# ours: the client moved itself; where it stands and what it holds
+CLC_STATE     : i32 [ 5 ]
+
+CS_NAME       : i32 [ 0 ]
+CS_SKY        : i32 [ 2 ]
+CS_SKYAXIS    : i32 [ 3 ]
+CS_SKYROTATE  : i32 [ 4 ]
+CS_STATUSBAR  : i32 [ 5 ]
+CS_MAXCLIENTS : i32 [ 30 ]
+CS_MODELS     : i32 [ 32 ]
+CS_SOUNDS     : i32 [ 288 ]
+CS_IMAGES     : i32 [ 544 ]
+CS_LIGHTS     : i32 [ 800 ]
+CS_ITEMS      : i32 [ 1056 ]
+CS_PLAYERSKINS : i32 [ 1312 ]
+MAX_CONFIGSTRINGS : i32 [ 2080 ]
+
+# the entity delta's bits
+U_ORIGIN1 : i32 [ 1 ]
+U_ORIGIN2 : i32 [ 2 ]
+U_ANGLE2  : i32 [ 4 ]
+U_ANGLE3  : i32 [ 8 ]
+U_FRAME8  : i32 [ 16 ]
+U_EVENT   : i32 [ 32 ]
+U_REMOVE  : i32 [ 64 ]
+U_MOREBITS1 : i32 [ 128 ]
+U_NUMBER16 : i32 [ 256 ]
+U_ORIGIN3 : i32 [ 512 ]
+U_ANGLE1  : i32 [ 1024 ]
+U_MODEL   : i32 [ 2048 ]
+U_RENDERFX8 : i32 [ 4096 ]
+U_EFFECTS8 : i32 [ 16384 ]
+U_MOREBITS2 : i32 [ 32768 ]
+U_SKIN8   : i32 [ 65536 ]
+U_FRAME16 : i32 [ 131072 ]
+U_RENDERFX16 : i32 [ 262144 ]
+U_EFFECTS16 : i32 [ 524288 ]
+U_MODEL2  : i32 [ 1048576 ]
+U_MODEL3  : i32 [ 2097152 ]
+U_MODEL4  : i32 [ 4194304 ]
+U_MOREBITS3 : i32 [ 8388608 ]
+U_OLDORIGIN : i32 [ 16777216 ]
+U_SKIN16  : i32 [ 33554432 ]
+U_SOUND   : i32 [ 67108864 ]
+U_SOLID   : i32 [ 134217728 ]
+
+# the player delta's bits
+PS_M_TYPE     : i32 [ 1 ]
+PS_M_ORIGIN   : i32 [ 2 ]
+PS_M_VELOCITY : i32 [ 4 ]
+PS_M_TIME     : i32 [ 8 ]
+PS_M_FLAGS    : i32 [ 16 ]
+PS_M_GRAVITY  : i32 [ 32 ]
+PS_M_DELTA_ANGLES : i32 [ 64 ]
+PS_VIEWOFFSET : i32 [ 128 ]
+PS_VIEWANGLES : i32 [ 256 ]
+PS_KICKANGLES : i32 [ 512 ]
+PS_BLEND      : i32 [ 1024 ]
+PS_FOV        : i32 [ 2048 ]
+PS_WEAPONINDEX : i32 [ 4096 ]
+PS_WEAPONFRAME : i32 [ 8192 ]
+PS_RDFLAGS    : i32 [ 16384 ]
+
+SND_VOLUME      : i32 [ 1 ]
+SND_ATTENUATION : i32 [ 2 ]
+SND_POS         : i32 [ 4 ]
+SND_ENT         : i32 [ 8 ]
+SND_OFFSET      : i32 [ 16 ]
+
+# the 162 directions a byte can name: anorms.h, set at start
+net_dirs : vec f32
+
+# entity_state_t as it crosses the wire
+class EntState
+    public number   : i32
+    public origin   : vec3f
+    public angles   : vec3f
+    public old_origin : vec3f
+    public modelindex  : i32
+    public modelindex2 : i32
+    public modelindex3 : i32
+    public modelindex4 : i32
+    public frame    : i32
+    public skinnum  : i32
+    public effects  : i32
+    public renderfx : i32
+    public solid    : i32
+    public sound    : i32
+    public event    : i32
+
+    func twin [] -> EntState
+        return EntState [ number: number, origin: origin,
+            angles: angles, old_origin: old_origin,
+            modelindex: modelindex, modelindex2: modelindex2,
+            modelindex3: modelindex3, modelindex4: modelindex4,
+            frame: frame, skinnum: skinnum, effects: effects,
+            renderfx: renderfx, solid: solid, sound: sound,
+            event: event ]
+
+# player_state_t as it crosses the wire
+class PlayState
+    public pm_type  : i32
+    public origin   : vec3f
+    public velocity : vec3f
+    public pm_time  : i32
+    public pm_flags : i32
+    public gravity  : i32
+    public delta_angles : vec3f
+    public viewoffset : vec3f
+    public viewangles : vec3f
+    public kick_angles : vec3f
+    public blend    : vec4f
+    public fov      : f32
+    public gunindex : i32
+    public gunframe : i32
+    public gunoffset : vec3f
+    public gunangles : vec3f
+    public rdflags  : i32
+    public stats    : vec i32
+
+    func init []
+        if [ !stats ] stats = vec i32 [ 32 ]
+
+    func twin [] -> PlayState
+        p : PlayState [ pm_type: pm_type, origin: origin,
+            velocity: velocity, pm_time: pm_time, pm_flags: pm_flags,
+            gravity: gravity, delta_angles: delta_angles,
+            viewoffset: viewoffset, viewangles: viewangles,
+            kick_angles: kick_angles, blend: blend, fov: fov,
+            gunindex: gunindex, gunframe: gunframe,
+            gunoffset: gunoffset, gunangles: gunangles,
+            rdflags: rdflags ]
+        for [ i: i32 0, i < 32, i += 1 ]
+            p.stats[ i ] = stats[ i ]
+        return p
+
+# sizebuf_t with the MSG_ readers and writers
+class Msg
+    public data : new u8
+    public max  : i32 [ 1400 ]
+    public size : i32
+    public at   : i32
+    public overflowed : bool
+
+    func init []
+        data = new u8 [ max ]
+
+    public func clear []
+        size = 0
+        at = 0
+        overflowed = false
+
+    public func w_byte [ v: i32 ]
+        if [ size + 1 > max ]
+            overflowed = true
+            return
+        data[ size ] = v & 255
+        size += 1
+
+    public func w_short [ v: i32 ]
+        w_byte[ v ]
+        w_byte[ v >> 8 ]
+
+    public func w_long [ v: i32 ]
+        w_byte[ v ]
+        w_byte[ v >> 8 ]
+        w_byte[ v >> 16 ]
+        w_byte[ v >> 24 ]
+
+    # a float goes as its bits
+    public func w_float [ f: f32 ]
+        value : f32 [ f ]
+        bits : i32 [ 0 ]
+        memcpy[ @bits, @value, 4 ]
+        w_long[ bits ]
+
+    public func r_float [] -> f32
+        bits : i32 [ r_long[] ]
+        value : f32 [ 0.0 ]
+        memcpy[ @value, @bits, 4 ]
+        return value
+
+    public func w_string [ s: string ]
+        if [ s ]
+            for [ i: i32 0, i < s.count, i += 1 ]
+                w_byte[ s[ i ] ]
+        w_byte[ 0 ]
+
+    # a coordinate is eighths of a unit in a short
+    public func w_coord [ f: f32 ]
+        w_short[ i32[ f * 8.0 ] ]
+
+    public func w_pos [ p: vec3f ]
+        w_coord[ p.x ]
+        w_coord[ p.y ]
+        w_coord[ p.z ]
+
+    public func w_angle [ f: f32 ]
+        w_byte[ i32[ f * 256.0 / 360.0 ] ]
+
+    public func w_angle16 [ f: f32 ]
+        w_short[ i32[ f * 65536.0 / 360.0 ] ]
+
+    # MSG_WriteDir: the nearest of the 162 directions
+    public func w_dir [ d: vec3f ]
+        best : i32 [ 0 ]
+        most : f32 [ -9.0 ]
+        for [ i: i32 0, i < 162, i += 1 ]
+            dot : f32 [ d.x * net_dirs[ i * 3 ]
+                + d.y * net_dirs[ i * 3 + 1 ]
+                + d.z * net_dirs[ i * 3 + 2 ] ]
+            if [ dot > most ]
+                most = dot
+                best = i
+        w_byte[ best ]
+
+    public func w_msg [ other: Msg ]
+        for [ i: i32 0, i < other.size, i += 1 ]
+            w_byte[ other.data[ i ] ]
+
+    public func r_byte [] -> i32
+        if [ at >= size ]
+            at = size + 1
+            return 0 - 1
+        v : i32 [ data[ at ] ]
+        at += 1
+        return v
+
+    public func r_char [] -> i32
+        v : i32 [ r_byte[] ]
+        return (v > 127) ? v - 256 : v
+
+    public func r_short [] -> i32
+        lo : i32 [ r_byte[] ]
+        hi : i32 [ r_byte[] ]
+        v : i32 [ (lo & 255) | ((hi & 255) << 8) ]
+        return (v > 32767) ? v - 65536 : v
+
+    public func r_long [] -> i32
+        b0 : i32 [ r_byte[] & 255 ]
+        b1 : i32 [ r_byte[] & 255 ]
+        b2 : i32 [ r_byte[] & 255 ]
+        b3 : i32 [ r_byte[] & 255 ]
+        return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+    public func r_string [] -> string
+        buf : local i8 [ 2048 ]
+        n : i32 [ 0 ]
+        while [ n < 2047 ]
+            c : i32 [ r_byte[] ]
+            if [ c <= 0 ] break
+            buf[ n ] = c
+            n += 1
+        buf[ n ] = 0
+        return string [ cast cstr [ buf ] ]
+
+    public func r_coord [] -> f32
+        return f32[ r_short[] ] * 0.125
+
+    public func r_pos [] -> vec3f
+        x : f32 [ r_coord[] ]
+        y : f32 [ r_coord[] ]
+        z : f32 [ r_coord[] ]
+        return vec3f [ x, y, z ]
+
+    public func r_angle [] -> f32
+        return f32[ r_char[] ] * 360.0 / 256.0
+
+    public func r_angle16 [] -> f32
+        return f32[ r_short[] ] * 360.0 / 65536.0
+
+    public func r_dir [] -> vec3f
+        i : i32 [ r_byte[] ]
+        if [ i < 0 || i >= 162 ] return vec3f [ 0.0, 0.0, 0.0 ]
+        return vec3f [ net_dirs[ i * 3 ], net_dirs[ i * 3 + 1 ],
+                       net_dirs[ i * 3 + 2 ] ]
+
+    # MSG_WriteDeltaEntity: only what differs from the old state
+    public func w_entity [ from: EntState, to: EntState, force: bool,
+                           fresh: bool ]
+        bits : i32 [ 0 ]
+        if [ to.number >= 256 ] bits = bits | U_NUMBER16
+        if [ to.origin.x != from.origin.x ] bits = bits | U_ORIGIN1
+        if [ to.origin.y != from.origin.y ] bits = bits | U_ORIGIN2
+        if [ to.origin.z != from.origin.z ] bits = bits | U_ORIGIN3
+        if [ to.angles.x != from.angles.x ] bits = bits | U_ANGLE1
+        if [ to.angles.y != from.angles.y ] bits = bits | U_ANGLE2
+        if [ to.angles.z != from.angles.z ] bits = bits | U_ANGLE3
+        if [ to.skinnum != from.skinnum ]
+            if [ u32[ to.skinnum ] < 256 ]       bits = bits | U_SKIN8
+            el [ u32[ to.skinnum ] < 65536 ]     bits = bits | U_SKIN16
+            el              bits = bits | U_SKIN8 | U_SKIN16
+        if [ to.frame != from.frame ]
+            if [ to.frame < 256 ] bits = bits | U_FRAME8
+            el                    bits = bits | U_FRAME16
+        if [ to.effects != from.effects ]
+            if [ u32[ to.effects ] < 256 ]       bits = bits | U_EFFECTS8
+            el [ u32[ to.effects ] < 32768 ]     bits = bits | U_EFFECTS16
+            el          bits = bits | U_EFFECTS8 | U_EFFECTS16
+        if [ to.renderfx != from.renderfx ]
+            if [ u32[ to.renderfx ] < 256 ]      bits = bits | U_RENDERFX8
+            el [ u32[ to.renderfx ] < 32768 ]    bits = bits | U_RENDERFX16
+            el        bits = bits | U_RENDERFX8 | U_RENDERFX16
+        if [ to.solid != from.solid ] bits = bits | U_SOLID
+        # event is not delta compressed, just 0 compressed
+        if [ to.event != 0 ] bits = bits | U_EVENT
+        if [ to.modelindex != from.modelindex ]   bits = bits | U_MODEL
+        if [ to.modelindex2 != from.modelindex2 ] bits = bits | U_MODEL2
+        if [ to.modelindex3 != from.modelindex3 ] bits = bits | U_MODEL3
+        if [ to.modelindex4 != from.modelindex4 ] bits = bits | U_MODEL4
+        if [ to.sound != from.sound ] bits = bits | U_SOUND
+        moved : bool [ to.old_origin.x != from.old_origin.x ||
+            to.old_origin.y != from.old_origin.y ||
+            to.old_origin.z != from.old_origin.z ]
+        if [ fresh || ((to.renderfx & RF_BEAM) != 0 && moved) ]
+            bits = bits | U_OLDORIGIN
+        # nothing to send
+        if [ bits == 0 && !force ] return
+        if [ bits & (255 << 24) ]
+            bits = bits | U_MOREBITS3 | U_MOREBITS2 | U_MOREBITS1
+        el [ bits & (255 << 16) ]
+            bits = bits | U_MOREBITS2 | U_MOREBITS1
+        el [ bits & (255 << 8) ]
+            bits = bits | U_MOREBITS1
+        w_byte[ bits ]
+        if [ bits & (255 << 24) ]
+            w_byte[ bits >> 8 ]
+            w_byte[ bits >> 16 ]
+            w_byte[ bits >> 24 ]
+        el [ bits & (255 << 16) ]
+            w_byte[ bits >> 8 ]
+            w_byte[ bits >> 16 ]
+        el [ bits & (255 << 8) ]
+            w_byte[ bits >> 8 ]
+        if [ bits & U_NUMBER16 ] w_short[ to.number ]
+        el                       w_byte[ to.number ]
+        if [ bits & U_MODEL ]  w_byte[ to.modelindex ]
+        if [ bits & U_MODEL2 ] w_byte[ to.modelindex2 ]
+        if [ bits & U_MODEL3 ] w_byte[ to.modelindex3 ]
+        if [ bits & U_MODEL4 ] w_byte[ to.modelindex4 ]
+        if [ bits & U_FRAME8 ]  w_byte[ to.frame ]
+        if [ bits & U_FRAME16 ] w_short[ to.frame ]
+        both : i32 [ U_SKIN8 | U_SKIN16 ]
+        if [ (bits & both) == both ] w_long[ to.skinnum ]
+        el [ bits & U_SKIN8 ]        w_byte[ to.skinnum ]
+        el [ bits & U_SKIN16 ]       w_short[ to.skinnum ]
+        both = U_EFFECTS8 | U_EFFECTS16
+        if [ (bits & both) == both ] w_long[ to.effects ]
+        el [ bits & U_EFFECTS8 ]     w_byte[ to.effects ]
+        el [ bits & U_EFFECTS16 ]    w_short[ to.effects ]
+        both = U_RENDERFX8 | U_RENDERFX16
+        if [ (bits & both) == both ] w_long[ to.renderfx ]
+        el [ bits & U_RENDERFX8 ]    w_byte[ to.renderfx ]
+        el [ bits & U_RENDERFX16 ]   w_short[ to.renderfx ]
+        if [ bits & U_ORIGIN1 ] w_coord[ to.origin.x ]
+        if [ bits & U_ORIGIN2 ] w_coord[ to.origin.y ]
+        if [ bits & U_ORIGIN3 ] w_coord[ to.origin.z ]
+        if [ bits & U_ANGLE1 ] w_angle[ to.angles.x ]
+        if [ bits & U_ANGLE2 ] w_angle[ to.angles.y ]
+        if [ bits & U_ANGLE3 ] w_angle[ to.angles.z ]
+        if [ bits & U_OLDORIGIN ] w_pos[ to.old_origin ]
+        if [ bits & U_SOUND ] w_byte[ to.sound ]
+        if [ bits & U_EVENT ] w_byte[ to.event ]
+        if [ bits & U_SOLID ] w_short[ to.solid ]
+
+    # CL_ParseEntityBits: the bits; the number is left in last_number
+    public last_number : i32
+    public func r_entity_bits [] -> i32
+        total : i32 [ r_byte[] & 255 ]
+        if [ total & U_MOREBITS1 ] total = total | ((r_byte[] & 255) << 8)
+        if [ total & U_MOREBITS2 ] total = total | ((r_byte[] & 255) << 16)
+        if [ total & U_MOREBITS3 ] total = total | ((r_byte[] & 255) << 24)
+        if [ total & U_NUMBER16 ] last_number = r_short[]
+        el                        last_number = r_byte[]
+        return total
+
+    # CL_ParseDelta: a state from the old one and the bits
+    public func r_entity [ from: EntState, number: i32,
+                           bits: i32 ] -> EntState
+        to : from.twin[]
+        to.old_origin = from.origin
+        to.number = number
+        if [ bits & U_MODEL ]  to.modelindex  = r_byte[]
+        if [ bits & U_MODEL2 ] to.modelindex2 = r_byte[]
+        if [ bits & U_MODEL3 ] to.modelindex3 = r_byte[]
+        if [ bits & U_MODEL4 ] to.modelindex4 = r_byte[]
+        if [ bits & U_FRAME8 ]  to.frame = r_byte[]
+        if [ bits & U_FRAME16 ] to.frame = r_short[]
+        both : i32 [ U_SKIN8 | U_SKIN16 ]
+        if [ (bits & both) == both ] to.skinnum = r_long[]
+        el [ bits & U_SKIN8 ]        to.skinnum = r_byte[]
+        el [ bits & U_SKIN16 ]       to.skinnum = r_short[] & 65535
+        both = U_EFFECTS8 | U_EFFECTS16
+        if [ (bits & both) == both ] to.effects = r_long[]
+        el [ bits & U_EFFECTS8 ]     to.effects = r_byte[]
+        el [ bits & U_EFFECTS16 ]    to.effects = r_short[] & 65535
+        both = U_RENDERFX8 | U_RENDERFX16
+        if [ (bits & both) == both ] to.renderfx = r_long[]
+        el [ bits & U_RENDERFX8 ]    to.renderfx = r_byte[]
+        el [ bits & U_RENDERFX16 ]   to.renderfx = r_short[] & 65535
+        if [ bits & U_ORIGIN1 ]
+            to.origin = vec3f [ r_coord[], to.origin.y, to.origin.z ]
+        if [ bits & U_ORIGIN2 ]
+            to.origin = vec3f [ to.origin.x, r_coord[], to.origin.z ]
+        if [ bits & U_ORIGIN3 ]
+            to.origin = vec3f [ to.origin.x, to.origin.y, r_coord[] ]
+        if [ bits & U_ANGLE1 ]
+            to.angles = vec3f [ r_angle[], to.angles.y, to.angles.z ]
+        if [ bits & U_ANGLE2 ]
+            to.angles = vec3f [ to.angles.x, r_angle[], to.angles.z ]
+        if [ bits & U_ANGLE3 ]
+            to.angles = vec3f [ to.angles.x, to.angles.y, r_angle[] ]
+        if [ bits & U_OLDORIGIN ] to.old_origin = r_pos[]
+        if [ bits & U_SOUND ] to.sound = r_byte[]
+        to.event = (bits & U_EVENT) ? r_byte[] : 0
+        if [ bits & U_SOLID ] to.solid = r_short[] & 65535
+        return to
+
+    # SV_WritePlayerstateToClient
+    public func w_player [ ops: PlayState, ps: PlayState ]
+        pf : i32 [ 0 ]
+        if [ ps.pm_type != ops.pm_type ] pf = pf | PS_M_TYPE
+        if [ !v_same[ ps.origin, ops.origin ] ] pf = pf | PS_M_ORIGIN
+        if [ !v_same[ ps.velocity, ops.velocity ] ]
+            pf = pf | PS_M_VELOCITY
+        if [ ps.pm_time != ops.pm_time ] pf = pf | PS_M_TIME
+        if [ ps.pm_flags != ops.pm_flags ] pf = pf | PS_M_FLAGS
+        if [ ps.gravity != ops.gravity ] pf = pf | PS_M_GRAVITY
+        if [ !v_same[ ps.delta_angles, ops.delta_angles ] ]
+            pf = pf | PS_M_DELTA_ANGLES
+        if [ !v_same[ ps.viewoffset, ops.viewoffset ] ]
+            pf = pf | PS_VIEWOFFSET
+        if [ !v_same[ ps.viewangles, ops.viewangles ] ]
+            pf = pf | PS_VIEWANGLES
+        if [ !v_same[ ps.kick_angles, ops.kick_angles ] ]
+            pf = pf | PS_KICKANGLES
+        if [ ps.blend.x != ops.blend.x || ps.blend.y != ops.blend.y ||
+             ps.blend.z != ops.blend.z || ps.blend.w != ops.blend.w ]
+            pf = pf | PS_BLEND
+        if [ ps.fov != ops.fov ] pf = pf | PS_FOV
+        if [ ps.rdflags != ops.rdflags ] pf = pf | PS_RDFLAGS
+        if [ ps.gunframe != ops.gunframe ] pf = pf | PS_WEAPONFRAME
+        pf = pf | PS_WEAPONINDEX
+        w_byte[ SVC_PLAYERINFO ]
+        w_short[ pf ]
+        if [ pf & PS_M_TYPE ] w_byte[ ps.pm_type ]
+        if [ pf & PS_M_ORIGIN ] w_pos[ ps.origin ]
+        if [ pf & PS_M_VELOCITY ] w_pos[ ps.velocity ]
+        if [ pf & PS_M_TIME ] w_byte[ ps.pm_time ]
+        if [ pf & PS_M_FLAGS ] w_byte[ ps.pm_flags ]
+        if [ pf & PS_M_GRAVITY ] w_short[ ps.gravity ]
+        if [ pf & PS_M_DELTA_ANGLES ]
+            w_angle16[ ps.delta_angles.x ]
+            w_angle16[ ps.delta_angles.y ]
+            w_angle16[ ps.delta_angles.z ]
+        if [ pf & PS_VIEWOFFSET ]
+            w_byte[ i32[ ps.viewoffset.x * 4.0 ] ]
+            w_byte[ i32[ ps.viewoffset.y * 4.0 ] ]
+            w_byte[ i32[ ps.viewoffset.z * 4.0 ] ]
+        if [ pf & PS_VIEWANGLES ]
+            w_angle16[ ps.viewangles.x ]
+            w_angle16[ ps.viewangles.y ]
+            w_angle16[ ps.viewangles.z ]
+        if [ pf & PS_KICKANGLES ]
+            w_byte[ i32[ ps.kick_angles.x * 4.0 ] ]
+            w_byte[ i32[ ps.kick_angles.y * 4.0 ] ]
+            w_byte[ i32[ ps.kick_angles.z * 4.0 ] ]
+        if [ pf & PS_WEAPONINDEX ] w_byte[ ps.gunindex ]
+        if [ pf & PS_WEAPONFRAME ]
+            w_byte[ ps.gunframe ]
+            w_byte[ i32[ ps.gunoffset.x * 4.0 ] ]
+            w_byte[ i32[ ps.gunoffset.y * 4.0 ] ]
+            w_byte[ i32[ ps.gunoffset.z * 4.0 ] ]
+            w_byte[ i32[ ps.gunangles.x * 4.0 ] ]
+            w_byte[ i32[ ps.gunangles.y * 4.0 ] ]
+            w_byte[ i32[ ps.gunangles.z * 4.0 ] ]
+        if [ pf & PS_BLEND ]
+            w_byte[ i32[ ps.blend.x * 255.0 ] ]
+            w_byte[ i32[ ps.blend.y * 255.0 ] ]
+            w_byte[ i32[ ps.blend.z * 255.0 ] ]
+            w_byte[ i32[ ps.blend.w * 255.0 ] ]
+        if [ pf & PS_FOV ] w_byte[ i32[ ps.fov ] ]
+        if [ pf & PS_RDFLAGS ] w_byte[ ps.rdflags ]
+        # send stats
+        statbits : i32 [ 0 ]
+        for [ i: i32 0, i < 32, i += 1 ]
+            if [ ps.stats[ i ] != ops.stats[ i ] ]
+                statbits = statbits | (1 << i)
+        w_long[ statbits ]
+        for [ i: i32 0, i < 32, i += 1 ]
+            if [ statbits & (1 << i) ] w_short[ ps.stats[ i ] ]
+
+    # CL_ParsePlayerstate
+    public func r_player [ ops: PlayState ] -> PlayState
+        ps : ops.twin[]
+        pf : i32 [ r_short[] & 65535 ]
+        if [ pf & PS_M_TYPE ] ps.pm_type = r_byte[]
+        if [ pf & PS_M_ORIGIN ] ps.origin = r_pos[]
+        if [ pf & PS_M_VELOCITY ] ps.velocity = r_pos[]
+        if [ pf & PS_M_TIME ] ps.pm_time = r_byte[]
+        if [ pf & PS_M_FLAGS ] ps.pm_flags = r_byte[]
+        if [ pf & PS_M_GRAVITY ] ps.gravity = r_short[]
+        if [ pf & PS_M_DELTA_ANGLES ]
+            dx : f32 [ r_angle16[] ]
+            dy : f32 [ r_angle16[] ]
+            dz : f32 [ r_angle16[] ]
+            ps.delta_angles = vec3f [ dx, dy, dz ]
+        if [ pf & PS_VIEWOFFSET ]
+            ox : f32 [ f32[ r_char[] ] * 0.25 ]
+            oy : f32 [ f32[ r_char[] ] * 0.25 ]
+            oz : f32 [ f32[ r_char[] ] * 0.25 ]
+            ps.viewoffset = vec3f [ ox, oy, oz ]
+        if [ pf & PS_VIEWANGLES ]
+            ax : f32 [ r_angle16[] ]
+            ay : f32 [ r_angle16[] ]
+            az : f32 [ r_angle16[] ]
+            ps.viewangles = vec3f [ ax, ay, az ]
+        if [ pf & PS_KICKANGLES ]
+            kx : f32 [ f32[ r_char[] ] * 0.25 ]
+            ky : f32 [ f32[ r_char[] ] * 0.25 ]
+            kz : f32 [ f32[ r_char[] ] * 0.25 ]
+            ps.kick_angles = vec3f [ kx, ky, kz ]
+        if [ pf & PS_WEAPONINDEX ] ps.gunindex = r_byte[]
+        if [ pf & PS_WEAPONFRAME ]
+            ps.gunframe = r_byte[]
+            gx : f32 [ f32[ r_char[] ] * 0.25 ]
+            gy : f32 [ f32[ r_char[] ] * 0.25 ]
+            gz : f32 [ f32[ r_char[] ] * 0.25 ]
+            ps.gunoffset = vec3f [ gx, gy, gz ]
+            hx : f32 [ f32[ r_char[] ] * 0.25 ]
+            hy : f32 [ f32[ r_char[] ] * 0.25 ]
+            hz : f32 [ f32[ r_char[] ] * 0.25 ]
+            ps.gunangles = vec3f [ hx, hy, hz ]
+        if [ pf & PS_BLEND ]
+            br : f32 [ f32[ r_byte[] ] / 255.0 ]
+            bg : f32 [ f32[ r_byte[] ] / 255.0 ]
+            bb : f32 [ f32[ r_byte[] ] / 255.0 ]
+            ba : f32 [ f32[ r_byte[] ] / 255.0 ]
+            ps.blend = vec4f [ br, bg, bb, ba ]
+        if [ pf & PS_FOV ] ps.fov = r_byte[]
+        if [ pf & PS_RDFLAGS ] ps.rdflags = r_byte[]
+        statbits : i32 [ r_long[] ]
+        for [ i: i32 0, i < 32, i += 1 ]
+            if [ statbits & (1 << i) ] ps.stats[ i ] = r_short[]
+        return ps
+
+func v_same [ one: vec3f, two: vec3f ] -> bool
+    return one.x == two.x && one.y == two.y && one.z == two.z
+
+# netchan_t: sequenced packets and one reliable stream
+class Netchan
+    public sock   : i32
+    public ip     : u32
+    public port   : i32
+    public qport  : i32
+    # a client's packets carry its qport; a server's do not
+    public client : bool
+    public dropped : i32
+    public incoming_sequence : i32
+    public incoming_acknowledged : i32
+    public incoming_reliable_acknowledged : i32
+    public incoming_reliable_sequence : i32
+    public outgoing_sequence : i32 [ 1 ]
+    public reliable_sequence : i32
+    public last_reliable_sequence : i32
+    # reliable staging: message waits, held is what is in flight
+    public message : Msg
+    public held    : Msg
+    public packet  : Msg
+
+    func init []
+        message = Msg [ max: 1384 ]
+        held    = Msg [ max: 1384 ]
+        packet  = Msg [ max: 1400 ]
+
+    # Netchan_Transmit: the header, the reliable part, then data
+    public func transmit [ data: Msg ]
+        send_reliable : bool [ false ]
+        if [ incoming_acknowledged > last_reliable_sequence &&
+             incoming_reliable_acknowledged != reliable_sequence ]
+            send_reliable = true
+        if [ held.size == 0 && message.size > 0 ]
+            held.clear[]
+            held.w_msg[ message ]
+            message.clear[]
+            reliable_sequence = reliable_sequence ^ 1
+            send_reliable = true
+        packet.clear[]
+        first : i32 [ outgoing_sequence & 0x7fffffff ]
+        if [ send_reliable ] first = first | (1 << 31)
+        second : i32 [ incoming_sequence & 0x7fffffff ]
+        if [ incoming_reliable_sequence != 0 ]
+            second = second | (1 << 31)
+        outgoing_sequence += 1
+        packet.w_long[ first ]
+        packet.w_long[ second ]
+        if [ client ] packet.w_short[ qport ]
+        if [ send_reliable ]
+            packet.w_msg[ held ]
+            last_reliable_sequence = outgoing_sequence
+        if [ data && packet.max - packet.size >= data.size ]
+            packet.w_msg[ data ]
+        q2net_send[ sock, ip, port, packet.data, packet.size ]
+
+    # Netchan_Process: false when the packet is stale
+    public func process [ got: Msg ] -> bool
+        got.at = 0
+        arrived : i32 [ got.r_long[] ]
+        acked : i32 [ got.r_long[] ]
+        # read the qport if we are a server
+        if [ !client ] got.r_short[]
+        reliable_message : i32 [ (arrived >> 31) & 1 ]
+        reliable_ack : i32 [ (acked >> 31) & 1 ]
+        arrived = arrived & 0x7fffffff
+        acked = acked & 0x7fffffff
+        # discard stale or duplicated packets
+        if [ arrived <= incoming_sequence ] return false
+        dropped = arrived - (incoming_sequence + 1)
+        # the message in flight has arrived: clear the buffer
+        if [ reliable_ack == reliable_sequence ] held.clear[]
+        incoming_sequence = arrived
+        incoming_acknowledged = acked
+        incoming_reliable_acknowledged = reliable_ack
+        if [ reliable_message != 0 ]
+            incoming_reliable_sequence = incoming_reliable_sequence ^ 1
+        return true
+
+# Netchan_OutOfBandPrint: four 255 bytes, then the text
+func net_oob [ sock: i32, ip: u32, port: i32, text: string ]
+    m : Msg [ max: 1400 ]
+    m.w_long[ 0 - 1 ]
+    for [ i: i32 0, i < text.count, i += 1 ]
+        m.w_byte[ text[ i ] ]
+    q2net_send[ sock, ip, port, m.data, m.size ]

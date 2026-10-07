@@ -1,0 +1,231 @@
+# deathmatch: p_client.c's obituary and spawn points, p_hud.c's
+# scoreboard, g_main.c's CheckDMRules
+extend quake2
+
+MOD_GRAPPLE : i32 [ 34 ]
+
+func client_name [ e: Edict ] -> string
+    if [ e && e.client && e.client.pers.netname ]
+        return e.client.pers.netname
+    return 'player'
+
+# ClientObituary: who died, how, and the frag it is worth
+func dm_obituary [ e: Edict, inflictor: Edict, attacker: Edict ]
+    ff : bool [ (g.means_of_death & MOD_FRIENDLY_FIRE) != 0 ]
+    mod : i32 [ g.means_of_death & ~MOD_FRIENDLY_FIRE ]
+    name : client_name[ e ]
+    message : string [ null ]
+    second : ''
+    if [ mod == MOD_SUICIDE ]             message = 'suicides'
+    el [ mod == MOD_FALLING ]             message = 'cratered'
+    el [ mod == MOD_CRUSH ]               message = 'was squished'
+    el [ mod == MOD_WATER ]               message = 'sank like a rock'
+    el [ mod == MOD_SLIME ]               message = 'melted'
+    el [ mod == MOD_LAVA ]  message = 'does a back flip into the lava'
+    el [ mod == MOD_EXPLOSIVE || mod == MOD_BARREL ] message = 'blew up'
+    el [ mod == MOD_EXIT ]                message = 'found a way out'
+    el [ mod == MOD_TARGET_LASER ]        message = 'saw the light'
+    el [ mod == MOD_TARGET_BLASTER ]      message = 'got blasted'
+    el [ mod == MOD_BOMB || mod == MOD_SPLASH || mod == MOD_TRIGGER_HURT ]
+        message = 'was in the wrong place'
+    if [ attacker == e ]
+        if [ mod == MOD_HELD_GRENADE ]
+            message = 'tried to put the pin back in'
+        el [ mod == MOD_HG_SPLASH || mod == MOD_G_SPLASH ]
+            message = 'tripped on its own grenade'
+        el [ mod == MOD_R_SPLASH ]        message = 'blew itself up'
+        el [ mod == MOD_BFG_BLAST ]
+            message = 'should have used a smaller gun'
+        el                                message = 'killed itself'
+    if [ message ]
+        g.bprintf[ '{name} {message}.' ]
+        e.client.resp.score -= 1
+        e.enemy = null
+        return
+    e.enemy = attacker
+    if [ attacker && attacker.client ]
+        if [ mod == MOD_BLASTER ]         message = 'was blasted by'
+        el [ mod == MOD_SHOTGUN ]         message = 'was gunned down by'
+        el [ mod == MOD_SSHOTGUN ]
+            message = 'was blown away by'
+            second = '\'s super shotgun'
+        el [ mod == MOD_MACHINEGUN ]      message = 'was machinegunned by'
+        el [ mod == MOD_CHAINGUN ]
+            message = 'was cut in half by'
+            second = '\'s chaingun'
+        el [ mod == MOD_GRENADE ]
+            message = 'was popped by'
+            second = '\'s grenade'
+        el [ mod == MOD_G_SPLASH ]
+            message = 'was shredded by'
+            second = '\'s shrapnel'
+        el [ mod == MOD_ROCKET ]
+            message = 'ate'
+            second = '\'s rocket'
+        el [ mod == MOD_R_SPLASH ]
+            message = 'almost dodged'
+            second = '\'s rocket'
+        el [ mod == MOD_HYPERBLASTER ]
+            message = 'was melted by'
+            second = '\'s hyperblaster'
+        el [ mod == MOD_RAILGUN ]         message = 'was railed by'
+        el [ mod == MOD_BFG_LASER ]
+            message = 'saw the pretty lights from'
+            second = '\'s BFG'
+        el [ mod == MOD_BFG_BLAST ]
+            message = 'was disintegrated by'
+            second = '\'s BFG blast'
+        el [ mod == MOD_BFG_EFFECT ]
+            message = 'couldn\'t hide from'
+            second = '\'s BFG'
+        el [ mod == MOD_HANDGRENADE ]
+            message = 'caught'
+            second = '\'s handgrenade'
+        el [ mod == MOD_HG_SPLASH ]
+            message = 'didn\'t see'
+            second = '\'s handgrenade'
+        el [ mod == MOD_HELD_GRENADE ]
+            message = 'feels'
+            second = '\'s pain'
+        el [ mod == MOD_TELEFRAG ]
+            message = 'tried to invade'
+            second = '\'s personal space'
+        el [ mod == MOD_GRAPPLE ]
+            message = 'was caught by'
+            second = '\'s grapple'
+        if [ message ]
+            killer : client_name[ attacker ]
+            g.bprintf[ '{name} {message} {killer}{second}' ]
+            if [ ff ] attacker.client.resp.score -= 1
+            el        attacker.client.resp.score += 1
+            return
+    g.bprintf[ '{name} died.' ]
+    e.client.resp.score -= 1
+
+# PlayersRangeFromSpot: the nearest living player to a spot
+func players_range_from_spot [ spot: Edict ] -> f32
+    best : f32 [ 9999999.0 ]
+    for [ n: i32 1, n <= g.maxclients, n += 1 ]
+        player : g.edicts[ n ]
+        if [ !player.inuse || player.health <= 0 ] continue
+        far : f32 [ v_len[ v_sub[ spot.origin, player.origin ] ] ]
+        if [ far < best ] best = far
+    return best
+
+# SelectRandomDeathmatchSpawnPoint: any but the two nearest
+func select_random_spawn [ cname: string ] -> Edict
+    spot : Edict [ null ]
+    near1 : Edict [ null ]
+    near2 : Edict [ null ]
+    range1 : f32 [ 99999.0 ]
+    range2 : f32 [ 99999.0 ]
+    count : i32 [ 0 ]
+    while [ true ]
+        spot = g.find[ spot, EField.classname, cname ]
+        if [ !spot ] break
+        count += 1
+        range : f32 [ players_range_from_spot[ spot ] ]
+        if [ range < range1 ]
+            range1 = range
+            near1 = spot
+        el [ range < range2 ]
+            range2 = range
+            near2 = spot
+    if [ count == 0 ] return null
+    if [ count <= 2 ]
+        near1 = null
+        near2 = null
+    el
+        count -= 2
+    selection : i32 [ rand[] % count ]
+    spot = null
+    while [ true ]
+        spot = g.find[ spot, EField.classname, cname ]
+        if [ !spot ] break
+        if [ spot == near1 || spot == near2 ] continue
+        if [ selection == 0 ] break
+        selection -= 1
+    return spot
+
+# SelectFarthestDeathmatchSpawnPoint
+func select_farthest_spawn [] -> Edict
+    best : Edict [ null ]
+    most : f32 [ 0.0 ]
+    spot : Edict [ null ]
+    while [ true ]
+        spot = g.find[ spot, EField.classname, 'info_player_deathmatch' ]
+        if [ !spot ] break
+        far : f32 [ players_range_from_spot[ spot ] ]
+        if [ far > most ]
+            most = far
+            best = spot
+    if [ best ] return best
+    # every spot has a player on it: the first one
+    return g.find[ null, EField.classname, 'info_player_deathmatch' ]
+
+# SelectDeathmatchSpawnPoint: DF_SPAWN_FARTHEST is 512
+func select_dm_spawn [] -> Edict
+    if [ g.dmflags & 512 ] return select_farthest_spawn[]
+    return select_random_spawn[ 'info_player_deathmatch' ]
+
+# DeathmatchScoreboardMessage: the layout a client is shown
+func dm_scoreboard [ ent: Edict ]
+    if [ g.ctf ]
+        ctf_scoreboard[ ent ]
+        return
+    sorted : vec i32 []
+    for [ i: i32 0, i < g.maxclients, i += 1 ]
+        e : g.edicts[ 1 + i ]
+        if [ !e.inuse || !e.client ] continue
+        at : i32 [ 0 ]
+        while [ at < sorted.count &&
+                g.edicts[ 1 + sorted[ at ] ].client.resp.score
+                    >= e.client.resp.score ]
+            at += 1
+        sorted.insert[ i, at ]
+    text : ''
+    total : i32 [ (sorted.count > 12) ? 12 : sorted.count ]
+    for [ i: i32 0, i < total, i += 1 ]
+        e : g.edicts[ 1 + sorted[ i ] ]
+        x : i32 [ (i >= 6) ? 160 : 0 ]
+        y : i32 [ 32 + 32 * (i % 6) ]
+        # add a dogtag
+        if [ e == ent ]          text = '{text}xv {x + 32} yv {y} picn tag1 '
+        el [ e == ent.enemy ]    text = '{text}xv {x + 32} yv {y} picn tag2 '
+        minutes : i32 [ (g.level.framenum - e.client.resp.enterframe)
+                        / 600 ]
+        text = '{text}client {x} {y} {sorted[ i ]} {e.client.resp.score} 0 {minutes} '
+    ent.client.layout = text
+
+# CheckDMRules: the time or frag limit ends the level
+func check_dm_rules []
+    if [ g.level.intermissiontime != 0.0 || !g.deathmatch ] return
+    if [ g.timelimit > 0 &&
+         g.level.time >= f32[ g.timelimit ] * 60.0 ]
+        g.bprintf[ 'Timelimit hit.' ]
+        end_dm_level[]
+        return
+    if [ g.ctf && g.capturelimit > 0 &&
+         (g.ctf_team1 >= g.capturelimit ||
+          g.ctf_team2 >= g.capturelimit) ]
+        g.bprintf[ 'Capturelimit hit.' ]
+        end_dm_level[]
+        return
+    if [ g.fraglimit <= 0 ] return
+    for [ i: i32 1, i <= g.maxclients, i += 1 ]
+        e : g.edicts[ i ]
+        if [ !e.inuse || !e.client ] continue
+        if [ e.client.resp.score >= g.fraglimit ]
+            g.bprintf[ 'Fraglimit hit.' ]
+            end_dm_level[]
+            return
+
+# EndDMLevel: the map's own exit, or the same map again
+func end_dm_level []
+    ent : g.find[ null, EField.classname, 'target_changelevel' ]
+    if [ !ent ]
+        # CreateTargetChangeLevel
+        ent = g.spawn[]
+        ent.classname = 'target_changelevel'
+        ent.map = g.level.mapname
+    begin_intermission[ ent ]

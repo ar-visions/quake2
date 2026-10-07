@@ -743,7 +743,27 @@ func in_list [ frames: vec i32, frame: i32 ] -> bool
     return false
 
 # Weapon_Generic: the basics of weapon thinking; fire is a Fn
+# Weapon_Generic: once, and once more for a hasted player
 func weapon_generic [ e: Edict, activate_last: i32,
+                      fire_last: i32, idle_last: i32, deactivate_last: i32,
+                      pause_frames: vec i32, fire_frames: vec i32,
+                      fire: lambda none [ Edict ] ]
+    cl : e.client
+    before : i32 [ cl.weaponstate ]
+    weapon_generic_once[ e, activate_last, fire_last, idle_last,
+        deactivate_last, pause_frames, fire_frames, fire ]
+    if [ !g.ctf ] return
+    grapple : bool [ cl.pers.weapon &&
+                     cl.pers.weapon.pickup_name == 'Grapple' ]
+    if [ grapple && cl.weaponstate == WEAPON_FIRING ] return
+    hasted : bool [ ctf_tech_held[ e, 3 ] ]
+    if [ (hasted || grapple) && before == cl.weaponstate ]
+        weapon_generic_once[ e, activate_last, fire_last, idle_last,
+            deactivate_last, pause_frames, fire_frames, fire ]
+        if [ hasted && cl.weaponstate == WEAPON_FIRING ]
+            ctf_tech_sound[ e, 'ctf/tech3.wav' ]
+
+func weapon_generic_once [ e: Edict, activate_last: i32,
                       fire_last: i32, idle_last: i32, deactivate_last: i32,
                       pause_frames: vec i32, fire_frames: vec i32,
                       fire: lambda none [ Edict ] ]
@@ -817,7 +837,8 @@ func weapon_generic [ e: Edict, activate_last: i32,
             return
     if [ cl.weaponstate == WEAPON_FIRING ]
         if [ in_list[ fire_frames, cl.ps.gunframe ] ]
-            if [ cl.quad_framenum > f32[ g.level.framenum ] ]
+            amplified : bool [ g.ctf && ctf_strength_sound[ e ] ]
+            if [ !amplified && cl.quad_framenum > f32[ g.level.framenum ] ]
                 g.sound[ e, CHAN_ITEM, g.soundindex[ 'items/damage3.wav' ], 1.0,
                          ATTN_NORM ]
             fire[ e ]

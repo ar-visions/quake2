@@ -102,6 +102,9 @@ class World
             if [ passedict ]
                 if [ t.owner == passedict ] continue
                 if [ passedict.owner == t ] continue
+            # a corpse stops only a trace that asks for it
+            if [ !(mask & CONTENTS_DEADMONSTER) &&
+                 (t.svflags & SVF_DEADMONSTER) ] continue
             head : i32 [ hull_for[ t ] ]
             angles : vec3f [ (t.solid == SOLID_BSP) ? t.angles
                              : vec3f [ 0.0, 0.0, 0.0 ] ]

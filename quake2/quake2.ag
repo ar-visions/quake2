@@ -10,6 +10,7 @@ import spectra
 import <stdio.h>
 import <stdlib.h>
 import <string.h>
+import <quake2.h>
 import <strings.h>
 import <math.h>
 import <time.h>
@@ -56,6 +57,11 @@ import Sound
 import Hud
 import Cin
 import Menu
+import Dm
+import Ctf
+import Net
+import Server
+import Remote
 import Save
 
 # the shader's samplers, by name
@@ -269,6 +275,8 @@ element MapView
     mutable mins     : vec3f
     mutable maxs     : vec3f
     mutable on_ground : bool
+    # what pmove left: a change since is snapped again (snapinitial)
+    mutable snap_left : vec f32
     mutable ground_nz : f32
     mutable ground_ent : Edict
     # the ground brush's contents: its currents carry the player
@@ -318,6 +326,10 @@ element MapView
     mutable view_offset : vec3f
     mutable view_kick   : vec3f
     mutable view_angles : vec3f
+    # CL_PredictMovement: a step up, eased out of the view over 0.1 s
+    mutable timedemo  : bool
+    mutable step_up   : f32
+    mutable step_left : f32
     # the mixer and the clips: one for the app, reset each map
     mutable snd        : SoundSet
     mutable jump_held : bool
@@ -332,6 +344,12 @@ element MapView
     mutable k_up     : bool
     mutable k_down   : bool
     mutable menu     : Menu
+    # a server for remote players; a game or demo played from afar
+    mutable server   : NetServer
+    mutable net      : Remote
+    mutable net_us   : i64
+    # 0 alone, 1 a deathmatch server, 2 a ctf server
+    mutable hosting  : i32
     # the unit's levels as they were left, and a save being loaded
     mutable hub      : vec SaveOut
     mutable loading  : SaveIn
@@ -341,6 +359,8 @@ element MapView
     mutable film_us    : i64
     # nextserver: what follows the film
     mutable pending_map : string
+    # d1..d4: idlog.cin, demo1, idlog.cin, demo2; 0 is off
+    mutable attract    : i32
     # the skill a new game starts at
     mutable skill      : i32 [ 1 ]
     # the lightmap atlas on the gpu, and the game frame it shows
@@ -383,8 +403,8 @@ element MapView
         if [ ux.locked ]
             dx = ev.mouse.delta.x
             dy = ev.mouse.delta.y
-        # the menu's mouse speed (3 is the default) and invert
-        turn : f32 [ (menu) ? 0.004 * menu.sensitivity / 3.0 : 0.004 ]
+        # m_yaw and m_pitch 0.022 degrees a count, times sensitivity
+        turn : f32 [ radians[ 0.022 ] * ((menu) ? menu.sensitivity : 3.0) ]
         if [ menu && menu.invert ] dy = 0.0 - dy
         yaw   = yaw - dx * turn
         pitch = pitch - dy * turn
@@ -393,13 +413,17 @@ element MapView
 
     public func on_key [ ev: Event ]
         s : bool [ ev.key.state ]
-        if [ film && !film.done ]
+        if [ film && !film.done && attract == 0 ]
             # any key skips the film
             if [ s ] film.stop[]
             if [ s ] film_end[]
             return
         code : i32 [ ev.key.unicode ]
         if [ con && con.key[ code, s ] ] return
+        if [ attract != 0 && menu && !menu.active ]
+            # any key during the attract loop brings up the menu
+            if [ s ] menu.open[ 0 ]
+            return
         if [ menu && menu.key[ code, s ] ]
             k_fwd = false
             k_back = false
@@ -409,30 +433,53 @@ element MapView
             k_down = false
             attack = false
             return
-        if [ ev.key.unicode == 87  ] k_fwd   = s
-        if [ ev.key.unicode == 83  ] k_back  = s
-        if [ ev.key.unicode == 65  ] k_left  = s
-        if [ ev.key.unicode == 68  ] k_right = s
-        if [ ev.key.unicode == 32  ] k_up    = s
-        # c or left ctrl crouches
-        if [ ev.key.unicode == 67 || ev.key.unicode == 341 ] k_down = s
+        u : i32 [ code ]
+        if [ !menu ] return
+        keys : menu.binds
+        if [ u == keys[ 0 ] ] k_fwd   = s
+        if [ u == keys[ 1 ] ] k_back  = s
+        if [ u == keys[ 2 ] ] k_left  = s
+        if [ u == keys[ 3 ] ] k_right = s
+        if [ u == keys[ 4 ] ] k_up    = s
+        # left ctrl crouches as well as its bound key
+        if [ u == keys[ 5 ] || u == 341 ] k_down = s
         # 1 .. 9, 0: the weapons, as the default binds
-        u : i32 [ ev.key.unicode ]
         if [ s && u >= 48 && u <= 57 && pl ]
-            client_command[ pl, 'use', weapon_keys[ (u + 1) % 10 ] ]
-        # f1 help, tab inventory, [ ] pick, enter use, backspace drop
+            order[ 'use', weapon_keys[ (u + 1) % 10 ] ]
+        # g throws the grapple in a ctf game
+        if [ s && u == 71 && pl && game.ctf ] order[ 'use', 'Grapple' ]
         if [ s && pl ]
-            if [ u == 290 ]      client_command[ pl, 'help', '' ]
-            el [ u == 258 ]      client_command[ pl, 'inven', '' ]
-            el [ u == 91 ]       client_command[ pl, 'invprev', '' ]
-            el [ u == 93 ]       client_command[ pl, 'invnext', '' ]
-            el [ u == 257 ]      client_command[ pl, 'invuse', '' ]
-            el [ u == 259 ]      client_command[ pl, 'invdrop', '' ]
-        if [ !s ] log 'quake2: at {ox} {oy} {oz} ground {on_ground}'
+            if [ u == keys[ 6 ] ]       order[ 'help', '' ]
+            el [ u == keys[ 7 ] ]       order[ 'inven', '' ]
+            el [ u == keys[ 8 ] ]       order[ 'invprev', '' ]
+            el [ u == keys[ 9 ] ]       order[ 'invnext', '' ]
+            el [ u == keys[ 10 ] ]      order[ 'invuse', '' ]
+            el [ u == keys[ 11 ] ]      order[ 'invdrop', '' ]
+        if [ !s ] log 'quake2: at {ox} {oy} {oz} ground {on_ground} '
+
+    # a game command: ours to run, or the far server's
+    func order [ verb: string, arg: string ]
+        if [ net && net.live[] ]
+            if [ verb == 'inven' ]
+                pl.client.showinventory = !pl.client.showinventory
+                g_set_stats[ pl ]
+            said : string [ (arg.count > 0) ? '{verb} {arg}' : verb ]
+            net.send_cmd[ said ]
+        el
+            client_command[ pl, verb, arg ]
+
+    # a player's model number is 255: the male model stands in
+    func shown_model [ index: i32, weapon: bool ] -> i32
+        if [ index != 255 ] return index
+        if [ weapon ] return game.modelindex[ 'players/male/weapon.md2' ]
+        return game.modelindex[ 'players/male/tris.md2' ]
 
     func load []
         pak = Pak [ ]
         pak.open[ path [ game_dir ] ]
+        # the ctf pak beside baseq2, when it is there
+        above : game_dir.mid[ 0, game_dir.count - 7 ]
+        pak.add[ path [ '{above}/ctf' ] ]
         bsp = BspMap [ ]
         if [ !level_name ] level_name = map_name
         if [ !bsp.load[ pak, level_name ] ]
@@ -452,6 +499,14 @@ element MapView
         before : Game [ game ]
         game = Game [ ]
         game.skill = skill
+        if [ hosting != 0 ]
+            game.maxclients = 8
+            game.deathmatch = true
+            game.ctf = hosting == 2
+            if [ before ]
+                game.fraglimit = before.fraglimit
+                game.timelimit = before.timelimit
+                game.capturelimit = before.capturelimit
         if [ before && changing ]
             # SpawnEntities begins with SaveClientData
             save_client_data[]
@@ -474,6 +529,20 @@ element MapView
         touched = vec Edict []
         game.setup[ bsp ]
         pl = game.player[]
+        if [ hosting != 0 ]
+            if [ !server ] server = NetServer [ ]
+            if [ server.start[ PORT_SERVER ] ]
+                server.sky = bsp.sky_name
+                server.level[]
+            el
+                con.say[ 'could not open the server port' ]
+        el [ server ]
+            server.stop[]
+            server = null
+        if [ net && net.state == 4 ]
+            # the map the far server named: its game goes over ours
+            net.take_game[]
+            net.begin[]
         if [ loading ]
             # SV_Loadgame_f: the game, the level, the hub's levels
             read_game[ loading ]
@@ -498,6 +567,7 @@ element MapView
                     read_level[ reader, true ]
         # the models the spawns named, so their skins are in the atlas
         md2 = Md2Set [ pak: pak, palette: bsp.palette ]
+        net_dirs = md2.anorms
         named : i32 [ game.models.count ]
         for [ i: i32 bsp.model_head.count, i < named, i += 1 ]
             md2.get[ i, game.models ]
@@ -543,6 +613,10 @@ element MapView
         last_us = now
         if [ dt > 0.1 ] dt = 0.1
         last_dt = dt
+        step_left = step_left - dt
+        if [ step_left < 0.0 ] step_left = 0.0
+        # where the last frame left the player; a push shows against it
+        prev_z : f32 [ oz ]
         # a door may have pushed the player since the last frame
         ox = pl.origin.x
         oy = pl.origin.y
@@ -558,7 +632,19 @@ element MapView
             ps.pm_flags = ps.pm_flags & ~PMF_TIME_TELEPORT
         # frozen at a unit's end: no move until the level exits
         frozen : bool [ game.level.intermissiontime != 0.0 ]
-        if [ dt > 0.0 && pl.deadflag == 0 && !frozen ] pmove[ dt ]
+        remote : bool [ net && net.live[] ]
+        watching : bool [ remote && net.demo ]
+        if [ watching ]
+            # a demo: the view is the recorded player's
+            yaw = radians[ ps.viewangles.y ]
+            pitch = 0.0 - radians[ ps.viewangles.x ]
+        if [ dt > 0.0 && pl.deadflag == 0 && !frozen && !watching ]
+            pmove[ dt ]
+            # a stair or a lift's push of 8 to 20 units is smoothed
+            rise : f32 [ oz - prev_z ]
+            if [ on_ground && rise > 7.875 && rise < 20.0 ]
+                step_up = rise
+                step_left = 0.1 - dt * 0.5
         pl.origin = vec3f [ ox, oy, oz ]
         pl.velocity = vec3f [ vx, vy, vz ]
         if [ pl.deadflag == 0 && !frozen ] pl.maxs = maxs
@@ -570,7 +656,10 @@ element MapView
         # ClientThink: the link, the touches, the buttons, the weapon
         buttons : i32 [ (attack) ? BUTTON_ATTACK : 0 ]
         angles : vec3f [ 0.0 - degrees[ pitch ], degrees[ yaw ], 0.0 ]
-        client_think[ pl, buttons, (k_up) ? 1 : 0, angles, touched ]
+        if [ remote ]
+            net.send_state[ pl, buttons, (k_up) ? 1 : 0, angles, touched ]
+        el
+            client_think[ pl, buttons, (k_up) ? 1 : 0, angles, touched ]
         touched = vec Edict []
         ex = ox
         ey = oz + f32[ pl.viewheight ]
@@ -588,6 +677,11 @@ element MapView
             land_time = land_time - dt
             if [ land_time < 0.0 ] land_time = 0.0
         check_duck[]
+        if [ snap_initial[] ] initial_snap_position[]
+        # save old org in case we get stuck
+        px : f32 [ ox ]
+        py : f32 [ oy ]
+        pz : f32 [ oz ]
         categorize[]
         special_movement[]
         if [ waterjump > 0.0 ]
@@ -603,6 +697,70 @@ element MapView
             if [ water_level >= 2 ] water_move[ dt ]
             el                      air_move[ dt ]
         categorize[]
+        snap_position[ px, py, pz ]
+        snap_left = vec f32 [] [ ox, oy, oz, vx, vy, vz ]
+
+    # ClientThink's snapinitial: moved or pushed since the last pmove
+    func snap_initial [] -> bool
+        if [ !snap_left ] return true
+        return snap_left[ 0 ] != ox || snap_left[ 1 ] != oy
+            || snap_left[ 2 ] != oz || snap_left[ 3 ] != vx
+            || snap_left[ 4 ] != vy || snap_left[ 5 ] != vz
+
+    # PM_GoodPosition: the box at the point is in nothing solid
+    func good_position [ x: f32, y: f32, z: f32 ] -> bool
+        t : trace_pl[ x, y, z, x, y, z ]
+        return !t.allsolid
+
+    # PM_SnapPosition: to the network's eighths, in a good place
+    func snap_position [ px: f32, py: f32, pz: f32 ]
+        # snap velocity to eighths
+        vx = f32[ i32[ vx * 8.0 ] ] * 0.125
+        vy = f32[ i32[ vy * 8.0 ] ] * 0.125
+        vz = f32[ i32[ vz * 8.0 ] ] * 0.125
+        bx : i32 [ ox * 8.0 ]
+        by : i32 [ oy * 8.0 ]
+        bz : i32 [ oz * 8.0 ]
+        sx : i32 [ (ox >= 0.0) ? 1 : -1 ]
+        sy : i32 [ (oy >= 0.0) ? 1 : -1 ]
+        sz : i32 [ (oz >= 0.0) ? 1 : -1 ]
+        if [ f32[ bx ] * 0.125 == ox ] sx = 0
+        if [ f32[ by ] * 0.125 == oy ] sy = 0
+        if [ f32[ bz ] * 0.125 == oz ] sz = 0
+        # try all single bits first
+        jitter : vec i32 [] [ 0, 4, 1, 2, 3, 5, 6, 7 ]
+        for [ j: i32 0, j < 8, j += 1 ]
+            bits : i32 [ jitter[ j ] ]
+            x : f32 [ f32[ bx + ((bits & 1) ? sx : 0) ] * 0.125 ]
+            y : f32 [ f32[ by + ((bits & 2) ? sy : 0) ] * 0.125 ]
+            z : f32 [ f32[ bz + ((bits & 4) ? sz : 0) ] * 0.125 ]
+            if [ good_position[ x, y, z ] ]
+                ox = x
+                oy = y
+                oz = z
+                return
+        # go back to the last position
+        ox = px
+        oy = py
+        oz = pz
+
+    # PM_InitialSnapPosition: the nearest good eighth, 3 x 3 x 3
+    func initial_snap_position []
+        bx : i32 [ ox * 8.0 ]
+        by : i32 [ oy * 8.0 ]
+        bz : i32 [ oz * 8.0 ]
+        offset : vec i32 [] [ 0, -1, 1 ]
+        for [ k: i32 0, k < 3, k += 1 ]
+            for [ j: i32 0, j < 3, j += 1 ]
+                for [ i: i32 0, i < 3, i += 1 ]
+                    x : f32 [ f32[ bx + offset[ i ] ] * 0.125 ]
+                    y : f32 [ f32[ by + offset[ j ] ] * 0.125 ]
+                    z : f32 [ f32[ bz + offset[ k ] ] * 0.125 ]
+                    if [ good_position[ x, y, z ] ]
+                        ox = x
+                        oy = y
+                        oz = z
+                        return
 
     # PM_CheckDuck: the box and the eye, crouched or standing
     func check_duck []
@@ -901,7 +1059,40 @@ element MapView
         s2.clock = sh.clock
         e : game.model_ent[ m ]
         s2.model = mat4f.identity[]
-        if [ m > 0 && e ] s2.model = entity_matrix[ e.origin, e.angles ]
+        if [ m > 0 && e && (!e.inuse || e.modelindex == 0 ||
+                            (e.svflags & SVF_NOCLIENT) != 0) ]
+            # not sent to the client: every vertex at one point
+            gone : mat4f [ ]
+            gone.m[15] = 1.0
+            s2.model = gone
+        el [ m > 0 && e ]
+            s2.model = entity_matrix[ lerp_origin[ e, game_acc / 0.1 ],
+                                      lerp_angles[ e, game_acc / 0.1 ] ]
+
+    # CL_AddPacketEntities: between the last game frame and this one
+    func lerp_origin [ e: Edict, frac: f32 ] -> vec3f
+        o : i32 [ e.number * 8 ]
+        if [ e.number >= ent_prev_n ||
+             i32[ ent_prev[ o + 7 ] ] != e.modelindex ||
+             fabs[ ent_prev[ o ] - e.origin.x ] > 512.0 ||
+             fabs[ ent_prev[ o + 1 ] - e.origin.y ] > 512.0 ||
+             fabs[ ent_prev[ o + 2 ] - e.origin.z ] > 512.0 ]
+            return e.origin
+        back : f32 [ 1.0 - frac ]
+        return vec3f [
+            e.origin.x + back * (ent_prev[ o ] - e.origin.x),
+            e.origin.y + back * (ent_prev[ o + 1 ] - e.origin.y),
+            e.origin.z + back * (ent_prev[ o + 2 ] - e.origin.z) ]
+
+    func lerp_angles [ e: Edict, frac: f32 ] -> vec3f
+        o : i32 [ e.number * 8 ]
+        if [ e.number >= ent_prev_n ||
+             i32[ ent_prev[ o + 7 ] ] != e.modelindex ]
+            return e.angles
+        return vec3f [
+            lerp_angle[ ent_prev[ o + 3 ], e.angles.x, frac ],
+            lerp_angle[ ent_prev[ o + 4 ], e.angles.y, frac ],
+            lerp_angle[ ent_prev[ o + 5 ], e.angles.z, frac ] ]
 
     # each edict as the game frame begins: what the lerp starts from
     func snapshot []
@@ -938,7 +1129,16 @@ element MapView
         if [ v_zero[ ps.viewoffset ] ]
             off = vec3f [ 0.0, 0.0, pl.viewheight ]
         view_org = vec3f [ ox + off.x, oy + off.y, oz + off.z ]
+        if [ step_left > 0.0 ]
+            view_org.z = view_org.z - step_up * step_left / 0.1
         angles : vec3f [ 0.0 - degrees[ pitch ], degrees[ yaw ], 0.0 ]
+        # a demo: the recorded player between his last two frames
+        if [ net && net.live[] && net.demo ]
+            view_org = v_add[ lerp_origin[ pl, frac ], off ]
+            angles = vec3f [
+                lerp_angle[ view_angles.x, ps.viewangles.x, frac ],
+                lerp_angle[ view_angles.y, ps.viewangles.y, frac ],
+                lerp_angle[ view_angles.z, ps.viewangles.z, frac ] ]
         # dead or frozen: the game points the view, not the mouse
         if [ ps.pm_type >= PM_DEAD ]
             angles = vec3f [
@@ -1141,7 +1341,7 @@ element MapView
         if [ effects & EF_ROTATE ]
             angles = vec3f [ 0.0, anglemod[ now * 100.0 ], 0.0 ]
         light : vec3f [ entity_light[ origin, render, now ] ]
-        m : md2.get[ e.modelindex, game.models ]
+        m : md2.get[ shown_model[ e.modelindex, false ], game.models ]
         # R_CullAliasModel: wholly outside the view, nothing is drawn
         reach : f32 [ md2.radius[ m, frame ] ]
         for [ k: i32 0, k < 4, k += 1 ]
@@ -1161,7 +1361,7 @@ element MapView
         # linked models ride the same frame, on their first skin
         plain : vec3f [ entity_light[ origin, 0, now ] ]
         inline_n : i32 [ bsp.model_head.count ]
-        second : i32 [ e.modelindex2 ]
+        second : i32 [ shown_model[ e.modelindex2, true ] ]
         if [ second >= inline_n && second < game.models.count ]
             rider : md2.get[ second, game.models ]
             md2.add[ rider, 0, frame, old_frame, back, origin, angles,
@@ -1333,8 +1533,8 @@ element MapView
                     j += 1
                 if [ j == nplanes ] break
                 i += 1
-            if [ i != nplanes ]
-                # along the crease of two planes, else stop
+            if [ i == nplanes ]
+                # no plane fits: along the crease of two, else stop
                 if [ nplanes != 2 ]
                     vx = 0.0
                     vy = 0.0
@@ -1408,9 +1608,33 @@ element MapView
             after : pending_map.mid[ 0, pending_map.count ]
             go[ after ]
             return
-        # the end of the game: the menu over a new first level
-        menu.open[ 0 ]
-        fresh[ 'base1' ]
+        # nothing follows: the attract loop, as nextserver's d1
+        if [ attract == 0 ] attract = 1
+        attract_next[]
+
+    # the aliases d1..d4 of default.cfg, round and round
+    func attract_next []
+        step : i32 [ attract ]
+        attract = step % 4 + 1
+        if [ step == 1 || step == 3 ]
+            show[ 'idlog.cin' ]
+            return
+        if [ !net ] net = Remote [ ]
+        net_us = 0
+        if [ !net.play[ pak, (step == 2) ? 'demo1' : 'demo2' ] ]
+            attract = 0
+            menu.open[ 0 ]
+
+    # the menu's letters and pics before any map is loaded
+    func front []
+        if [ status ] return
+        if [ !pak ]
+            pak = Pak [ ]
+            pak.open[ path [ game_dir ] ]
+        colors : BspMap [ ]
+        colors.load_palette[ pak ]
+        md2 = Md2Set [ pak: pak, palette: colors.palette ]
+        status = Hud [ md2: md2 ]
 
     # what the menu chose and the console's lines
     func act []
@@ -1422,6 +1646,18 @@ element MapView
             menu.new_skill = -1
             fresh[ '*ntro.cin+base1' ]
         if [ snd ] snd.master = menu.volume
+        if [ menu.binds_changed ]
+            menu.binds_changed = false
+            keys : SaveOut [ ]
+            for [ i: i32 0, i < menu.binds.count, i += 1 ]
+                keys.put_i[ menu.binds[ i ] ]
+            save_write[ binds_file[], keys ]
+        if [ menu.host != 0 ]
+            # the multiplayer menu: a server on the first dm map
+            hosting = menu.host
+            menu.host = 0
+            if [ net ] net.close[]
+            fresh[ (hosting == 2) ? 'q2ctf1' : 'q2dm1' ]
         if [ menu.save_slot >= 0 ]
             if [ game && pl && pl.deadflag == 0 ]
                 save_slot[ menu.save_slot ]
@@ -1437,11 +1673,99 @@ element MapView
             for [ i: i32 1, i < words.count, i += 1 ]
                 word : words[ i ]
                 rest = (i == 1) ? word : '{rest} {word}'
-            if [ verb == 'map' && rest.count > 0 ]   fresh[ rest ]
+            far : bool [ net && net.live[] ]
+            # SV_Map: a .dm2 plays as a demo
+            if [ verb == 'map' && rest.count > 4 &&
+                 rest.mid[ rest.count - 4, 4 ] == '.dm2' ]
+                verb = 'demomap'
+            if [ verb == 'timedemo' ]
+                timedemo = rest.count > 0 && !(rest == '0')
+                if [ net ] net.timedemo = timedemo
+            el [ verb == 'map' && rest.count > 0 ]
+                if [ net ] net.close[]
+                hosting = 0
+                fresh[ rest ]
+            el [ verb == 'connect' && rest.count > 0 ]  join[ rest ]
+            el [ verb == 'disconnect' ]
+                if [ net ] net.close[]
+                hosting = 0
+                fresh[ 'base1' ]
+            el [ verb == 'host' || verb == 'ctf' ]
+                # a deathmatch or ctf server: this map, or the one named
+                if [ net ] net.close[]
+                hosting = (verb == 'ctf') ? 2 : 1
+                fresh[ (rest.count > 0) ? rest : level_name ]
+            el [ (verb == 'demomap' || verb == 'playdemo') &&
+                 rest.count > 0 ]
+                attract = 0
+                if [ !net ] net = Remote [ ]
+                net.timedemo = timedemo
+                net_us = 0
+                if [ !net.play[ pak, rest ] ] con.say[ 'no demo {rest}' ]
+            el [ verb == 'record' && rest.count > 0 && net ]
+                app : 'quake2'
+                dir : '{path.path_cache[ app.chars ]}'
+                file : '{dir}/{rest}.dm2'
+                if [ net.start_record[ file ] ] con.say[ 'recording {file}' ]
+                el con.say[ 'record needs a game joined with connect' ]
+            el [ verb == 'stop' && net ]             net.stop_record[]
+            el [ verb == 'fraglimit' && game ]
+                game.fraglimit = atoi[ rest.chars ]
+            el [ verb == 'timelimit' && game ]
+                game.timelimit = atoi[ rest.chars ]
+            el [ verb == 'capturelimit' && game ]
+                game.capturelimit = atoi[ rest.chars ]
+            el [ far ]                               net.send_cmd[ entered ]
             el [ verb == 'skill' && rest.count > 0 ] skill = atoi[ rest.chars ]
             el [ verb == 'quit' ]   Au.quit_request[]
             el [ pl ]                client_command[ pl, verb, rest ]
         if [ con.commands.count > 0 ] con.commands = vec string []
+
+    func binds_file [] -> string
+        app : 'quake2'
+        dir : '{path.path_cache[ app.chars ]}'
+        return '{dir}/binds.cfg'
+
+    # CL_ReadPackets each frame, and what it asks of us
+    func network []
+        if [ !net || net.state == 0 ] return
+        now : i64 [ epoch_micros[] ]
+        if [ net_us == 0 ] net_us = now
+        passed : f32 [ f32[ now - net_us ] / 1000000.0 ]
+        net_us = now
+        if [ passed > 0.1 ] passed = 0.1
+        net.frame[ passed ]
+        for [ i: i32 0, i < net.prints.count, i += 1 ]
+            said : net.prints[ i ]
+            con.say[ said ]
+        if [ net.prints.count > 0 ] net.prints = vec string []
+        if [ attract != 0 && net.demo && net.state == 0 ]
+            # the demo ran out: the next of the loop
+            net.close[]
+            attract_next[]
+        if [ net.want_map ]
+            # the server's map: loaded like a new game, then begin
+            net.want_map = false
+            hosting = 0
+            changing = false
+            entry = null
+            game = null
+            level_name = net.map_name.mid[ 0, net.map_name.count ]
+            reload = true
+
+    # CL_Connect_f: 'host' or 'host:port'
+    func join [ address: string ]
+        host : string [ address ]
+        to_port : i32 [ PORT_SERVER ]
+        colon : cstr [ strchr[ address.chars, 58 ] ]
+        if [ colon ]
+            cut : i32 [ address.count - strlen[ colon ] ]
+            host = address.mid[ 0, cut ]
+            to_port = atoi[ @address.chars[ cut + 1 ] ]
+        if [ !net ] net = Remote [ ]
+        net_us = 0
+        if [ net.connect[ host, to_port ] ] con.say[ 'connecting to {address}' ]
+        el con.say[ 'bad server address {address}' ]
 
     # each slot's comment: the level's name when it was saved
     func slot_comments [] -> vec string
@@ -1484,6 +1808,8 @@ element MapView
         place : got.get_s[]
         said : got.get_s[]
         loading = got
+        attract = 0
+        if [ net ] net.close[]
         changing = false
         entry = null
         game = null
@@ -1492,6 +1818,8 @@ element MapView
 
     # a new game: nothing carried, the level named
     func fresh [ asked: string ]
+        attract = 0
+        if [ net ] net.close[]
         changing = false
         entry = null
         game = null
@@ -1506,14 +1834,47 @@ element MapView
             menu = Menu [ ]
             menu.slot_names = slot_comments[]
             con = GameConsole [ ]
+            # the keys chosen before, one number a line
+            saved : save_read[ binds_file[], 0 ]
+            if [ saved && saved.words.count == menu.binds.count ]
+                for [ i: i32 0, i < menu.binds.count, i += 1 ]
+                    menu.binds[ i ] = saved.get_i[]
+            # no map asked for: the attract loop, as d1 at startup
+            if [ !map_name || map_name.count == 0 ]
+                attract = 1
+                attract_next[]
+            el [ !level_name ]
+                level_name = map_name
         act[]
+        network[]
         if [ film && !film.done ]
             now : i64 [ epoch_micros[] ]
             if [ film_us == 0 ] film_us = now
             film.frame[ f32[ now - film_us ] / 1000000.0 ]
             film_us = now
-            film.draw[ cv, w, bounds.w, bounds.h ]
+            if [ menu.active || con.active ]
+                # SCR_UpdateScreen: the menu alone, the film runs on
+                front[]
+                cv.fill_rgba[ 0.0, 0.0, 0.0, 1.0 ]
+                cv.rounded_rect[ 0.0, 0.0, bounds.w, bounds.h, 0.0,
+                                 0.0, 0.0, 0.0 ]
+                cv.paint[]
+                menu.draw[ cv, w, status, bounds.w, bounds.h,
+                           1.0 / 60.0 ]
+                con.draw[ cv, w, status, bounds.w, bounds.h ]
+            el
+                film.draw[ cv, w, bounds.w, bounds.h ]
             if [ film.done ] film_end[]
+            return
+        if [ !level_name || level_name.count == 0 ]
+            # nothing loaded: the menu over black
+            front[]
+            cv.fill_rgba[ 0.0, 0.0, 0.0, 1.0 ]
+            cv.rounded_rect[ 0.0, 0.0, bounds.w, bounds.h, 0.0, 0.0,
+                             0.0, 0.0 ]
+            cv.paint[]
+            menu.draw[ cv, w, status, bounds.w, bounds.h, 1.0 / 60.0 ]
+            con.draw[ cv, w, status, bounds.w, bounds.h ]
             return
         if [ !target || reload ]
             reload = false
@@ -1603,18 +1964,30 @@ element MapView
                 target.wscale = 0.0
             log 'quake2: {bsp.name} drawn, {bsp.tri_count} triangles'
         # the menu or the console holds the game still
-        if [ menu.active || con.active ]
+        remote : bool [ net && net.live[] ]
+        alone : bool [ hosting == 0 && !remote ]
+        if [ alone && (menu.active || con.active) ]
             last_us = 0
             last_dt = 0.0
         el
             step[]
+        if [ server ] server.read[]
         # the game runs ten frames a second behind the player's move
         game_acc = game_acc + last_dt
-        while [ game_acc >= 0.1 ]
+        if [ remote ]
+            # CL_ParseFrame gave a frame: it goes onto the edicts
+            if [ net.fresh ]
+                snapshot[]
+                net.apply[ pl ]
+                game_acc = 0.0
+                entity_events[]
+            if [ game_acc > 0.1 ] game_acc = 0.1
+        while [ !remote && game_acc >= 0.1 ]
             snapshot[]
             game.run_frame[]
             game_acc = game_acc - 0.1
             entity_events[]
+            if [ server ] server.frame[]
         light_styles[]
         ear : vec3f [ ox, oy, oz + f32[ pl.viewheight ] ]
         visuals.events[]
@@ -1742,11 +2115,15 @@ element MapView
         cp : string [ pl.client.centerprint ]
         if [ cp && pl.client.centerprint_time > game.level.time ]
             status.center[ cv, w, cp ]
-        if [ pl.deadflag != 0 ]
+        if [ pl.deadflag != 0 && !game.deathmatch ]
             status.chars[ cv, w, 'fire to restart',
                           status.wide / 2.0 - 60.0, status.high * 0.6,
                           false ]
-        if [ st[ STAT_LAYOUTS ] & 1 ] status.help[ cv, w ]
+        board : string [ pl.client.layout ]
+        if [ (st[ STAT_LAYOUTS ] & 1) != 0 && game.deathmatch && board ]
+            status.layout[ cv, w, board, st, flash ]
+        el [ st[ STAT_LAYOUTS ] & 1 ]
+            status.help[ cv, w ]
         if [ st[ STAT_LAYOUTS ] & 2 ]
             status.inventory[ cv, w, pl.client.pers.inventory,
                               st[ STAT_SELECTED_ITEM ], weapon_keys,
@@ -1759,7 +2136,8 @@ element quake2 : trinity
     public title      : string [ 'Quake 2' ]
     public background : string [ 'Background' ]
     public game       : string [ '/home/kalen/.steam/debian-installation/steamapps/common/Quake 2/baseq2' ]
-    public map        : string [ 'base1' ]
+    # a map goes straight in, as +map; none plays the attract loop
+    public map        : string
     # camera override, quake axes: 'x y z yaw pitch'
     public spawn      : string
     public view       : MapView

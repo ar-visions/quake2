@@ -22,10 +22,12 @@ MOVETYPE_TOSS   : i32 [ 7 ]
 # edict flags, svflags, contents
 FL_TEAMSLAVE    : i32 [ 1024 ]
 SVF_NOCLIENT    : i32 [ 1 ]
+SVF_DEADMONSTER : i32 [ 2 ]
 SVF_MONSTER     : i32 [ 4 ]
 CONTENTS_SOLID   : i32 [ 1 ]
 CONTENTS_WINDOW  : i32 [ 2 ]
 CONTENTS_MONSTER : i32 [ 33554432 ]
+CONTENTS_DEADMONSTER : i32 [ 67108864 ]
 MASK_SOLID       : i32 [ 3 ]
 MASK_PLAYERSOLID : i32 [ 1 | 65536 | 2 | 33554432 ]
 AREA_SOLID    : i32 [ 1 ]
@@ -532,6 +534,13 @@ class ClientRespawn
     public score      : i32
     public cmd_angles : vec3f
     public spectator  : bool
+    # ctf: the team (1 red, 2 blue) and the bonus clocks
+    public ctf_team   : i32
+    public ctf_state  : i32
+    public ctf_lasthurtcarrier : f32
+    public ctf_lastreturnedflag : f32
+    public ctf_flagsince : f32
+    public ctf_lastfraggedcarrier : f32
 
 # gclient_t
 class Client
@@ -585,6 +594,15 @@ class Client
     public grenade_blew_up : bool
     public grenade_time : f32
     public silencer_shots : i32
+    # svc_layout: the scoreboard this client is shown
+    public layout     : string
+    # ctf: the hook out, 0 flying 1 pulling 2 hanging, tech clocks
+    public ctf_grapple : Edict
+    public ctf_grapplestate : i32
+    public ctf_grapplereleasetime : f32
+    public ctf_regentime : f32
+    public ctf_techsndtime : f32
+    public ctf_lasttechmsg : f32
     public weapon_sound : i32
     public pickup_msg_time : f32
     public respawn_time : f32
@@ -844,6 +862,19 @@ class Game
     public items     : vec GItem
     public num_items : i32
     public means_of_death : i32
+    # capture the flag: on, each team's captures, the last one
+    public ctf        : bool
+    public ctf_team1  : i32
+    public ctf_team2  : i32
+    public ctf_last_capture : f32
+    public ctf_capture_team : i32
+    public ctf_techspawn : bool
+    # the limits that end a deathmatch level; 0 is none
+    public fraglimit  : i32
+    public timelimit  : i32
+    public capturelimit : i32
+    # a far game's player names, by client number
+    public player_names : vec string
     public sm_meat_index : i32
     public snd_fry   : i32
     public jacket_armor_index : i32
@@ -923,6 +954,7 @@ class Game
         images = vec string [] [ '' ]
         events = vec GameEvent []
         init_items[]
+        if [ ctf ] ctf_items[]
         init_flash_offsets[]
         # the world and one client
         for [ i: i32 0, i <= maxclients, i += 1 ]
@@ -947,6 +979,7 @@ class Game
         snd_fry = soundindex[ 'player/fry.wav' ]
         sm_meat_index = modelindex[ 'models/objects/gibs/sm_meat/tris.md2' ]
         spawn_entities[ map.name, map.entities ]
+        if [ ctf ] ctf_setup_tech_spawn[]
         # ClientConnect and ClientBegin for the one player
         # the game's clients outlive a level: the last one's data
         if [ carry ] pl.client.pers = carry
@@ -956,6 +989,10 @@ class Game
         player_trail_init[]
         client_end_server_frame[ pl ]
 
+    # prints waiting for the server or the console: text, edict
+    public printed    : vec string
+    public printed_to : vec i32
+
     public func player [] -> Edict
         return edicts[ 1 ]
 
@@ -963,7 +1000,7 @@ class Game
         log 'game: {s}'
 
     # G_InitEdict
-    func init_edict [ e: Edict ]
+    public func init_edict [ e: Edict ]
         e.inuse = true
         e.classname = 'noclass'
         e.gravity = 1.0
@@ -1200,6 +1237,9 @@ class Game
     # gi.cprintf, centerprintf, bprintf
     public func cprintf [ e: Edict, s: string ]
         dprintf[ s ]
+        if [ printed && e ]
+            printed.push[ s ]
+            printed_to.push[ e.number ]
 
     public func centerprintf [ e: Edict, s: string ]
         if [ e && e.client ]
@@ -1209,6 +1249,10 @@ class Game
 
     public func bprintf [ s: string ]
         dprintf[ s ]
+        if [ printed ]
+            everyone : i32 [ 0 ]
+            printed.push[ s ]
+            printed_to.push[ everyone ]
 
     # ---- findradius: the next entity whose centre is within rad
     public func findradius [ from: Edict, org: vec3f, rad: f32 ] -> Edict
@@ -1341,7 +1385,7 @@ class Game
                 return blocked
         return blocked
 
-    func add_gravity [ e: Edict ]
+    public func add_gravity [ e: Edict ]
         e.velocity = vec3f [ e.velocity.x, e.velocity.y,
             e.velocity.z - e.gravity * sv_gravity * FRAMETIME ]
 
@@ -1676,6 +1720,14 @@ class Game
             dprintf[ 'ED_CallSpawn: NULL classname' ]
             return
         if [ c == 'worldspawn' ]       sp_worldspawn[ e ]
+        el [ c == 'misc_ctf_banner' ]  sp_misc_ctf_banner[ e, false ]
+        el [ c == 'misc_ctf_small_banner' ]
+            sp_misc_ctf_banner[ e, true ]
+        el [ c == 'trigger_teleport' ] sp_trigger_teleport[ e ]
+        el [ c == 'info_player_team1' || c == 'info_player_team2' ]
+            e.solid = SOLID_NOT
+        el [ c == 'info_teleport_destination' ]
+            sp_info_teleport_destination[ e ]
         el [ c == 'func_door' ]        sp_func_door[ e ]
         el [ c == 'func_plat' ]        sp_func_plat[ e ]
         el [ c == 'func_button' ]      sp_func_button[ e ]
@@ -1923,6 +1975,7 @@ class Game
         level.time = f32[ level.framenum ] * FRAMETIME
         # choose a client for monsters to target this frame
         ai_set_sight_client[]
+        check_dm_rules[]
         # exit intermissions
         if [ level.exitintermission ]
             exit_level[]

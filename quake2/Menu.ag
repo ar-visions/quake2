@@ -3,7 +3,8 @@ extend quake2
 
 class Menu
     public active  : bool
-    # 0 main, 1 game, 2 load, 3 save, 4 options, 5 quit
+    # 0 main, 1 game, 2 load, 3 save, 4 options, 5 quit,
+    # 6 customize controls, 7 multiplayer
     public screen  : i32
     public cursor  : i32
     public clock   : f32
@@ -17,12 +18,52 @@ class Menu
     public volume      : f32 [ 1.0 ]
     public sensitivity : f32 [ 3.0 ]
     public invert      : bool
+    # an action's key, by the order of bind_names
+    public binds       : vec i32
+    public bind_names  : vec string
+    # the next key pressed becomes the action's key
+    public waiting     : bool
+    public binds_changed : bool
+    # multiplayer: a server asked for; 1 deathmatch, 2 ctf
+    public host        : i32
+
+    func init []
+        bind_names = vec string [] [ 'walk forward', 'backpedal',
+            'step left', 'step right', 'up / jump', 'down / crouch',
+            'help computer', 'inventory', 'prev item', 'next item',
+            'use item', 'drop item' ]
+        binds = vec i32 [] [ 87, 83, 65, 68, 32, 67, 290, 258, 91, 93,
+                             257, 259 ]
+
+    # Key_KeynumToString
+    func key_name [ code: i32 ] -> string
+        if [ code == 32 ]  return 'SPACE'
+        if [ code == 256 ] return 'ESCAPE'
+        if [ code == 257 ] return 'ENTER'
+        if [ code == 258 ] return 'TAB'
+        if [ code == 259 ] return 'BACKSPACE'
+        if [ code == 262 ] return 'RIGHTARROW'
+        if [ code == 263 ] return 'LEFTARROW'
+        if [ code == 264 ] return 'DOWNARROW'
+        if [ code == 265 ] return 'UPARROW'
+        if [ code == 340 ] return 'SHIFT'
+        if [ code == 341 ] return 'CTRL'
+        if [ code == 342 ] return 'ALT'
+        if [ code >= 290 && code <= 301 ] return 'F{code - 289}'
+        if [ code > 32 && code < 127 ]
+            buf : local i8 [ 2 ]
+            buf[ 0 ] = code
+            buf[ 1 ] = 0
+            return string [ cast cstr [ buf ] ]
+        return 'KEY{code}'
 
     func rows [] -> i32
-        if [ screen == 0 ] return 3
+        if [ screen == 0 ] return 4
         if [ screen == 1 ] return 5
         if [ screen == 2 || screen == 3 ] return 15
-        if [ screen == 4 ] return 3
+        if [ screen == 4 ] return 4
+        if [ screen == 6 ] return binds.count
+        if [ screen == 7 ] return 2
         return 1
 
     public func open [ which: i32 ]
@@ -34,7 +75,8 @@ class Menu
     func choose []
         if [ screen == 0 ]
             if [ cursor == 0 ]      open[ 1 ]
-            el [ cursor == 1 ]      open[ 4 ]
+            el [ cursor == 1 ]      open[ 7 ]
+            el [ cursor == 2 ]      open[ 4 ]
             el                      open[ 5 ]
         el [ screen == 1 ]
             if [ cursor < 3 ]
@@ -50,6 +92,12 @@ class Menu
             active = false
         el [ screen == 4 ]
             if [ cursor == 2 ] invert = !invert
+            if [ cursor == 3 ] open[ 6 ]
+        el [ screen == 6 ]
+            waiting = true
+        el [ screen == 7 ]
+            host = cursor + 1
+            active = false
         el
             quit = true
 
@@ -75,10 +123,18 @@ class Menu
                 return true
             return false
         if [ !down ] return true
+        if [ waiting ]
+            # Keys_MenuKey: this key is the action's now
+            if [ code != 256 ]
+                binds[ cursor ] = code
+                binds_changed = true
+            waiting = false
+            return true
         n : i32 [ rows[] ]
         if [ code == 256 ]
             if [ screen == 0 ]                  active = false
             el [ screen == 2 || screen == 3 ]   open[ 1 ]
+            el [ screen == 6 ]                  open[ 4 ]
             el                                  open[ 0 ]
         el [ code == 265 ]      cursor = (cursor + n - 1) % n
         el [ code == 264 ]      cursor = (cursor + 1) % n
@@ -116,8 +172,8 @@ class Menu
         top : f32 [ hud.high / 2.0 - 110.0 ]
         if [ screen == 0 ]
             # M_Main_Draw
-            names : vec string [] [ 'm_main_game', 'm_main_options',
-                                    'm_main_quit' ]
+            names : vec string [] [ 'm_main_game',
+                'm_main_multiplayer', 'm_main_options', 'm_main_quit' ]
             widest : f32 [ 0.0 ]
             for [ i: i32 0, i < names.count, i += 1 ]
                 wide : f32 [ size_of[ cv, w, hud, names[ i ], false ] ]
@@ -146,6 +202,8 @@ class Menu
         if [ screen == 2 ]      banner = 'm_banner_load_game'
         el [ screen == 3 ]      banner = 'm_banner_save_game'
         el [ screen == 4 ]      banner = 'm_banner_options'
+        el [ screen == 6 ]      banner = 'm_banner_customize'
+        el [ screen == 7 ]      banner = 'm_banner_multiplayer'
         bw : f32 [ size_of[ cv, w, hud, banner, false ] ]
         hud.pic[ cv, w, banner, middle - bw / 2.0, top ]
         lines : vec string []
@@ -155,7 +213,19 @@ class Menu
         el [ screen == 4 ]
             turned : string [ (invert) ? 'yes' : 'no' ]
             lines = vec string [] [ 'effects volume', 'mouse speed',
-                                    'invert mouse   {turned}' ]
+                'invert mouse   {turned}', 'customize controls' ]
+        el [ screen == 6 ]
+            for [ i: i32 0, i < binds.count, i += 1 ]
+                key : string [ (waiting && i == cursor) ? '???'
+                               : key_name[ binds[ i ] ] ]
+                action : bind_names[ i ]
+                while [ action.count < 16 ] action = '{action} '
+                row : '{action}{key}'
+                lines.push[ row ]
+        el [ screen == 7 ]
+            lines = vec string [] [ 'start deathmatch server',
+                'start ctf server', '',
+                'to join: connect <address>', 'in the console (` key)' ]
         el
             for [ i: i32 0, i < 15, i += 1 ]
                 held : bool [ slot_names && i < slot_names.count ]
